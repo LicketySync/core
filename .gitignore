@@ -1,0 +1,9 @@
+/target
+/crates/*/target
+/fuzz/target
+/fuzz/artifacts
+/fuzz/corpus
+*.profraw
+*.profdata
+/coverage
+.DS_Store

@@ -1,0 +1,5 @@
+[default]
+extend-ignore-re = ["(?i)licketysync", "Padm[eé]", "FastCDC", "Noise_XX"]
+
+[files]
+extend-exclude = ["target/", "Cargo.lock"]

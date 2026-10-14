@@ -1,0 +1,167 @@
+# Every push and pull request. The checks here are the ones the plan's
+# Engineering practice table says run "every push"; nightly.yml holds the rest.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy (pedantic, -D warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: tests (nextest) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux is the daily target; Windows and macOS compile and test on every
+        # change so the wiring never rots, per the plan's Packaging section.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --workspace --all-features --no-fail-fast
+      - run: cargo test --workspace --doc
+
+  coverage:
+    name: coverage (cargo-llvm-cov, 90% on key/protocol/engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,nextest
+      - run: cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
+      - name: Enforce the threshold on the crates the plan names
+        run: cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-keys -p licketysync-protocol -p licketysync-engine
+      - uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+
+  docs:
+    name: rustdoc (-D warnings)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps --document-private-items
+
+  deps:
+    name: cargo-deny, cargo-audit, cargo-machete, cargo-vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit,cargo-machete,cargo-vet
+      - run: cargo deny check
+      - run: cargo audit
+      - run: cargo machete
+      - name: cargo vet (unaudited dependency changes)
+        run: test -d supply-chain && cargo vet --locked || echo "supply-chain/ not initialised yet; run bootstrap.sh"
+
+  udeps:
+    name: cargo-udeps (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-udeps
+      - run: cargo +nightly udeps --workspace --all-targets
+
+  geiger:
+    name: cargo-geiger (unsafe may not rise)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-geiger --locked
+      - run: cargo geiger --workspace --output-format Ascii
+
+  semgrep:
+    name: Semgrep (community Rust rules + project rules)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - run: semgrep scan --config p/rust --config .semgrep --error
+
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@master
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  no-hostnames:
+    name: no hostnames outside the allow-list
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if a hostname literal appears in source outside spec/allowed-hosts.txt
+        run: |
+          set -euo pipefail
+          allowed=$(grep -v '^#' spec/allowed-hosts.txt | grep -v '^$' | paste -sd'|' -)
+          if grep -rnoE --include='*.rs' '[a-z0-9-]+\.(com|net|org|io|dev|app)\b' crates/ \
+             | grep -vE "($allowed)" | grep -v 'licketysync' ; then
+            echo "A hostname appears in code that is not on the allow-list." >&2
+            exit 1
+          fi

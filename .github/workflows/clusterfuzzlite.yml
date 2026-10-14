@@ -1,0 +1,26 @@
+# ClusterFuzzLite: fuzzing on every pull request until OSS-Fuzz accepts the project.
+name: ClusterFuzzLite
+
+on:
+  pull_request:
+
+permissions: read-all
+
+jobs:
+  pr-fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined]
+    steps:
+      - uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          sanitizer: ${{ matrix.sanitizer }}
+      - uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 600
+          mode: code-change
+          sanitizer: ${{ matrix.sanitizer }}

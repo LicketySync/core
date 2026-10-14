@@ -1,0 +1,32 @@
+# Project Semgrep rules written from the plan's hardening review. Add one rule
+# per class of bug the review named; keep them few and precise.
+rules:
+  - id: no-unkeyed-blake3-on-chunks
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      Chunk hashes must use BLAKE3 in keyed mode with the per-folder key; a plain
+      hash is a fingerprint anyone can test (hardening review: confirmation-of-a-file).
+    patterns:
+      - pattern: blake3::hash($X)
+      - pattern-inside: |
+          fn $F(...) { ... }
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i).*chunk.*
+  - id: no-follow-symlinks
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      Paths from peers or the index go through the beneath-root resolver; never
+      canonicalize or open them directly (Syncthing 2016 traversal, CVE-2017-1000420).
+    pattern-either:
+      - pattern: std::fs::canonicalize($P)
+      - pattern: std::fs::read_link($P)
+  - id: no-expect-on-remote-data
+    languages: [rust]
+    severity: ERROR
+    message: No `expect` on anything decoded from a peer (rust-libp2p 2026 QUIC panic).
+    pattern: $DECODED.expect(...)
+    paths:
+      include: ["crates/protocol/**", "crates/net/**"]

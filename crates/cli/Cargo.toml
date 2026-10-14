@@ -1,0 +1,18 @@
+[package]
+name = "licketysync-cli"
+description = "The licketysync command line: a client of the service's local API that can also start the service."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "licketysync"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

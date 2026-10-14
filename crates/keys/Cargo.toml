@@ -1,0 +1,14 @@
+[package]
+name = "licketysync-keys"
+description = "Key material: recovery phrase, seed-derived keypairs, hybrid wrapping (X-Wing through HPKE), hybrid signatures (Ed25519 + ML-DSA-65), grants, suspensions, revocations and epoch rotation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

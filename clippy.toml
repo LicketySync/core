@@ -1,0 +1,3 @@
+# Keep functions reviewable by a fresh-context reviewer.
+too-many-lines-threshold = 120
+cognitive-complexity-threshold = 20

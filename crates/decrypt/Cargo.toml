@@ -1,0 +1,14 @@
+[package]
+name = "licketysync-decrypt"
+description = "Offline tool: turn a sealed copy and a key into plain files, and verify a sealed copy."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

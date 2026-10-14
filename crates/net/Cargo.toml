@@ -1,0 +1,14 @@
+[package]
+name = "licketysync-net"
+description = "Networking on rust-libp2p: QUIC and TCP, mDNS and broadcast beacons, port mapping, hole punching, relays (private and public, with fair scheduling), the opt-in Mainline DHT, the HTTPS listener."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

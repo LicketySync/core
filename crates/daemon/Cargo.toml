@@ -1,0 +1,14 @@
+[package]
+name = "licketysync-daemon"
+description = "The service: folders, the local API over a Unix socket or named pipe and localhost HTTP, settings with Apply and Discard, issues and peer status."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

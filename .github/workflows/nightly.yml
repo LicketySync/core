@@ -1,0 +1,92 @@
+# The slow checks: fuzzing, mutation testing, Miri, cargo-careful, the long
+# simulator runs. Nightly on main; also on demand.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: cargo-fuzz (every decoder, 30 minutes each)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@cargo-fuzz
+      - name: Run each target
+        run: |
+          set -euo pipefail
+          cd fuzz
+          for t in $(cargo fuzz list); do
+            cargo fuzz run "$t" -- -max_total_time=1800
+          done
+
+  mutants:
+    name: cargo-mutants (keys, protocol, engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-mutants
+      - run: cargo mutants --package licketysync-keys --package licketysync-protocol --package licketysync-engine --timeout 300 --no-shuffle
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants
+          path: mutants.out
+
+  careful:
+    name: cargo-careful (runtime UB checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - run: cargo install cargo-careful --locked
+      - run: cargo +nightly careful test --workspace
+
+  miri:
+    name: Miri (FFI crates only, when they exist)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - run: echo "No FFI crate yet; Miri runs on crates that opt out of forbid(unsafe_code)."
+
+  sim-long:
+    name: simulator, long seeded runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release --package licketysync-sim -- --ignored
+
+  scorecard:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

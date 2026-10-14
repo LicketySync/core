@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/licketysync/core"
+rust-version = "1.85"
+
+# One lint policy for every crate. The Engineering practice section of the plan
+# is the source of truth; these are the mechanical parts of it.
+[workspace.lints.rust]
+unsafe_code = "forbid"          # platform-FFI crates, when they exist, opt out explicitly
+dead_code = "deny"
+unused = { level = "deny", priority = -1 }
+unreachable_pub = "warn"
+missing_docs = "warn"
+unused_crate_dependencies = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"            # no unwrap or expect outside tests
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "warn"       # a slice index on untrusted lengths is a panic waiting
+todo = "deny"                   # a TODO without an issue link is not allowed to compile
+dbg_macro = "deny"
+print_stdout = "warn"           # the CLI crate allows it locally
+print_stderr = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
