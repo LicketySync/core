@@ -147,7 +147,11 @@ jobs:
       image: semgrep/semgrep
     steps:
       - uses: actions/checkout@v4
-      - run: semgrep scan --config p/rust --config .semgrep --error
+      # The project rules' own cases first (.semgrep/tests/), so that a rule that
+      # stopped matching fails here rather than passing the scan silently.
+      - run: semgrep --test --config .semgrep/project.yml .semgrep/tests/project.rs
+      # The cases are not findings, so the scan leaves .semgrep/ out.
+      - run: semgrep scan --config p/rust --config .semgrep --exclude .semgrep --error
 
   typos:
     name: typos

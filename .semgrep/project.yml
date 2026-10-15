@@ -1,19 +1,67 @@
 # Project Semgrep rules written from the plan's hardening review. Add one rule
-# per class of bug the review named; keep them few and precise.
+# per class of bug the review named; keep them few and precise. The cases each
+# rule must and must not flag are in .semgrep/tests/project.rs (`// ruleid:` on
+# the line before a line that must match, `// ok:` before one that must not);
+# CI runs them with `semgrep --test` before the scan, and the scan excludes
+# .semgrep/ so that those cases are not reported as findings.
 rules:
-  - id: no-unkeyed-blake3-on-chunks
+  # A tripwire, not the control: deny.toml will let only licketysync-keys and
+  # licketysync-protocol depend on blake3, an entry that lands with the first of
+  # those crates to merge (suites.md, hashing). Inside them, only keys's labels
+  # module and protocol's hash module call it; those two files are excluded by
+  # path, as are the crates' integration tests and out-of-line test modules.
+  # `.semgrep/tests/**` is included so that the cases apply whether or not
+  # `semgrep --test` honours `paths`.
+  - id: blake3-only-in-hash-modules
     languages: [rust]
     severity: ERROR
     message: >-
-      Chunk hashes must use BLAKE3 in keyed mode with the per-folder key; a plain
-      hash is a fingerprint anyone can test (hardening review: confirmation-of-a-file).
+      BLAKE3 is called only from crates/keys/src/labels.rs and
+      crates/protocol/src/hash.rs (suites.md, hashing; TM-14). A hash, keyed hash,
+      key derivation or Hasher built anywhere else is one no label or key
+      registry governs, which can equal a hash of another kind and, over plaintext
+      chunks, is a fingerprint anyone can test (hardening review:
+      confirmation-of-a-file). Call the helpers in those two modules.
+    paths:
+      include: ["crates/keys/**", "crates/protocol/**", ".semgrep/tests/**"]
+      exclude:
+        - "crates/keys/src/labels.rs"
+        - "crates/protocol/src/hash.rs"
+        - "crates/keys/tests/**"
+        - "crates/protocol/tests/**"
+        - "tests.rs"
     patterns:
-      - pattern: blake3::hash($X)
-      - pattern-inside: |
-          fn $F(...) { ... }
-      - metavariable-regex:
-          metavariable: $F
-          regex: (?i).*chunk.*
+      - pattern-either:
+          - pattern: blake3::hash($X)
+          - pattern: blake3::keyed_hash($K, $X)
+          - pattern: blake3::derive_key($C, $X)
+          - pattern: blake3::Hasher::new()
+          - pattern: blake3::Hasher::default()
+          - pattern: blake3::Hasher::new_keyed($K)
+          - pattern: blake3::Hasher::new_derive_key($C)
+      - pattern-not-inside: |
+          mod tests { ... }
+  # Semgrep does not resolve Rust paths, so an imported or aliased blake3 would
+  # hide calls from the rule above; in these crates the crate is named in full.
+  - id: no-blake3-imports
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      Name blake3 by its full path (blake3::...) in the keys and protocol crates,
+      never through a use or extern crate item, so that blake3-only-in-hash-modules
+      sees every call (suites.md, hashing).
+    paths:
+      include: ["crates/keys/**", "crates/protocol/**", ".semgrep/tests/**"]
+      exclude:
+        - "crates/keys/src/labels.rs"
+        - "crates/protocol/src/hash.rs"
+        - "crates/keys/tests/**"
+        - "crates/protocol/tests/**"
+        - "tests.rs"
+    patterns:
+      - pattern-regex: '(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:use|extern[ \t]+crate)[ \t]+[^;]*\bblake3\b'
+      - pattern-not-inside: |
+          mod tests { ... }
   - id: no-follow-symlinks
     languages: [rust]
     severity: ERROR

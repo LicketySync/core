@@ -18,8 +18,8 @@ plan's "Engineering practice" section. The short version:
   commit, and keeps `.github/workflows/ci.yml` green on every push. A red `main`
   is fixed forward before any other work.
 - Anything touching keys, the protocol, file paths or the local API also gets a
-  security-reviewer pass against `spec/threat-model.md` (to be written in phase
-  0; until then the plan's Security section is the threat model).
+  security-reviewer pass against `spec/threat-model.md`, citing the TM numbers it
+  touches, and cryptography is checked against `spec/suites.md`.
 - Every review ends with a plain-language summary for the owner: what the
   change does, what it risks, how to try it by hand.
 - No `unwrap`, `expect` or `panic` outside tests; no `unsafe` outside the
@@ -41,8 +41,9 @@ full, the tests, the threat model and the plan, and walks this list:
   their last user.
 - Tests exercise behaviour, cover failure paths as fully as success, are
   deterministic, and fail if the change is reverted.
-- Security: checked against the threat model; every peer byte treated as
-  untrusted; no host contacted that `spec/allowed-hosts.txt` does not list.
+- Security: checked against `spec/threat-model.md` (cite the TM numbers the diff
+  touches); cryptography only as `spec/suites.md` allows; every peer byte treated
+  as untrusted; no host contacted that `spec/allowed-hosts.txt` does not list.
 - Docs and `CHANGELOG.md` updated.
 - Touches keys, protocol, paths or the API? The security-reviewer pass is
   recorded in the changelog entry.

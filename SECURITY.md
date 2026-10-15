@@ -24,6 +24,8 @@ traffic any home connection would already fail under.
 ## What we promise about keys
 
 Keys are never sent to any server because there is none. The threat model in
-`spec/threat-model.md` (to be written in phase 0; until then the plan's Security
-section serves) lists the adversaries we design against and the ones we
-explicitly do not.
+`spec/threat-model.md` lists the adversaries we design against, the ones we
+explicitly do not, what stays visible to whom, and the numbered requirements
+(TM-1 to TM-40) the code is reviewed against; `spec/suites.md` lists every
+algorithm, parameter and crate that may perform cryptography. A report that shows
+one of those requirements unmet is a vulnerability.

@@ -1,5 +1,7 @@
 # The slow checks: fuzzing, mutation testing, Miri, cargo-careful, the long
-# simulator runs. Nightly on main; also on demand.
+# simulator runs, and the daily advisory feed (cargo-audit against the lockfile,
+# TM-8 and TM-22: a vulnerability published after a crate was added is caught
+# without a code change). Nightly on main; also on demand.
 name: Nightly
 
 on:
@@ -11,6 +13,17 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    name: cargo-audit (daily advisory feed, TM-8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
   fuzz:
     name: cargo-fuzz (every decoder, 30 minutes each)
     runs-on: ubuntu-latest

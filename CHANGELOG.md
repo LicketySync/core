@@ -343,3 +343,172 @@ paths or the API also names the security-reviewer pass.
   the word was changed, the gate rerun, and the final tree confirmed clean by
   both reviewers before the commit was amended. Nothing here touches keys, the
   protocol, file paths or the local API, so no security-reviewer pass.
+- Spec: `spec/threat-model.md` and `spec/suites.md` written (phase 0). The
+  threat model lists the assets, the parties and trust boundaries, one subsection
+  per adversary (network observer; peers at each key tier; sealed peers and relays;
+  a stolen device; a hostile invite; a dishonest writer; the local API's attackers;
+  a compromised static host; DHT Sybil and eclipse; resource exhaustion; supply
+  chain), what is out of scope, and the plan's hardening-review table, Security
+  paragraph and "key material is authenticated" item as forty numbered
+  requirements TM-1 to TM-40 that code comments, tests and reviews cite, each with
+  the incident it answers and the crate that enforces it; it ends with what stays
+  visible and how reviewers use it. The suites file fixes the suite rule and suite
+  1 in full: X-Wing through HPKE (the `hpke` crate's `XWing`, HKDF-SHA256,
+  ChaCha20-Poly1305, mode_base; researched 2026-10-14, an off-the-shelf
+  implementation exists, no combiner is written here), hybrid Ed25519 + ML-DSA-65
+  with both signatures required and fixed-length encodings, XChaCha20-Poly1305
+  with the nonce rules, BLAKE3 in its three modes plus the labelled hash `H` for
+  identifiers over public data, with the label format
+  `licketysync/v1/<area>/<purpose>` and the registry shared with `keys.md`,
+  Argon2id at 64 MiB / 3 / 4, the transport suite (one security protocol per
+  transport, TLS on QUIC and TCP and Noise only inside WebSocket, WebTransport and
+  WebRTC; X25519MLKEM768 offered first through `libp2p-tls` on `aws-lc-rs` with
+  `prefer-post-quantum`, confirmed by the phase 2 packet capture; `libp2p-tls`'s
+  cipher-suite list accepted as shipped, a recorded deviation from the plan's
+  "256-bit symmetric everywhere"; a separate libp2p identity key, with a per-folder
+  or rotating identity recorded as a considered alternative), the approved-crates
+  table with pins, audit status and the forbidden uses (`libp2p-identity` added),
+  BIP39 for the phrase with the 256-bit entropy as the master secret, zeroization,
+  constant-time, randomness and test-vector rules, and a suite 2 placeholder. The
+  label table is copied byte for byte from `keys.md`'s registry, `hash/discovery-peer`,
+  the peer tag in `hash/discovery-lan` and `key/dht-bep44` included; key IDs are
+  derived over the key's signing and KEM public keys (`hash/id/key`, its first 16
+  bytes; root keeps the all-zero ID and a derived all-zero ID is malformed; rulings
+  2026-10-15 and 2026-10-17), and every grant carries a proof-of-possession
+  signature by the key it grants (`sig/grant-pop`), so that a key with "may share"
+  cannot attach a grant to someone else's key (TM-19, which also limits a lift to
+  the suspension's signer or its ancestors). The `hash/id/key`, `sig/grant-pop` and
+  `sig/folder-proof` rows, placeholders until the merge, were then copied byte for
+  byte from `keys.md`'s registry as merged (cfc41da), and a script confirms all 22 of
+  the table's rows byte-identical to it and in registry order. TM-5
+  names the one
+  generator written in the workspace that it permits, the simulator's seeded
+  statistical SplitMix64, which feeds the runtime's randomness trait in simulator
+  runs only and never reaches a production build; `rand` leaves the approved list
+  (ruling 2026-10-15). The transitive-crate rule governs what a build ships: a path
+  to a cryptography crate that runs only through dev-dependencies (`chacha20`
+  beneath `proptest`) is outside it, checked with `cargo tree -e no-dev` (build
+  dependencies stay in), and either a `deny.toml` entry for a crate test tooling
+  also reaches lists that tool among its wrappers or the production bans move to a
+  second cargo-deny configuration with `exclude-dev`, as the change adding them
+  chooses (index ruling 2026-10-15); the transitive list is illustrative. The
+  WebSocket path is classical end to end as `libp2p-websocket` 0.46.0 ships it (its
+  outer TLS is rustls on `ring`, with no way to pass a provider), a recorded
+  deviation from the plan's post-quantum transport with a phase 2 item (a reviewed
+  patch or upstream change so that it accepts one); the quantum entry, TM-1 and the
+  network observer say so. Providers are passed explicitly: first-party code builds
+  rustls configurations only with `builder_with_provider` on `aws-lc-rs`, and `net`
+  installs that provider as the process default at startup, an `Err` being a
+  startup error unless the installed default lists X25519MLKEM768 first. `ring` has
+  five roles (`libp2p-tls`'s certificate self-signature and CertificateVerify,
+  `rcgen`, `snow`, `quinn-proto`'s stateless reset and token key, and
+  `libp2p-websocket`'s outer TLS), its exact wrappers fixed when `net` is added.
+  ML-DSA signs hedged in production (`ExpandedSigningKey::sign_randomized`, behind
+  the `rand_core` feature, with `alloc` for the expanded key) and deterministically
+  for vectors, and a test checks that two production signatures of one body differ
+  in the ML-DSA half; `hpke` runs with `alloc` and without `getrandom`, sealing
+  through `single_shot_seal_with_rng`; every generator handed to the engine or a
+  listed crate is infallible, and the daemon's `getrandom` handler stops the process
+  with `std::process::exit` and a distinct exit code on a failure, never `abort()`
+  (whose core dump could hold keys, TM-6), a panic or a weaker source, and the daemon
+  switches core dumps off at startup as a phase 1 item (section 4.3 and the
+  `getrandom` row, ruling 8 as amended);
+  the HPKE private key is loaded through the public `Kem::PrivateKey` and
+  `Deserializable` path (module `kem::xwing`). `blake3`'s default build is stated
+  as it is (assembly and C through `cc`, no WebAssembly SIMD). Only `keys` and
+  `protocol`, which never sees plaintext and does not depend on `keys`, may call
+  BLAKE3, and only from `keys`'s labels module and `protocol`'s hash module: the
+  control will be a `deny.toml` entry with those two crates as `blake3`'s wrappers,
+  landing with the first of them to merge, and Semgrep is a tripwire in both
+  (ruling 9). `libp2p-websocket`'s outer TLS accepts TLS 1.2 while rustls's `tls12`
+  feature is on, and in rustls 0.23 it is a default feature, on unless every crate
+  that depends on rustls disables default features; the change adding `net` checks
+  it. The
+  post-quantum crates are unaudited, recorded as a deviation from the plan's
+  "audited crates".
+  The threat model's fail-closed rule (TM-10) names the three outcomes (close,
+  reject and keep, flag the signer) and makes `protocol.md`'s rules table the
+  record (decision 2026-10-15); omission of a key from a rotation's declared view
+  is detected, named and repaired by a Wrap, not prevented (TM-19, TM-38, plan
+  decision 2026-10-15); a forged grant inside a folder proof gets the same uniform
+  REJECTED as any other failed proof (TM-10); TM-9's validity follows the expiry
+  rule; TM-40 names the clock's door-keeping decisions (expiry ends presenting,
+  which every verifier checks, while issuing, revoking, suspending and lifting end
+  only in the signer's own software, so an entitled key's revocation, suspension or
+  lift is applied whatever its expiry, and the records it signed stay accepted
+  wherever they arrive) and its one use in conflict handling, the
+  tie-break among kept concurrent heads (later modification time, then smaller
+  record hash), which never beats a dominating version vector, compares and never
+  subtracts, and raises an issue against the writer for a value the file system
+  cannot set; TM-12, TM-14 and TM-15 are enforced by `keys` with `engine` as
+  the caller; TM-16 states the fork rule (a `previous` that is not the chain record
+  at sequence − 1, or a second record at one sequence, is an equivocation at its
+  own sequence; the fork is the lowest seen; withdrawal hides and never deletes,
+  and a path it empties goes through the archive and the deletion brake) and when a
+  split is detected: the first time two peers holding different branches exchange
+  cursors for that writer, because a cursor carries the hash of the requester's
+  record at its applied head, a responder whose record there differs sends it once
+  per connection, and a receiver re-requests the writer from 0 once per connection
+  when that record's parent is unknown (coordinator rulings 3 and 4, 2026-10-17);
+  TM-17 separates the advertised cursor, the highest chain sequence held with
+  withdrawn records included, which never decreases, from the applied head, which
+  moves back only by a cutoff or a fork the peer verified (index rulings
+  2026-10-15); TM-34 states that the device in a record is the key holder's claim,
+  and that any holder
+  of a key can sign under another device's ID with it and fork that device's chain
+  (one key per device, the default, confines this; recovery is a cutoff naming the
+  chain to keep, phase 7, or a fresh key; a device restored from a backup
+  equivocates the same way), which the stolen-device, invite and dishonest-writer
+  adversaries now list; TM-31 states the hostname check's limits; TM-37 names the
+  grant chain a link may carry (`g=`); what stays visible covers the hashed LAN
+  beacon (unlinkable from its contents only) and its replay probe within the
+  ±5-minute window, the stable identifiers a device publishes on the DHT (its
+  address record carries no peer ID), the clear fields of an index record
+  (`resumes`, each chunk's epoch and the Status fields included), and what anyone
+  who completes a bare connection learns (device ID and hybrid key, the
+  multistream-select protocol list, the Hello's lists, the proof-timing folder
+  oracle, and the coarse folder count the first REJECTED proof's timing gives,
+  with a constant-cost table as a phase 7 follow-up; the device name is now sent
+  only after a folder has opened on the
+  connection, in the first Status after the first folder opens, as
+  `protocol.md` is amended to do, ruling 10). CI: `nightly.yml` gains the
+  cargo-audit job that makes "daily" true; `.semgrep/project.yml`'s chunk-name
+  rule, which missed `plain_hash` and `cipher_hash`, is replaced by two tripwires
+  scoped to
+  `crates/keys` and `crates/protocol` (`blake3-only-in-hash-modules` for every call
+  into `blake3`, and `no-blake3-imports` for any `use` or `extern crate` of it), both
+  excluding the two hash modules by path, test files and a `mod tests`, with their
+  cases in `.semgrep/tests/project.rs`, which the Semgrep job in `ci.yml` runs with
+  `semgrep --test` before the scan; the scan now excludes `.semgrep/`.
+  `CONTRIBUTING.md` and `SECURITY.md` now point at the two files, and `README.md`
+  (reconciled at merge) at all four spec files; its crate table gives `keys` the
+  chunk and record sealing, keyed chunk hashes and Padmé padding (TM-12, TM-14,
+  TM-15), which leave the `engine` row, and says that `index` withdraws an
+  equivocating chain (TM-16) and the `engine` runs the archive and the deletion
+  brake (TM-35).
+  Reviewed (2026-10-15 to 2026-10-17) by fresh-context agents over four rounds, each
+  round with a security-reviewer pass, since this change touches keys and the protocol
+  as specification (rounds 1 to 3 Claude Fable 5.1, round 4 Claude Opus 5.5). Round 1
+  on 513f223: a74bb1a288d9489ec (completeness, blocked by 1: the hashing modes
+  disagreed with `keys.md`), a08df45ccf856ac74 (adversary model and usability, blocked
+  by 1: a service-worker promise with no mechanism behind it) and the security reviewer
+  ac6b3c856555306cb (blocked by 1: the stated libp2p-tls post-quantum gap was false).
+  Round 2, the same three on e58547d: a74bb1a288d9489ec blocked by 5 (drift from the
+  sibling spec), a08df45ccf856ac74 blocked by 1 (a label row that differed from
+  `keys.md`), ac6b3c856555306cb clean. Round 3 on 5fb188f: a695f9fb4ebc07279
+  (completeness, blocked by 4), ad4ae3897576caeb3 (adversary model and usability,
+  blocked by 7) and the security reviewer a701ca89e63043940 (blocked by 1: `ring`'s
+  roles). Round 4: a7df3a592271e21d6 (general) on ae9556d (blocked by 4), d524088 (1)
+  and 4c37972 (clean), and the security reviewer a39cb1ded7fe75afa on ae9556d (blocked
+  by 5), d524088 (2) and 4c37972 (clean). Every finding was fixed as the coordinator
+  ruled on it, or recorded as a follow-up where the round-4 policy allowed (only phase
+  0 formats and rules block), before the next round. Both final confirms were clean on
+  4c37972. The two later deltas, 5de6f1a and 50820fb, apply those confirms' accepted
+  nits and one ruled line and are wording only (exit instead of abort, "labelled and
+  keyed", "after the first folder opens", the `tls12` default note and the folder-count
+  timing line in section 5); the merge agent checked that `git diff 4c37972 50820fb`
+  changes nothing else. At merge the merge agent copied the three registry rows (the
+  script above checks them), reconciled `README.md` as the coordinator directed,
+  moved this entry below the 2026-10-14 line and made `.typos.toml` ignore review
+  agents' IDs (`a` and 16 hex digits), one of which in this line holds a fragment
+  typos rejects; those merge edits were not re-reviewed.

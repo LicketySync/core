@@ -10,11 +10,13 @@ not turn on. Every connection is encrypted and every key is one you issued.
 Licensed under the Mozilla Public License 2.0.
 
 - Plan and design: "Lickety-Sync: Project Plan" (the living document).
-- Specification and threat model: [`spec/`](spec/): `threat-model.md` (adversaries and
-  the numbered requirements TM-1 to TM-40), `suites.md` (algorithms, parameters and
-  approved crates), `keys.md` (derivations, grants, epochs, key strings, rotation and
-  revocation formats), `protocol.md` (wire protocol, handshake, messages, index
-  records) and `allowed-hosts.txt` (the host allow-list).
+- Specification: [`spec/threat-model.md`](spec/threat-model.md) (adversaries and
+  the numbered requirements TM-1 to TM-40 every change is reviewed against),
+  [`spec/suites.md`](spec/suites.md) (algorithms, parameters and the approved
+  crates), [`spec/keys.md`](spec/keys.md) (derivations, grants, epochs, key
+  strings, rotation and revocation formats), [`spec/protocol.md`](spec/protocol.md)
+  (wire protocol, handshake, messages, index records) and
+  [`spec/allowed-hosts.txt`](spec/allowed-hosts.txt) (the host allow-list).
 - How work is done: [`CONTRIBUTING.md`](CONTRIBUTING.md) and the CI in `.github/workflows/`.
 - Reporting a vulnerability: [`SECURITY.md`](SECURITY.md).
 
@@ -22,10 +24,10 @@ Licensed under the Mozilla Public License 2.0.
 
 | Crate | Holds |
 | --- | --- |
-| `licketysync-keys` | Recovery phrase, seed-derived keypairs, X-Wing/HPKE wrapping, hybrid signatures, grants and revocations |
+| `licketysync-keys` | Recovery phrase, seed-derived keypairs, X-Wing/HPKE wrapping, hybrid signatures, grants and revocations, chunk and record sealing, keyed BLAKE3 chunk hashes and Padmé padding (TM-12, TM-14, TM-15) |
 | `licketysync-protocol` | Suites, framing, Hello, Status, record and relay messages |
-| `licketysync-index` | SQLite index, version vectors, hash-chained records, tombstones, deletion brake |
-| `licketysync-engine` | FastCDC + keyed BLAKE3, padding, scanning and change journals, conflicts, versioning, selective sync |
+| `licketysync-index` | SQLite index, version vectors, hash-chained records and equivocation withdrawal (TM-16), tombstones; a path a withdrawal empties goes to the engine's archive and deletion brake |
+| `licketysync-engine` | FastCDC chunking (sealed, hashed and padded through `keys`), scanning and change journals, conflicts, versioning, selective sync, the archive and the deletion brake (TM-35) |
 | `licketysync-net` | rust-libp2p transports, discovery, relays, DHT, HTTPS listener |
 | `licketysync-daemon` | The service and its local API |
 | `licketysync-cli` | The `licketysync` command |
