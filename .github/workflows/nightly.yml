@@ -69,7 +69,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --release --package licketysync-sim -- --ignored
+      # Every shipped scenario over 20,000 seeds (about a second per thousand
+      # with the toy peer), `contract` included: its probing peers check the
+      # runtime's ordering and connection promises from the inside, and a seed
+      # where one breaks fails like a seed that does not converge. The binary
+      # stops at the first such seed and prints it with the last events, which
+      # is all that is needed to replay the run locally with the same
+      # arguments. `broken` is the deliberately failing scenario that checks
+      # the reporting.
+      - name: Every scenario, seeds 0 to 19999
+        run: |
+          set -euo pipefail
+          cargo build --release -p licketysync-sim
+          scenarios=$(target/release/licketysync-sim list | awk '{print $1}' | grep -vx broken)
+          for s in $scenarios; do
+            target/release/licketysync-sim "$s" 0 20000
+          done
 
   scorecard:
     name: OpenSSF Scorecard

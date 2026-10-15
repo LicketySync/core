@@ -30,6 +30,11 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Crates inside this workspace depend on each other by path alone; cargo-deny
+# counts a path dependency without a version as a wildcard. This exemption
+# applies only to path dependencies of crates marked `publish = false`, which
+# all of ours are.
+allow-wildcard-paths = true
 highlight = "all"
 # Cryptography comes only from the approved list in the plan's Security section.
 deny = [

@@ -37,3 +37,6 @@ version = "0.0.1"
 [[package]]
 name = "licketysync-sim"
 version = "0.0.1"
+dependencies = [
+ "licketysync-engine",
+]
