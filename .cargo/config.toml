@@ -1,3 +1,0 @@
-[alias]
-# The checks a pull request must pass, runnable locally in one go.
-gate = "run --quiet --package licketysync-cli -- --version"

@@ -1,13 +1,17 @@
-# ClusterFuzzLite: fuzzing on every pull request until OSS-Fuzz accepts the project.
+# ClusterFuzzLite: fuzzing of what each push changed, until OSS-Fuzz accepts the
+# project. Manual only for now: the build action needs .clusterfuzzlite/project.yaml,
+# Dockerfile and build.sh, which do not exist yet. Switch "on:" to
+# "push: branches: [main]" in the change that adds them with the first real decoder
+# (there are no pull requests, decision 2026-10-14; code-change mode handles pushes).
 name: ClusterFuzzLite
 
 on:
-  pull_request:
+  workflow_dispatch:
 
 permissions: read-all
 
 jobs:
-  pr-fuzz:
+  fuzz:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -10,7 +10,8 @@ not turn on. Every connection is encrypted and every key is one you issued.
 Licensed under the Mozilla Public License 2.0.
 
 - Plan and design: "Lickety-Sync: Project Plan" (the living document).
-- Specification and threat model: [`spec/`](spec/).
+- Specification and threat model: [`spec/`](spec/) (being written in phase 0;
+  so far it holds only the host allow-list).
 - How work is done: [`CONTRIBUTING.md`](CONTRIBUTING.md) and the CI in `.github/workflows/`.
 - Reporting a vulnerability: [`SECURITY.md`](SECURITY.md).
 

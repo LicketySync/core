@@ -1,0 +1,14 @@
+# Hosts the Lickety-Sync binaries may contact: one bare hostname or IPv4 address
+# per line, lowercase, nothing else on the line.
+# ci/no-hostnames.sh (run by gate.sh and CI) fails when a hostname inside a string
+# literal under crates/ is not listed here. Add a host only in the change that adds
+# the feature which contacts it, and only for a feature that is off until the user
+# turns it on (plan: "The binary contacts no host the user did not turn on").
+# Listing a host does not cover its subdomains. Loopback, unspecified and the
+# documentation address ranges are exempt; anything else, including the multicast
+# and broadcast addresses LAN discovery will use, is listed here with a note on
+# when it is used. The check catches accidents, not
+# adversaries: lowercase names under six top-level domains, in one-line string
+# literals in .rs files; the reviewers cover the rest.
+#
+# Phase 0: the binaries contact nothing, so this list is empty.

@@ -1,5 +1,6 @@
-# Every push and pull request. The checks here are the ones the plan's
-# Engineering practice table says run "every push"; nightly.yml holds the rest.
+# Every push to main, and the Dependabot pull requests (the only ones there are;
+# decision 2026-10-14). The checks here are the ones the plan's Engineering practice
+# table says run "every push"; nightly.yml holds the rest.
 name: CI
 
 on:
@@ -12,7 +13,9 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Commits land on main directly, so a running push build is never cancelled by
+  # the next push (a run still waiting to start can be superseded by it).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -70,8 +73,13 @@ jobs:
         with:
           tool: cargo-llvm-cov,nextest
       - run: cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
-      - name: Enforce the threshold on the crates the plan names
-        run: cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-keys -p licketysync-protocol -p licketysync-engine
+      - name: Enforce 90% on each crate the plan names (same loop as gate.sh)
+        run: |
+          for c in keys protocol engine; do
+            others=$(ls crates | grep -vx "$c" | paste -sd'|' -)
+            cargo llvm-cov nextest --all-features --fail-under-lines 90 \
+              -p "licketysync-$c" --ignore-filename-regex "crates/($others)/"
+          done
       - uses: codecov/codecov-action@v4
         with:
           files: lcov.info
@@ -102,7 +110,7 @@ jobs:
       - run: cargo audit
       - run: cargo machete
       - name: cargo vet (unaudited dependency changes)
-        run: test -d supply-chain && cargo vet --locked || echo "supply-chain/ not initialised yet; run bootstrap.sh"
+        run: cargo vet --locked
 
   udeps:
     name: cargo-udeps (nightly)
@@ -115,14 +123,22 @@ jobs:
       - run: cargo +nightly udeps --workspace --all-targets
 
   geiger:
-    name: cargo-geiger (unsafe may not rise)
+    name: cargo-geiger (unsafe report; first-party unsafe is forbidden by the workspace lint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo install cargo-geiger --locked
-      - run: cargo geiger --workspace --output-format Ascii
+      # Built with vendored OpenSSL so the tool never depends on the runner's OpenSSL
+      # (decision 2026-10-14); bootstrap.sh builds it the same way locally.
+      - run: cargo install cargo-geiger --locked --features vendored-openssl
+      # cargo-geiger has no --workspace flag, refuses the virtual workspace manifest
+      # and rejects relative paths, so it runs once per crate with an absolute path.
+      - name: cargo geiger, one crate at a time
+        run: |
+          for manifest in crates/*/Cargo.toml; do
+            cargo geiger --manifest-path "$PWD/$manifest" --output-format Ascii
+          done
 
   semgrep:
     name: Semgrep (community Rust rules + project rules)
@@ -156,12 +172,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fail if a hostname literal appears in source outside spec/allowed-hosts.txt
-        run: |
-          set -euo pipefail
-          allowed=$(grep -v '^#' spec/allowed-hosts.txt | grep -v '^$' | paste -sd'|' -)
-          if grep -rnoE --include='*.rs' '[a-z0-9-]+\.(com|net|org|io|dev|app)\b' crates/ \
-             | grep -vE "($allowed)" | grep -v 'licketysync' ; then
-            echo "A hostname appears in code that is not on the allow-list." >&2
-            exit 1
-          fi
+      # ci/no-hostnames.sh is the check; gate.sh runs the same two scripts locally.
+      - run: ci/test-no-hostnames.sh
+      - run: ci/no-hostnames.sh

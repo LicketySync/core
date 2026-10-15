@@ -24,5 +24,6 @@ traffic any home connection would already fail under.
 ## What we promise about keys
 
 Keys are never sent to any server because there is none. The threat model in
-`spec/threat-model.md` lists the adversaries we design against and the ones we
+`spec/threat-model.md` (to be written in phase 0; until then the plan's Security
+section serves) lists the adversaries we design against and the ones we
 explicitly do not.
