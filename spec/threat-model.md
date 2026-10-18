@@ -559,9 +559,12 @@ are in `suites.md` section 4.
 **TM-7. No `unsafe` outside the platform-FFI crates.** The workspace lint
 `unsafe_code = "forbid"` applies everywhere; a platform-FFI crate opts out
 explicitly and is covered by Miri nightly; cargo-geiger's count is a report that
-CI publishes and reviewers read, and a rise in it is a finding, not something a
-job compares. Stops memory-safety bugs reachable from untrusted input. Enforced
-by `core/Cargo.toml` (the lint) and review (the count).
+CI publishes and reviewers read, and `ci/geiger.sh` (CI and `gate.sh`) fails when
+any of a crate's five used unsafe counts (functions, expressions, impls, traits,
+methods) differs from `ci/geiger-baseline.txt`, so every change in the unsafe code
+the build uses lands with a reviewed change to that file. Stops memory-safety bugs
+reachable from untrusted input. Enforced by `core/Cargo.toml` (the lint),
+`ci/geiger.sh` (the counts) and review (each change to them).
 
 **TM-8. A dependency enters only by a reviewed change with a written reason.** A
 new dependency needs the reason in the changelog and the report, an active

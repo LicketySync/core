@@ -1,0 +1,44 @@
+# The unsafe code each crate's build uses, as cargo-geiger counts it, checked by
+# ci/geiger.sh in CI and gate.sh. Per crate, the five "used" counts of its
+# totals line (the x of each x/y): functions, expressions, impls, traits and
+# methods, over the crate and its normal dependencies with default features.
+#
+# Every count must equal its line here, in either direction: a rise lands only
+# with a reviewed change that raises the line, and a fall only with one that
+# lowers it, so the diff shows every change in the unsafe code we build on.
+# ci/geiger.sh prints the line to write. A new or updated dependency is the
+# usual cause; so can be a new stable rustc, since build scripts probe the
+# compiler and switch code on what it supports. A crate with no line, or a line
+# for a crate that is gone, fails too.
+#
+# The counts hold for cargo-geiger 0.14.0 (the `cargo-geiger` line; CI installs
+# that version and ci/geiger.sh refuses any other) on x86_64 Linux (CI's
+# ubuntu-latest and the dev machine; other targets build other code). To move
+# to another cargo-geiger: install it (cargo install cargo-geiger --version <v>
+# --locked --features vendored-openssl), change the version here, in ci.yml and
+# in bootstrap.sh, run ci/geiger.sh, write the lines it prints, and review it
+# as one change.
+#
+# `generated <package> <file>` lines: Rust that a dependency's build script
+# writes into its OUT_DIR and compiles in with include!, which cargo-geiger never
+# scans, so its unsafe code is not counted. Each is accepted by producing
+# package and file name only after someone has read what the build script
+# writes; any other unscanned Rust file fails. serde and serde_core (1.0.229
+# read) write private.rs, a module that re-exports serde's private API and holds
+# no unsafe code; no crate depends on serde outside its tests yet.
+#
+# Format: one `cargo-geiger <version>` line, then
+#   <directory under crates/> <functions> <expressions> <impls> <traits> <methods>
+#   generated <package> <file>
+cargo-geiger 0.14.0
+cli 0 0 0 0 0
+daemon 0 0 0 0 0
+decrypt 0 0 0 0 0
+engine 0 0 0 0 0
+index 0 0 0 0 0
+keys 95 4352 23 2 63
+net 0 0 0 0 0
+protocol 0 0 0 0 0
+sim 0 0 0 0 0
+generated serde private.rs
+generated serde_core private.rs

@@ -15,6 +15,10 @@ use std::process::ExitCode;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
+    // Semgrep's community rule flags every std::env::args(): argv[0], the
+    // program name, can be set to anything by the caller. It is skipped here
+    // and decides nothing; only the arguments after it are read.
+    // nosemgrep: rust.lang.security.args.args
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("--version" | "-V") => {

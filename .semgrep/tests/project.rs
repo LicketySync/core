@@ -1,11 +1,15 @@
-// Cases for the rules in .semgrep/project.yml, run in CI by
-//   semgrep --test --config .semgrep/project.yml .semgrep/tests/project.rs
-// A `// ruleid: <id>` comment says the next line must be flagged by that rule; a
-// `// ok: <id>` comment says it must not be. This file is not compiled; it only
-// has to parse as Rust. The scan excludes .semgrep/, so these lines never count
-// as findings there. The blake3 rules exempt crates/keys/src/labels.rs and
-// crates/protocol/src/hash.rs by path, which no case here can show; the scan of
-// those two files does.
+// Cases for the rules in .semgrep/project.yml, run in CI and by gate.sh with
+//   semgrep --test --metrics=off --config .semgrep/project.yml .semgrep/tests/project.rs
+// Each case is a comment that holds the word ruleid or ok, a colon and a rule
+// id, on the line before the code: with ruleid that line must be flagged by the
+// rule, with ok it must not be. semgrep --test reads that form wherever a line
+// holds it, prose included, so this header never writes it out; and it fails
+// unless every rule id the file names has at least one finding here, so every
+// rule in project.yml needs a ruleid case in this file. This file is not
+// compiled; it only has to parse as Rust. The scan excludes .semgrep/, so these
+// lines never count as findings there. The blake3 rules exempt
+// crates/keys/src/labels.rs and crates/protocol/src/hash.rs by path, which no
+// case here can show; the scan of those two files does.
 
 // no-blake3-imports: every way of importing or aliasing the crate.
 
@@ -122,8 +126,24 @@ pub fn resolve(path: &std::path::Path) {
     let _ = std::fs::symlink_metadata(path);
 }
 
-// no-expect-on-remote-data is scoped to crates/protocol and crates/net, so this
-// file holds no `expect` call for it; the line below only shows the safe form.
+// no-expect-on-remote-data: in crates/protocol and crates/net (and here) every
+// `expect` is flagged, since what it unwraps may come from a peer (TM-23).
+pub fn decode_hello(bytes: &[u8]) -> Hello {
+    // ruleid: no-expect-on-remote-data
+    Hello::decode(bytes).expect("the peer sent a valid Hello")
+}
+
+pub fn first_byte(bytes: &[u8]) -> u8 {
+    // ruleid: no-expect-on-remote-data
+    *bytes.first().expect("the frame is not empty")
+}
+
+// What the crates do instead: return the decode error, or bound the input.
+pub fn decode_hello_checked(bytes: &[u8]) -> Result<Hello, DecodeError> {
+    // ok: no-expect-on-remote-data
+    Hello::decode(bytes).map_err(DecodeError::from)
+}
+
 pub fn decode_len(bytes: &[u8]) -> usize {
     // ok: no-expect-on-remote-data
     bytes.first().map_or(0, |b| usize::from(*b))

@@ -3,7 +3,9 @@
 # rule must and must not flag are in .semgrep/tests/project.rs (`// ruleid:` on
 # the line before a line that must match, `// ok:` before one that must not);
 # CI runs them with `semgrep --test` before the scan, and the scan excludes
-# .semgrep/ so that those cases are not reported as findings.
+# .semgrep/ so that those cases are not reported as findings. `semgrep --test`
+# fails when a rule the file names has no finding in it, so every rule needs at
+# least one `ruleid` case there.
 rules:
   # A tripwire, not the control: deny.toml will let only licketysync-keys and
   # licketysync-protocol depend on blake3, an entry that lands with the first of
@@ -76,5 +78,7 @@ rules:
     severity: ERROR
     message: No `expect` on anything decoded from a peer (rust-libp2p 2026 QUIC panic).
     pattern: $DECODED.expect(...)
+    # `.semgrep/tests/**` as in the blake3 rules: the cases apply whether or not
+    # `semgrep --test` honours `paths` (1.181 does not).
     paths:
-      include: ["crates/protocol/**", "crates/net/**"]
+      include: ["crates/protocol/**", "crates/net/**", ".semgrep/tests/**"]

@@ -6,6 +6,80 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- CI fixed forward after run 39148844992 on `main` (b94dd0d), where four jobs
+  failed, with the rulings on its three reviews. cargo-audit: `deny.toml`
+  pointed cargo-deny's `db-path` at `~/.cargo/advisory-db`, which is
+  cargo-audit's own clone; on a fresh runner cargo-deny ran first and left its
+  checkout there, and cargo-audit then refused to clone into the non-empty
+  directory. The line is gone, so cargo-deny keeps its default,
+  `$CARGO_HOME/advisory-dbs`; nothing is ignored and both tools stay strict.
+  `gate.sh` had the same fault on any fresh machine; the dev machine passed
+  only because cargo-audit's clone was there first. Semgrep: `semgrep --test`
+  read the header of `.semgrep/tests/project.rs`, which spelled the annotation
+  form out, as two annotations, and it fails unless every rule the file names
+  has a finding there, while `no-expect-on-remote-data` had only an `ok` case.
+  The header no longer spells the form out, the rule has two `ruleid` cases and
+  a second `ok` case, and its paths include `.semgrep/tests/**` as the blake3
+  rules do. The scan step, reached for the first time, then flagged
+  `std::env::args()` in the `cli` and `sim` binaries under the community rule
+  `rust.lang.security.args.args`; both skip the program name and read only the
+  arguments after it, so each line carries a `nosemgrep` comment for that one
+  rule with the reason. CI's image is pinned to `semgrep/semgrep:1.181.0`, both
+  commands run with `--metrics=off`, and the scan with `--timeout 60` (a
+  review run saw the community unsafe-usage rule time out at the default 5 s on
+  two keys test modules, which `--error` lets pass). `gate.sh` now runs both
+  commands and requires semgrep 1.181.0 (`pipx install semgrep==1.181.0`;
+  `bootstrap.sh` installs it). cargo-geiger: 0.14 exits 1 after any warning,
+  and it warns about every file a dependency compiles in that it does not scan
+  (38 for the keys crate: README files included as documentation, one C and
+  one C++ source of `cc`). `ci/geiger.sh` runs it once per crate in its own
+  target directory (`$CARGO_TARGET_DIR/geiger`, as it cleans what it scans)
+  and accepts that exit only when the printed count matches and every warning
+  names a file with a known non-Rust extension or a generated Rust file that
+  `ci/geiger-baseline.txt` accepts by producing package and file name (serde's
+  and serde_core's `private.rs`, read and free of unsafe code); any other
+  unscanned file, a package with no metrics, another exit code or a build
+  error fails. It holds every crate's five used unsafe counts (functions,
+  expressions, impls, traits, methods) to the baseline, today keys 95 4352 23
+  2 63 and every other crate 0: any difference, up or down, fails and prints
+  the line to write, as do a crate without a line, a line for a crate that is
+  gone, and a cargo-geiger other than 0.14.0, which CI now installs by version
+  (missing-tool and version messages print the install command). This
+  enforces the plan's checks table ("the count may not rise") more strictly,
+  per the coordinator's rulings of 2026-10-18; TM-7 in `spec/threat-model.md`,
+  which said no job compares the count, now says this. `gate.sh` runs it, so
+  its comment that the report cannot fail is gone, and `ci/test-geiger.sh` (48
+  cases on a stub `cargo`) tests it in `gate.sh` and CI. gitleaks:
+  `gitleaks/gitleaks-action` needs a licence key for a repository an
+  organization owns, free but issued on registration at gitleaks.io and kept as
+  a secret, and from v2 on the action is no longer MIT-licensed. The job now
+  runs the gitleaks 8.30.1 command-line tool (MIT), installed by
+  `ci/gitleaks-install.sh` after checking the SHA-256 its release publishes
+  (the script says how to move the pin, which Dependabot cannot see), over
+  every commit of every fetched branch, with the checkout's token not kept.
+  `ci/gitleaks.sh` ignores inline `gitleaks:allow` comments, redacts, and on a
+  finding prints only rule, file, line and commit from a JSON report. Run for
+  the first time, the default rules reported 86 `generic-api-key` hits, all
+  lowercase hex in the keys crate's committed test vectors (`spec/keys.md`
+  section 9); `.gitleaks.toml` drops a `generic-api-key` finding only when the
+  file is a JSON file directly under a crate's `tests/vectors/` and the value
+  is lowercase hex, and its header says what that still misses. `gate.sh` runs
+  `ci/gitleaks.sh tree` over the working tree when gitleaks is installed, its
+  one optional step. `CONTRIBUTING.md` says that the agent reviewing a
+  Dependabot update writes changed geiger lines on the pull request's branch.
+  Dependabot's gitleaks-action pull request no longer applies. Reviewed
+  (2026-10-18) by three fresh-context agents (Claude Opus 5.5) on 3933fa9, one
+  of them the security-reviewer pass; the author was a622ea95e66fe14db.
+  Correctness aa5a81197d6b824bb blocked by 4 should-fixes, quality
+  a5efcd22c48e90e11 by 5 and security a6e1f1c31221080e6 by 3; none found a
+  blocker. Every finding was ruled on by the coordinator and every accepted one
+  applied in 216bb6e (this commit before its rebase and review record). To save
+  credits, the security reviewer alone confirmed 216bb6e on behalf of all three,
+  and found it clean. Rebased onto 9e26fdb (the specification follow-up below);
+  the only conflict was this changelog, and the TM-7 edit merged cleanly beside
+  that change's other TM edits. The merge agent wrote this review record, which
+  was not re-reviewed.
+
 - Specification follow-up from the index crate's review: device admission per write key
   (ruling 33, which replaces ruling 31's mechanism, as amended by ruling 34 and the
   round-2 rulings), the direction "keys owns hashing" (ruling 13b as amended), and spec

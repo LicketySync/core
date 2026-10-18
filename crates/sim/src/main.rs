@@ -13,6 +13,10 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // Semgrep's community rule flags every std::env::args(): argv[0], the
+    // program name, can be set to anything by the caller. It is skipped here
+    // and decides nothing; only the arguments after it are read.
+    // nosemgrep: rust.lang.security.args.args
     let args: Vec<String> = std::env::args().skip(1).collect();
     let report = licketysync_sim::cli::run(&args);
     print!("{}", report.text);

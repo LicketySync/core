@@ -124,35 +124,43 @@ jobs:
       - run: cargo +nightly udeps --workspace --all-targets
 
   geiger:
-    name: cargo-geiger (unsafe report; first-party unsafe is forbidden by the workspace lint)
+    name: cargo-geiger (unsafe report; every count must equal ci/geiger-baseline.txt)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Built with vendored OpenSSL so the tool never depends on the runner's OpenSSL
-      # (decision 2026-10-14); bootstrap.sh builds it the same way locally.
-      - run: cargo install cargo-geiger --locked --features vendored-openssl
-      # cargo-geiger has no --workspace flag, refuses the virtual workspace manifest
-      # and rejects relative paths, so it runs once per crate with an absolute path.
-      - name: cargo geiger, one crate at a time
-        run: |
-          for manifest in crates/*/Cargo.toml; do
-            cargo geiger --manifest-path "$PWD/$manifest" --output-format Ascii
-          done
+      # (decision 2026-10-14); bootstrap.sh installs it the same way. The version
+      # is the one ci/geiger-baseline.txt names (counts differ between versions;
+      # ci/geiger.sh checks it); its header says how to move to another.
+      - run: cargo install cargo-geiger --version 0.14.0 --locked --features vendored-openssl
+      # ci/geiger.sh prints the report, accepts cargo-geiger's exit 1 only for
+      # warnings about files it cannot or need not scan, and fails when any of a
+      # crate's five used unsafe counts differs from the baseline; gate.sh runs
+      # the same two scripts.
+      - run: ci/test-geiger.sh
+      - run: ci/geiger.sh
 
   semgrep:
     name: Semgrep (community Rust rules + project rules)
     runs-on: ubuntu-latest
     container:
-      image: semgrep/semgrep
+      # The version gate.sh's semgrep runs (bootstrap.sh installs it); a bump is
+      # a reviewed change to both.
+      image: semgrep/semgrep:1.181.0
     steps:
       - uses: actions/checkout@v4
       # The project rules' own cases first (.semgrep/tests/), so that a rule that
-      # stopped matching fails here rather than passing the scan silently.
-      - run: semgrep --test --config .semgrep/project.yml .semgrep/tests/project.rs
-      # The cases are not findings, so the scan leaves .semgrep/ out.
-      - run: semgrep scan --config p/rust --config .semgrep --exclude .semgrep --error
+      # stopped matching fails here rather than passing the scan silently. gate.sh
+      # runs both commands as they are here.
+      - run: semgrep --test --metrics=off --config .semgrep/project.yml .semgrep/tests/project.rs
+      # The cases are not findings, so the scan leaves .semgrep/ out. --timeout is
+      # per rule and file (default 5 s), and --error does not fail on a timeout,
+      # which skips that rule on that file: a review run saw the community
+      # unsafe-usage rule time out at 5 s on two keys test modules (each scans in
+      # under a second on the dev machine), so 60 s leaves a slow runner room.
+      - run: semgrep scan --metrics=off --timeout 60 --config p/rust --config .semgrep --exclude .semgrep --error
 
   typos:
     name: typos
@@ -161,16 +169,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: crate-ci/typos@master
 
+  # The gitleaks command-line tool (MIT), not gitleaks-action: the action needs
+  # a licence key for a repository an organization owns, free but issued on
+  # registration at gitleaks.io and kept as a repository secret, and from v2 on
+  # the action itself is no longer MIT-licensed. ci/gitleaks-install.sh pins
+  # the release by version and SHA-256 and says how to move it (Dependabot
+  # cannot see it); ci/gitleaks.sh holds the flags, .gitleaks.toml the one
+  # allowlist.
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          # Every commit of every branch, not only the ones this push brings.
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Nothing here pushes; keep the token out of .git/config.
+          persist-credentials: false
+      - run: ci/gitleaks-install.sh "$RUNNER_TEMP/bin"
+      # Prints rule, file, line and commit of each finding, never the value.
+      - run: ci/gitleaks.sh history "$RUNNER_TEMP/bin/gitleaks"
 
   no-hostnames:
     name: no hostnames outside the allow-list

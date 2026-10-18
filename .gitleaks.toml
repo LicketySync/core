@@ -1,0 +1,32 @@
+# gitleaks configuration, read by ci/gitleaks.sh (CI's gitleaks job, and gate.sh
+# when gitleaks is installed): the default rules plus one allowlist.
+#
+# The keys crate publishes test vectors (spec/keys.md section 9): hashes, keys
+# and ciphertexts from official vectors or from fixed seeds, public by
+# construction, whose long hex strings the generic-api-key rule reports. The
+# allowlist drops a finding only when all three hold: the rule is
+# generic-api-key, the file is a JSON file directly under a crate's
+# tests/vectors/, and the matched value is lowercase hex and nothing else. A
+# token, private key or cloud key with a rule of its own is still reported in
+# those files, as is any generic secret there that is not plain hex, and every
+# finding in a nested directory under vectors/ or anywhere else.
+#
+# Still missed: a real secret that is plain lowercase hex inside a vectors file;
+# and anything no default rule knows, which includes Lickety-Sync's own key
+# strings, links and 24-word recovery phrases (no rule here matches them). An
+# inline `gitleaks:allow` comment does not hide a finding (ci/gitleaks.sh passes
+# --ignore-gitleaks-allow). gitleaks always reads a `.gitleaksignore` file at the
+# repository root (finding fingerprints to skip); there is none, and adding one
+# is a reviewed change like this file.
+title = "Lickety-Sync"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Hex values in the published and seeded test vectors"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]+$''']
+paths = ['''^crates/[^/]+/tests/vectors/[^/]+\.json$''']
