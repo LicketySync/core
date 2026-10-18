@@ -107,6 +107,7 @@ jobs:
         with:
           tool: cargo-deny,cargo-audit,cargo-machete,cargo-vet
       - run: cargo deny check
+      - run: cargo deny --config deny-production.toml check bans
       - run: cargo audit
       - run: cargo machete
       - name: cargo vet (unaudited dependency changes)
@@ -179,3 +180,13 @@ jobs:
       # ci/no-hostnames.sh is the check; gate.sh runs the same two scripts locally.
       - run: ci/test-no-hostnames.sh
       - run: ci/no-hostnames.sh
+
+  no-test-vectors:
+    name: no test-vectors feature outside dev-dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # ci/no-test-vectors.sh is the check; gate.sh runs the same two scripts locally.
+      - run: ci/test-no-test-vectors.sh
+      - run: ci/no-test-vectors.sh

@@ -36,13 +36,70 @@ wildcards = "deny"
 # all of ours are.
 allow-wildcard-paths = true
 highlight = "all"
-# Cryptography comes only from the approved list in the plan's Security section.
+# Cryptography comes only from the approved crates of spec/suites.md (TM-5).
+# The transitive cryptography those crates pull in may be used by them and by
+# nothing else: each entry's `wrappers` are the only crates allowed to depend
+# on it directly (suites.md section 3.1). A change that adds a dependent adds
+# it here, reviewed as a change to the suite.
 deny = [
   { crate = "openssl", reason = "rustls on aws-lc-rs is the TLS stack" },
   { crate = "openssl-sys", reason = "rustls on aws-lc-rs is the TLS stack" },
   { crate = "md5", reason = "not an approved primitive" },
   { crate = "sha1", reason = "not an approved primitive" },
   { crate = "rust-crypto", reason = "unmaintained" },
+  # BLAKE3 only through the keys crate's labelled helpers, so no other crate
+  # can compute an unlabelled hash (threat-model ruling of 2026-10-17).
+  { crate = "blake3", wrappers = ["licketysync-keys", "licketysync-protocol"], reason = "labelled hashing lives in licketysync-keys (ruling 9: protocol hashes frames only through its own labelled helper)" },
+  # The record layer's AEAD: chunks, record sealing, the ladder and the sealed
+  # FolderProof's primitive in keys, and HPKE's own AEAD (ruling 13b). The
+  # protocol entry stays until the protocol merge drops its own dependency.
+  { crate = "chacha20poly1305", wrappers = ["hpke", "licketysync-keys", "licketysync-protocol"], reason = "the AEAD of suite 1, used by the record layer and HPKE only" },
+  # The approved primitives themselves only in the keys crate (security
+  # review SF 6): nothing else signs, wraps or encodes a phrase. A denylist
+  # cannot block an unnamed cryptography crate; review and cargo-vet cover
+  # that. ed25519-dalek gains libp2p-identity with the transport.
+  { crate = "hpke", wrappers = ["licketysync-keys"], reason = "HPKE wrapping lives in licketysync-keys" },
+  { crate = "ml-dsa", wrappers = ["licketysync-keys"], reason = "hybrid signatures live in licketysync-keys" },
+  { crate = "ed25519-dalek", wrappers = ["licketysync-keys"], reason = "hybrid signatures live in licketysync-keys" },
+  { crate = "bip39", wrappers = ["licketysync-keys"], reason = "the recovery phrase lives in licketysync-keys" },
+  # X-Wing and ML-KEM only inside hpke (suites.md 2.1).
+  { crate = "x-wing", wrappers = ["hpke"], reason = "reached only through hpke" },
+  { crate = "ml-kem", wrappers = ["hpke", "x-wing"], reason = "reached only through hpke" },
+  { crate = "x25519-dalek", wrappers = ["hpke", "x-wing"], reason = "reached only through hpke" },
+  { crate = "curve25519-dalek", wrappers = ["ed25519-dalek", "x25519-dalek"], reason = "reached only through ed25519-dalek and hpke" },
+  # curve25519-dalek's formally verified field arithmetic on some targets.
+  { crate = "fiat-crypto", wrappers = ["curve25519-dalek"], reason = "reached only through curve25519-dalek" },
+  { crate = "ed25519", wrappers = ["ed25519-dalek"], reason = "reached only through ed25519-dalek" },
+  { crate = "signature", wrappers = ["ed25519", "ml-dsa"], reason = "reached only through ed25519-dalek and ml-dsa" },
+  { crate = "module-lattice", wrappers = ["ml-dsa", "ml-kem"], reason = "reached only through ml-dsa and hpke" },
+  { crate = "kem", wrappers = ["ml-kem", "x-wing"], reason = "reached only through hpke" },
+  { crate = "sha3", wrappers = ["hpke", "ml-kem", "x-wing"], reason = "reached only through hpke" },
+  { crate = "shake", wrappers = ["hpke", "ml-dsa", "x-wing"], reason = "reached only through hpke and ml-dsa" },
+  { crate = "turboshake", wrappers = ["hpke"], reason = "reached only through hpke" },
+  { crate = "keccak", wrappers = ["sha3", "shake", "turboshake"], reason = "reached only through hpke and ml-dsa" },
+  { crate = "hkdf", wrappers = ["hpke"], reason = "HPKE's KDF, reached only through hpke" },
+  { crate = "hmac", wrappers = ["hkdf"], reason = "reached only through hpke" },
+  { crate = "sha2", wrappers = ["ed25519-dalek", "hpke"], reason = "reached only through ed25519-dalek and hpke" },
+  # proptest uses ChaCha20 as its test generator, a dev-dependency only;
+  # deny-production.toml removes it from the wrappers for the shipped graph.
+  { crate = "chacha20", wrappers = ["chacha20poly1305", "proptest"], reason = "never without the MAC" },
+  { crate = "poly1305", wrappers = ["chacha20poly1305"], reason = "never without the cipher" },
+  { crate = "universal-hash", wrappers = ["poly1305"], reason = "reached only through chacha20poly1305" },
+  { crate = "cipher", wrappers = ["chacha20", "chacha20poly1305"], reason = "reached only through chacha20poly1305" },
+  { crate = "aead", wrappers = ["chacha20poly1305", "hpke"], reason = "reached only through chacha20poly1305 and hpke" },
+  { crate = "bitcoin_hashes", wrappers = ["bip39"], reason = "the phrase checksum's SHA-256, inside bip39 only" },
+  # Key encodings no key of ours uses (quality review NIT 9): the PKCS#8,
+  # DER and SPKI crates are in Cargo.lock only, through ml-dsa's weak
+  # `pkcs8?/alloc`, and never built; banned so that a feature change that
+  # would build them fails here.
+  { crate = "pkcs8", reason = "no key is read or written as PKCS#8" },
+  { crate = "der", reason = "no key is read or written as DER" },
+  { crate = "spki", reason = "no key is read or written as SPKI" },
+  # ring verifies the libp2p TLS certificate's own signature and does nothing
+  # else (suites.md 2.6). Banned outright until the transport change adds it,
+  # with exactly the wrappers suites.md 3.1 names (libp2p-tls, rcgen, and
+  # rustls-webpki if it reaches ring through it).
+  { crate = "ring", reason = "certificate verification inside libp2p-tls only, added with the transport" },
 ]
 
 [sources]

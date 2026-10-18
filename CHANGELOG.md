@@ -6,6 +6,173 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Keys crate, phase 0 (`licketysync-keys`), built to `spec/keys.md` and
+  `spec/suites.md` as main holds them (cfc41da and a544ad5, copied into `spec/`
+  for the label-registry test) and to the rulings of 2026-10-17 numbered 8 (as
+  amended), 13b and 16 to 23, which the next spec commit states. Under ruling
+  13b the crate owns every cryptographic primitive, label, identifier and
+  `SignedRecord`, and never depends on `licketysync-protocol`, which will depend
+  on it. What it holds: the label registry with the four BLAKE3 uses behind
+  typed label constants, each hasher that held key material wiped after use
+  (`labels`); the 24-word phrase and the derivation tree (`phrase`, `derive`);
+  key pair sets from one seed with hybrid Ed25519 + ML-DSA-65 signatures, both
+  halves required, `verify_strict` (`keyset`); production signing is hedged and
+  is the only form outside tests and the `test-vectors` feature; X-Wing
+  data-key wraps through `hpke`'s `single_shot_seal_with_rng` and
+  `single_shot_open`, the plaintext zeroizing at once (`wrap`); XChaCha20-
+  Poly1305 under a caller's key, nonce and aad (`aead`), the handshake's
+  `ProofKey` (`ProofKey::derive`) and `labels::folder_hint`, from which the
+  protocol crate builds the FolderProof; the labelled keyed hash under them is
+  crate-private, so the proof key exists only inside its zeroizing type; the
+  data key, the epoch ladder, the derived keys and the
+  index-record seal under a typed 88-byte aad (`epoch`); chunk sealing with
+  Padme and the convergent nonce, the bound checked before allocation (`chunk`);
+  Bech32m key strings, links and `.lskey` files, every secret string written
+  into a buffer of its final length, a link's bundle accepted only when its
+  leaf is the link's own key, and the phase 5 link code (`keystring`,
+  `linking`); the LAN and DHT discovery hashes (`discovery`); and the key
+  records (`records`): the signed envelope with the grant's proof of
+  possession in `key_signature`, the bodies with canonical prost encoding and
+  decoding that refuses a singular field twice, a `uint32` past 32 bits and
+  any repeated field past its bound before prost allocates (ruling 16), caps of
+  4 000 000 encoded bytes for an index record and 6 000 000 for a key record
+  judged before the duplicate check, `FolderKeys` with every step of 5.4 and the
+  phase 0 part of section 7 in signature-first order. Chains are authorizing
+  (ruling 17: each issuer grant has `may_share` and a tier at least as
+  privileged as the grant it issued); ancestry is reachability along those
+  links within 16 grants, a key never its own ancestor, so entitlement never
+  depends on arrival order (rulings 18 and 19); the canonical chain is the
+  shortest, valid or not, with a hash tie-break, used for pushes and the
+  suspension-weighted tier; presentability takes the best presentable chain at
+  the wall clock. In phases 0 to 6 stored Revocations, Suspensions and Lifts are
+  checked and stored but never applied (ruling 21); a grant beneath a stored
+  Revocation is stored with an issue (ruling 20); a Rotation's signer must hold
+  a stored grant of tier 1 or 2 (ruling 21); a Wrap's validity is judged per
+  grant (ruling 19); a rival or stale Rotation is stored only after its
+  entitlement step and once per (epoch, signer), root's always (rulings 22 and
+  23); while an epoch has more than one stored rotation, every holder result for
+  it is the no-blame `EpochAmbiguous`; a holder whose ladder check fails adopts
+  nothing from that rotation (ruling 19). Quotas (ruling 23): non-root key
+  records at most 65 536 in number and 512 MiB in encoded bytes per folder, 4 096
+  per non-root signer (`MAX_KEY_RECORDS_PER_FOLDER`,
+  `MAX_KEY_RECORD_BYTES_PER_FOLDER`, `MAX_KEY_RECORDS_PER_SIGNER`), root's
+  records exempt; a record that would take a count past one of them is a
+  validity-only rejection naming its signer. Rulings 24 to 26: a failure that
+  rests only on a grant not being stored (an issuer's authority under its
+  governing grant, a rotator's tier 1 or 2 grant, a Wrap's tier, entitlement
+  as issuer or ancestor) is the validity-only `UnprovableFault`, naming the
+  signer, the fault and the key whose absent grant it rests on, never a
+  signer fault, in every arrival order; a key targeting itself, a Lift of
+  root's Suspension by another key, and a Rotation's own view keep their
+  blame. A record refused under a quota is remembered by hash with the key
+  it grants or the epoch it creates (`refused_under_quota`, at most
+  `MAX_REFUSED_REMEMBERED` = 16 384 per folder, oldest forgotten, not
+  persisted, forgotten once stored), and so is a record refused because it
+  needs a remembered one, transitively: a grant with the key it grants, which
+  its verified proof of possession binds, any other record by its hash alone,
+  so only a rotation that verified in full before a quota refused it provides
+  an epoch and an unsigned or unentitled Rotation cannot turn root's later
+  records from missing to refused (ruling 29); such a record is the validity-only
+  `DependencyRefused`, never a missing dependency. Residual: a refusal that
+  is forgotten (after a restart, or past the bound) is sent again and judged
+  again, so re-sends recur, and a peer with no key can force that, evicting
+  every genuine entry with 16 384 unsigned records that need a remembered
+  one. `records()` yields the
+  records in stored order, which senders use as it is. While an epoch is
+  ambiguous no key of it is used and no ladder rung through it climbed; a
+  wrap that does not open and a Rotation's own KeyWrap against its own
+  `confirm` still blame, and only a check against the chain's `confirm`,
+  then chosen among rivals, is the no-blame `EpochAmbiguous`. Grants held for
+  a connection (`HeldGrants`, at most 64) are verified without the epoch step
+  and count at the handshake (`FolderKeys::validity_with`); a full set
+  refuses a grant before either signature is verified, with the
+  held-set-full outcome `HeldSetFull` for the connection, which names no
+  key, not the issuer the body claims (ruling 29). The chain searches run over
+  groups of interchangeable grants (same key, issuer, tier and `may_share`)
+  and the phase 0 to 6 walk level of every group is kept as grants are stored,
+  so an insertion reads only the groups of the keys it names; a bulk load
+  verifies every signature on all cores first, and never panics: with one
+  thread and on WebAssembly it verifies on the calling thread, and a worker
+  that cannot start leaves its part to the calling thread. The 16-grant
+  bound is tested at its edge in each place it is applied (the kept walk
+  levels, the top-down search of the phase 7 coverage rule, ancestry and
+  `is_ancestor`), and a property test compares every search with brute
+  force on graphs whose walks reach 15 to 18 grants. Randomness comes from the
+  caller as `&mut dyn FnMut(&mut [u8])` (the engine's `Randomness`); nothing
+  reads a clock. Test vectors for every item of keys.md section 9 and one per
+  label are data under `crates/keys/tests/vectors/`
+  (`LICKETYSYNC_REGENERATE_VECTORS=1 cargo test -p licketysync-keys vector_`
+  rewrites them), with the RFC 8032, X-Wing draft, XChaCha draft, BLAKE3, BIP39
+  Trezor and LAMPS ML-DSA-65 known answers; fuzz targets for every decoder are
+  in `fuzz/` with seeds from the vectors, which the nightly run passes as a
+  second corpus; the fuzz crate builds the vectors' folder with hedged signing
+  under a fixed randomness, not the `test-vectors` feature, and the gate's
+  `ci/no-test-vectors.sh` (tested by `ci/test-no-test-vectors.sh`, also in
+  CI) fails when `cargo tree` shows that feature enabled outside
+  dev-dependencies. TM-2, TM-3, TM-5, TM-6, TM-9, TM-10,
+  TM-11, TM-12, TM-14, TM-15, TM-18, TM-19, TM-22, TM-23, TM-33, TM-36, TM-37,
+  TM-38, TM-40.
+- Dependencies added (keys crate), each from `suites.md` section 3 or for
+  encoding: `hpke` 0.14 (alloc, x25519, mlkem, hkdfsha2, chacha), `ml-dsa` 0.1
+  (no default features; alloc, zeroize, rand_core), `ed25519-dalek` 3,
+  `chacha20poly1305` 0.11 (alloc, zeroize; ChaCha20's own zeroize with it),
+  `blake3` 1 (zeroize), `bip39` 3 (zeroize), `bech32` 0.11, `zeroize` 1,
+  `subtle` 2, `rand_core` 0.10, `prost` 0.14 (the canonical record encoding),
+  `base64` 0.22 (a link's bundle and certificate hash); dev-only `proptest` 1,
+  `serde_json` 1 and `hex` 0.4 (property tests and the vector files). A
+  compile-time guard fails the build if any secret type of the crate, the
+  cipher, or a signing key stops zeroizing on drop. cargo-vet imports the five
+  sets the other branches use (Bytecode Alliance, Google, ISRG, Mozilla,
+  Zcash); the 80 crates they do not cover at these versions are exempted, each
+  with a note, five of them (`base64ct`, `const-oid`, `der`, `pkcs8`, `spki`,
+  the last three banned outright in `deny.toml`)
+  present only in `Cargo.lock` through `ml-dsa`'s weak `pkcs8?/alloc` and
+  never built. `deny.toml` confines `hpke`, `ml-dsa`, `ed25519-dalek` and
+  `bip39` to this crate, every transitive cryptography crate to the crates that
+  wrap it (`x-wing`, `ml-kem`, `x25519-dalek`, `curve25519-dalek`,
+  `fiat-crypto`, `sha2`, `sha3`, `hkdf`, `chacha20`, and the rest), `blake3`
+  and `chacha20poly1305` to the keys and protocol crates (the protocol entry
+  until the protocol merge drops its own dependency), and bans `ring` until
+  the transport adds it; `deny-production.toml`, run by `gate.sh` and CI,
+  holds the one rule a dev-only test tool (proptest's ChaCha20 generator)
+  would otherwise break. A denylist cannot block a cryptography crate it does
+  not name; review and cargo-vet cover that.
+- Deferred to phase 2 (`suites.md` 2.1 allows it): ML-DSA-65 ACVP sigGen and
+  sigVer vectors, which are not in the local cargo registry (nothing was
+  downloaded), and a cross-check of the HPKE wrap against `hpke-rs`. bech32
+  0.12.0 was not evaluated against its source, which is not in the local
+  registry either; the crate stays on 0.11.1, whose Bech32m encoding and
+  checksum this crate's use needs no fix in, and the next Dependabot update
+  re-opens the question. Upstream residues, outside this crate's reach: `hpke`'s
+  shared secret and key schedule, and `bip39`'s stack arrays during encoding,
+  are not wiped by those crates; the allocator probe that would show freed
+  copies is a phase 1 item.
+- Reviewed (2026-10-17 to 2026-10-18) by three fresh-context agents (Claude
+  Opus 5.5), one of them the security-reviewer pass, since this change touches
+  keys and the protocol's records. Authors: ae7dd3f326008d354 wrote 70ff269
+  and 0712ee5, aa83d092ae2e67eeb the fix pass 64579fd, and a732b163f9d79a0d8
+  the ruling 29 fix ad61d73. Correctness reviewer a5b5274857e805201: 70ff269
+  blocked by 1 (no fuzz targets for the decoders), 0712ee5 clean. Quality
+  reviewer a682018f8bcdd4072: 70ff269 blocked by 1 (`chacha20poly1305` built
+  without its `zeroize` feature), 0712ee5 clean with two should-fixes (the
+  bulk load could panic on WebAssembly, and the 16-grant bound was untested at
+  its edge), fixed in 64579fd. Security reviewer ada5dcf23d93a0724: 70ff269
+  blocked by 3 (store flooding, a validity search far past quadratic in
+  attacker-chosen shapes, secret copies escaping zeroization), 0712ee5 clean,
+  and 64579fd clean with two should-fixes, ruled as ruling 29 and fixed in
+  ad61d73; that 64579fd confirm also covered the quality reviewer's two
+  should-fixes. Every blocker and should-fix was fixed as the coordinator
+  ruled on it, or recorded as deferred above, and confirmed by a reviewer on a
+  later version, except ruling 29's fix: the delta from 64579fd to ad61d73 was
+  checked by the merge agent only (it changes only what the refusal memory
+  lets a record that needs a refused one provide, `Validity::HeldSetFull` in
+  place of the held-set `QuotaExceeded`, their tests and docs, and this
+  entry's sentences on them). At merge ad61d73 was rebased from 9883767 onto
+  0b8864a; the only conflict was this file, resolved by keeping both entries,
+  `spec/` is main's unchanged, and the label-registry test passes against
+  main's specs. The merge agent wrote this review record, which was not
+  re-reviewed.
+
 - Specification follow-up from the keys crate's reviews (rulings 22 to 28), one small
   commit on `spec/keys.md`, `spec/protocol.md`, `spec/suites.md` and
   `spec/threat-model.md`. Key-record storage gets three quotas that count only records

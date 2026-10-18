@@ -17,6 +17,7 @@ step cargo nextest run --workspace --all-features
 step cargo test --workspace --doc
 step env RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items
 step cargo deny check
+step cargo deny --config deny-production.toml check bans
 step cargo audit
 step cargo machete
 step cargo vet --locked
@@ -24,6 +25,8 @@ step cargo +nightly udeps --workspace --all-targets
 step typos
 step ci/test-no-hostnames.sh
 step ci/no-hostnames.sh
+step ci/test-no-test-vectors.sh
+step ci/no-test-vectors.sh
 # 90% line coverage on each of the crates the plan names, measured per crate:
 # only that crate's own files count, so a well-tested neighbour cannot mask it.
 for c in keys protocol engine; do

@@ -1,0 +1,19 @@
+# The bans that hold for the shipped dependency graph only (dev-dependencies
+# excluded): where a test tool depends on a cryptography crate, deny.toml
+# allows it and this file does not. `gate.sh` and CI run
+# `cargo deny --config deny-production.toml check bans` after `cargo deny check`.
+
+[graph]
+all-features = true
+exclude-dev = true
+
+[bans]
+# deny.toml reports duplicate versions; this file only enforces wrappers.
+multiple-versions = "allow"
+wildcards = "deny"
+# As in deny.toml: workspace crates depend on each other by path alone, and
+# every one of them is `publish = false`.
+allow-wildcard-paths = true
+deny = [
+  { crate = "chacha20", wrappers = ["chacha20poly1305"], reason = "never without the MAC" },
+]

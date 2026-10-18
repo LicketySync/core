@@ -1,0 +1,27 @@
+{
+  "announcer_libp2p_pk": "a041bdf0dc39697abeb554da4bb7bc26c0a8256e65e35c380f2dc23a383c49c8",
+  "day": 20833,
+  "dht_id_today": "9675a5e908fdf72ac3d725218ad61b1374ad8b53",
+  "dht_id_tomorrow": "cba28133319a1b7f0f1a44e2b97b0264cc7f8339",
+  "dht_id_yesterday": "5a2f6ebf01f03d6a703bf90d7b53c8d0a54d2c36",
+  "folder_id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+  "lan_id": "eee0e243575e27bf295ec37097859976",
+  "link_beacon_id": "8ddd45d9e7173866f5de549be36f3bc3",
+  "link_secret": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+  "minute": 30000000,
+  "mismatched_identity": "db5b9a4a15ba7b7d35fbe2fc4252b1c1fc4154dfdd57521c2aaff894df7425e8",
+  "mismatched_peer_tag": "33e570bc4b61237a89a04fd2c2a345d2",
+  "peer_tag": "da67d176b69a2eb79b8c39c1c75d2d90",
+  "salt": "5152535455565758595a5b5c5d5e5f60",
+  "unix_seconds": 1800000000,
+  "window": {
+    "accepted": [
+      29999995,
+      30000005
+    ],
+    "refused": [
+      29999994,
+      30000006
+    ]
+  }
+}

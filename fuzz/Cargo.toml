@@ -7,13 +7,66 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+# Not a member of the core workspace: cargo-fuzz builds it on its own.
+[workspace]
+
 [dependencies]
 libfuzzer-sys = "0.4"
+licketysync-keys = { path = "../crates/keys" }
 licketysync-protocol = { path = "../crates/protocol" }
 
 [[bin]]
 name = "frame_decode"
 path = "fuzz_targets/frame_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "key_record_insert"
+path = "fuzz_targets/key_record_insert.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "key_body_parse"
+path = "fuzz_targets/key_body_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "key_string_parse"
+path = "fuzz_targets/key_string_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "link_parse"
+path = "fuzz_targets/link_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "phrase_parse"
+path = "fuzz_targets/phrase_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "link_code_parse"
+path = "fuzz_targets/link_code_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunk_open"
+path = "fuzz_targets/chunk_open.rs"
 test = false
 doc = false
 bench = false

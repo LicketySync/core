@@ -32,11 +32,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: taiki-e/install-action@cargo-fuzz
       - name: Run each target
+        # The first corpus directory takes what libFuzzer finds; the second,
+        # fuzz/seeds/<target>, holds the committed seeds made from the vectors.
         run: |
           set -euo pipefail
           cd fuzz
           for t in $(cargo fuzz list); do
-            cargo fuzz run "$t" -- -max_total_time=1800
+            mkdir -p "corpus/$t" "seeds/$t"
+            cargo fuzz run "$t" "$PWD/corpus/$t" "$PWD/seeds/$t" -- -max_total_time=1800
           done
 
   mutants:

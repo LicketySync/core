@@ -63,6 +63,7 @@ cargo nextest run --workspace --all-features
 cargo test --workspace --doc
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items
 cargo deny check
+cargo deny --config deny-production.toml check bans
 cargo audit
 cargo machete
 cargo vet --locked
@@ -70,6 +71,8 @@ cargo +nightly udeps --workspace --all-targets
 typos
 ci/test-no-hostnames.sh
 ci/no-hostnames.sh
+ci/test-no-test-vectors.sh
+ci/no-test-vectors.sh
 cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-<crate> --ignore-filename-regex 'crates/(<the others>)/'   # once each for keys, protocol, engine
 ```
 

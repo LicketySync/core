@@ -1,0 +1,11 @@
+{
+  "device_id": "40da60a94a3dd825be945a0cd52f4eb72b1095f0b439be64c09475c59642ee80",
+  "device_seed": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+  "dht_pk": "fc701004dc4112c9064c2012f5f2167a070280280db37b98b15131d34c7dba78",
+  "dht_signature": "7c2a21e215dcab1be2418562abece36473b3217a0e83db3f48139f00195ed241f193cadfae78469a14fe0319777aeb1fb2e3ae018f32f19442a1684a5369230c",
+  "dht_signed_item": "62657034342074657374206974656d",
+  "libp2p_identity_pk": "a041bdf0dc39697abeb554da4bb7bc26c0a8256e65e35c380f2dc23a383c49c8",
+  "libp2p_identity_seed": "186ea9e745a3ee80e81d7b6848e9fc231a6b12ee361c149bcc797a6308e0a73a",
+  "libp2p_peer_id": "002408011220a041bdf0dc39697abeb554da4bb7bc26c0a8256e65e35c380f2dc23a383c49c8",
+  "libp2p_peer_id_text": "12D3KooWLbwYSoxYfCSHg726dZA3cCSdzeMG18brSyhACQ2mo24f"
+}
