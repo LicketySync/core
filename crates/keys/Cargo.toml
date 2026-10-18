@@ -20,7 +20,7 @@ zeroize = { version = "1", features = ["derive"] }
 subtle = "2"
 prost = "0.14"
 rand_core = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
