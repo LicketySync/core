@@ -406,21 +406,27 @@ else.
 - **The signature prefix** `M = label || 0x00 || body` under `licketysync/v1/sig/`
   (section 2.2) is the fourth labelled use; it is signed, not hashed.
 
-**Who may call BLAKE3.** Only the `keys` crate and the `protocol` crate, and inside
-them only `keys`'s labels module (`crates/keys/src/labels.rs`) and `protocol`'s hash
-module (`crates/protocol/src/hash.rs`), so that every hash in the workspace is one
-of the four jobs above under its label. `protocol` computes labelled and keyed hashes of
-public values only (the transcript hash, the folder hint, identifiers, record
-hashes) and never sees plaintext; it does not depend on `keys`, which may depend on
-`protocol` and implements its traits, and `index` computes record hashes through
-`protocol`'s labelled hash. The control will be cargo-deny: a `deny.toml` entry
-`{ crate = "blake3", wrappers = ["licketysync-keys", "licketysync-protocol"] }`,
-which lands with the first of those two crates to merge, so that no other crate
-may depend on `blake3`. Inside the two crates, a Semgrep tripwire
+**Who may call BLAKE3.** Only the `keys` crate, which owns all of the workspace's
+cryptography, identifiers and hashes, and inside it only its labels module
+(`crates/keys/src/labels.rs`), so that every hash in the workspace is one of the
+four jobs above under its label. That is the target the crates are built to; on
+main today `protocol` and `index` are stubs with no dependencies. `protocol` is to
+depend on `keys`, take the folder hint and the proof key from it
+(`labels::folder_hint`, `ProofKey`), and build the transcript hash with its
+labelled hash (`labels::labelled_hash`); a hash module of its own may only
+re-export `keys`'s functions and computes none itself, and `protocol` never sees
+plaintext. `index` uses `keys`'s record hash. `keys` depends on neither. The
+control is cargo-deny, whose target is a `blake3` entry in `deny.toml` with
+`licketysync-keys` as its only wrapper, so that no other crate may depend on
+`blake3`. Today `deny.toml` also lists `licketysync-protocol` as a wrapper of
+`blake3` and of `chacha20poly1305`, and the Semgrep tripwire below also excludes
+`crates/protocol/src/hash.rs`, for the protocol crate's work in progress; the
+change that lands that crate removes the `licketysync-protocol` wrapper from both
+entries and that exclusion. In `keys` and `protocol`, a Semgrep tripwire
 (`.semgrep/project.yml`) flags every call into `blake3` (`hash`, `keyed_hash`,
 `derive_key`, and a `Hasher` from `new`, `default`, `new_keyed` or
-`new_derive_key`) and every `use` or `extern crate` of it, except in those two
-files, which it excludes by path, in the crates' integration tests and
+`new_derive_key`) and every `use` or `extern crate` of it, except in `keys`'s
+labels module, which it excludes by path, in the crates' integration tests and
 out-of-line `tests.rs` modules, and inside a `mod tests`; so the qualified paths
 the first rule matches are the only way to reach the crate. It catches mistakes,
 not intent: Semgrep does not resolve paths, so a call it cannot parse, such as one
@@ -429,17 +435,17 @@ inside a macro, passes. The cases it must and must not flag are in
 the exclusion by path is exercised by the scan itself.
 
 **Label format.** A label is ASCII, lowercase, from `a-z`, `0-9`, `-` and `/`, and
-reads `licketysync/v1/<area>/<purpose>`: `<area>` groups labels by what they derive
-from or serve (`key`, `folder`, `identity`, `epoch`, `link`, `handshake`, `hash`,
-`sig`, `wrap`), and `<purpose>` is one or more `/`-separated words. The prefix
-`licketysync/v1/` is reserved for suite 1; suite 2 uses `licketysync/v2/`. Every
-label is a `const` in the crate that uses it, and every such constant has a test
-vector (section 4.4), so a changed label fails a test. The labels that belong to the
-primitives themselves, as `keys.md`'s registry carries them. These rows are copied
-from that registry byte for byte, so that the two tables can be compared
-mechanically; the section pointers inside them are the registry's own and refer to
-`keys.md` and `protocol.md`, the one place this file carries a section number of
-either:
+reads `licketysync/v1/<area>/<purpose>`: `<area>` groups labels by what they
+derive from or serve (`key`, `folder`, `identity`, `epoch`, `link`, `handshake`,
+`hash`, `sig`, `wrap`), and `<purpose>` is one or more `/`-separated words. The
+prefix `licketysync/v1/` is reserved for suite 1; suite 2 uses `licketysync/v2/`.
+Every label is a `const` in `keys`'s label registry (`crates/keys/src/labels.rs`),
+which the other crates import, with a test vector each (section 4.4), so a changed
+label fails a test. The labels that belong to the primitives themselves, as
+`keys.md`'s registry carries them. These rows are copied from that registry byte
+for byte, so that the two tables can be compared mechanically; the section
+pointers inside them are the registry's own and refer to `keys.md` and
+`protocol.md`, the one place this file carries a section number of either:
 
 | Label | Mode | Material / input | Output |
 | --- | --- | --- | --- |
@@ -677,40 +683,43 @@ the plan's "audited crates".
 | `libp2p-websocket` | with `libp2p` `0.57` | 0.46.0, read 2026-10-17 | none named | The WebSocket transport of section 2.6, its outer TLS classical as shipped (rustls on `ring`) | Any claim that its outer TLS is post-quantum until the phase 2 change lands |
 
 Transitive dependencies these crates pull in, among them `x-wing`, `ml-kem`,
-`curve25519-dalek`, `x25519-dalek`, `sha3`, `shake`, `turboshake`, `module-lattice`,
-`hkdf`, `sha2`, `hmac`, `scrypt`, `p256`, `snow`, `ring`, `rcgen`, `webpki`,
-`quinn`, `chacha20`, `poly1305`, `aead`, and `rand` beneath `age`, the `libp2p-*`
-crates and `quinn` (the list is illustrative; the tree decides), are allowed as
-dependencies of the listed crates only; first-party code never names them in
-`Cargo.toml` or `use`s them. The rule governs what a build ships, so a path to a
-cryptography crate that runs only through dev-dependencies is outside it: for
-example `chacha20`, which `proptest`, the property-test tool, depends on for its
-test generator. The check is `cargo tree --workspace --all-features --target all -e
-no-dev -i <crate>`, which leaves dev-dependencies out and keeps build-dependencies
-in, since those run at build time, and must show every path to the crate running
-through a listed crate; a crate that only test tooling reaches is in no production
-build. The change that adds the first of these to the normal dependency graph also
-adds `[[bans.deny]]` entries with `wrappers` to `deny.toml` so that cargo-deny
-enforces this. Because cargo-deny's graph includes dev-dependencies, either an entry
-for a crate that test tooling also reaches lists that tool among its wrappers
-(`proptest` for `chacha20`), or the production bans move to a second cargo-deny
-configuration with `[graph] exclude-dev = true` that `gate.sh` and CI also run; the
-change that adds the bans chooses, and either way the `cargo tree` check keeps the
-test-only path out of production builds **(decision)**. `ring` has five roles, all
-beneath listed crates: in `libp2p-tls`, verifying the certificate's self-signature
-and the TLS 1.3 CertificateVerify signature; in `rcgen`, generating that
-certificate; in `snow` via `libp2p-noise`, the Noise cipher and hash on native
-targets; in `quinn-proto` through its `ring` feature via `libp2p-quic`, QUIC's
-stateless-reset HMAC and its token key; and in `libp2p-websocket`, the whole outer
-TLS (rustls's `ring` provider, which also turns on `webpki`'s `ring` feature). The
-exact wrappers of `ring`'s `deny.toml` entry are fixed in the change that adds
-`net`, from `cargo tree -e no-dev -i ring` **(decision; `deny.toml` today bans only
-`openssl`, `md5`, `sha1` and `rust-crypto`)**. Expect `multiple-versions` warnings,
-which `deny.toml` sets to `warn`: `age` 0.12 depends on `x25519-dalek` 2,
-`chacha20poly1305` 0.10, `hpke` 0.12, `ml-kem` 0.2 and `p256` (and, under its `ssh`
-feature, which is never enabled, `rsa`, `aes` and `bcrypt-pbkdf`), while suite 1
-uses newer lines of the first four; the duplicates are confined to the `decrypt` and
-`cli` crates that perform the export.
+`curve25519-dalek`, `x25519-dalek`, `sha3`, `shake`, `turboshake`,
+`module-lattice`, `hkdf`, `sha2`, `hmac`, `scrypt`, `p256`, `snow`, `ring`,
+`rcgen`, `webpki`, `quinn`, `chacha20`, `poly1305`, `aead`, and `rand` beneath
+`age`, the `libp2p-*` crates and `quinn` (the list is illustrative; the tree
+decides), are allowed as dependencies of the listed crates only; first-party code
+never names them in `Cargo.toml` or `use`s them. The rule governs what a build
+ships, so a path to a cryptography crate that runs only through dev-dependencies
+is outside it: for example `chacha20`, which `proptest`, the property-test tool,
+depends on for its test generator. The check is
+`cargo tree --workspace --all-features --target all -e no-dev -i <crate>`, which
+leaves dev-dependencies out and keeps build-dependencies in, since those run at
+build time, and must show every path to the crate running through a listed crate;
+a crate that only test tooling reaches is in no production build. `deny.toml`'s
+ban entries with `wrappers` make cargo-deny enforce this for the crates on the
+graph today, and a change that adds another adds its entry. Because cargo-deny's
+graph includes dev-dependencies, an entry for a crate that test tooling also
+reaches lists that tool among its wrappers (`proptest` for `chacha20`), and a
+second configuration, `deny-production.toml`, with `[graph] exclude-dev = true`
+and the same entry without the tool, which `gate.sh` and CI also run, keeps the
+test-only path out of production builds, as the `cargo tree` check does
+**(decision)**. `ring` has five roles, all beneath listed crates: in `libp2p-tls`,
+verifying the certificate's self-signature and the TLS 1.3 CertificateVerify
+signature; in `rcgen`, generating that certificate; in `snow` via `libp2p-noise`,
+the Noise cipher and hash on native targets; in `quinn-proto` through its `ring`
+feature via `libp2p-quic`, QUIC's stateless-reset HMAC and its token key; and in
+`libp2p-websocket`, the whole outer TLS (rustls's `ring` provider, which also
+turns on `webpki`'s `ring` feature). The exact wrappers of `ring`'s `deny.toml`
+entry are fixed in the change that adds `net`, from `cargo tree -e no-dev -i ring`
+**(decision; `deny.toml` today bans `openssl`, `openssl-sys`, `md5`, `sha1`,
+`rust-crypto`, `pkcs8`, `der` and `spki` outright, bans `ring` outright until the
+change that adds `net` gives it wrappers, and restricts the crates `keys` uses,
+and the primitives beneath them, to listed wrappers)**. Expect `multiple-versions`
+warnings, which `deny.toml` sets to `warn`: `age` 0.12 depends on
+`x25519-dalek` 2, `chacha20poly1305` 0.10, `hpke` 0.12, `ml-kem` 0.2 and `p256`
+(and, under its `ssh` feature, which is never enabled, `rsa`, `aes` and
+`bcrypt-pbkdf`), while suite 1 uses newer lines of the first four; the duplicates
+are confined to the `decrypt` and `cli` crates that perform the export.
 
 ### 3.2 Encodings and non-cryptographic helpers
 

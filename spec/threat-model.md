@@ -259,13 +259,24 @@ link: the folder ID, the 32-byte seed and a checksum. Whoever has the string is 
 key.
 
 Can: join at the invite's tier from any number of devices until it expires, is
-revoked or is suspended; if the issuer appended addresses, learn the issuer's
-current addresses; keep the folder ID forever, and with it compute every day's DHT
-discovery hash and watch which addresses announce it (section 3.9) and confirm the
-folder's presence on any LAN it listens to (section 3.1); if the invite was a write
-key, do everything in 3.2, including signing records under the device ID of
-another device that joined with the same invite, which forks that device's chain
-so that peers withdraw it from the fork (TM-16, TM-34).
+revoked or is suspended (if it is a write key, at most 256 of them write under
+it: peers admit the 256 lowest device IDs that write under one key, and a lower
+one evicts the highest, which withdraws all of the evicted device's past writes
+under the key on every peer, recoverable from the archive for 30 days, TM-35; a
+device that joins through a write invite with `may_share` writes under a child
+key of its own by default, while the invite is below its signer quota, and those
+child grants count against the folder's key-record quotas (`protocol.md` §5), a
+device with no admitted chain under the invite that knows it already has 256
+counted device IDs writes nothing under it, and devices that start writing under
+one invite during a partition can evict one another, `protocol.md` §4.4,
+`keys.md` §4); if the issuer appended addresses, learn the issuer's current
+addresses; keep the folder ID forever, and with it compute every day's DHT
+discovery hash and watch which addresses announce it (section 3.9) and confirm
+the folder's presence on any LAN it listens to (section 3.1); if the invite was
+a write key, do everything in 3.2, including signing records under the device ID
+of another device that joined with the same invite, which forks that device's
+chain so that peers withdraw it from the fork (TM-16, TM-34), or under device
+IDs below those of the invite's honest devices, which evicts them (TM-16).
 
 Cannot: join after revocation on any peer that holds the record, or after expiry
 on any peer whose clock has passed it (TM-19, TM-40); exceed the tier; learn the
@@ -294,8 +305,22 @@ Can: make any change its tier allows, including destructive ones; present two
 different records under the same version to two peers (equivocation); sign
 records under the device ID of any other device that holds the same key, which
 forks that device's chain, so that peers flag the key and withdraw that chain
-from the fork (TM-16, TM-34); try to re-send an old record as current
-(rollback); flood with records.
+from the fork (TM-16, TM-34); sign seq-1 records under device IDs below those of
+the key's honest devices: once 256 IDs write under the key, each lower one
+evicts the highest admitted device, withdrawing all of that device's past writes
+under the key on every peer (recoverable from the archive for 30 days, TM-35,
+and reported under Issues), so 256 of them evict every honest device of the key,
+no more power than equivocation gives in phases 0 to 6 (TM-16); with
+`may_share`, mint 63 write keys (fewer when honest writers hold slots), or act
+with the holders of other write keys, 64 keys in all, and fill
+`MAX_WRITERS_PER_FOLDER` (16 384 writers), after which a peer at that bound
+refuses every writer it has not yet admitted, honest new members included, has
+each refused writer's chain re-sent to it up to once per `INDEX_RESYNC_INTERVAL`
+per connection, and can hold different writers from peers that reached it in a
+different order until phase 7 (a stated residual, which an honest folder that
+large reaches too; a withdrawn writer keeps its slot, and an eviction frees one
+only for the evicting device of the same key); try to re-send an old record as
+current (rollback); flood with records.
 
 Cannot: equivocate undetected (beyond the limit TM-16 states: a split stays
 unseen until two peers holding different branches exchange cursors for the
@@ -307,14 +332,15 @@ backwards on another peer's say-so (TM-17; a peer with no persisted state for
 the writer accepts the newest it is shown until it meets a fresher peer), except
 by equivocating, which flags its key, withdraws the chain it forked, which may
 be another device's under the same key, from the fork, and sends whatever that
-removes through the archive and the deletion brake (TM-16, TM-35); hide which
-key made a change (TM-34: the key is proven by the signature; the device ID in a
-record is the key holder's claim, proven only for the device that presented the
-key at the handshake, and the Keys view shows the claimed device beside the
-devices seen presenting the key); forge another key's records (TM-9); escalate
-(3.2). Destructive but honest-looking changes are bounded by versioning, the
-archive and the deletion brake, and are reversible by the owner from the archive
-(TM-35).
+removes through the archive and the deletion brake (TM-16, TM-35), or by
+evicting, which withdraws the evicted device's chain the same way and is
+reported under Issues (TM-16); hide which key made a change (TM-34: the key is
+proven by the signature; the device ID in a record is the key holder's claim,
+proven only for the device that presented the key at the handshake, and the Keys
+view shows the claimed device beside the devices seen presenting the key); forge
+another key's records (TM-9); escalate (3.2). Destructive but honest-looking
+changes are bounded by versioning, the archive and the deletion brake, and are
+reversible by the owner from the archive (TM-35).
 
 ### 3.7 An attacker on the local network or a web page attacking the local API
 
@@ -616,12 +642,13 @@ its own; the rule is `suites.md` section 2.3.
 
 **TM-13. Each file record signs its full chunk list.** A file's index record
 carries the ordered list of its chunks (their hashes and sizes, as `protocol.md`
-lays them out) under the writer's signature, and a receiving peer accepts a chunk
-only at the position the record names and only if its hashes match. Stops a store
-dropping, reordering, duplicating or substituting chunks unnoticed (pCloud,
-Icedrive and Seafile 2024). Enforced by `index`, which owns the record format and
-its verification; `engine` checks each chunk against the verified record before it
-writes.
+lays them out) under the writer's signature, and a receiving peer accepts a
+chunk only at the position the record names and only if its hashes match. Stops
+a store dropping, reordering, duplicating or substituting chunks unnoticed
+(pCloud, Icedrive and Seafile 2024). Enforced by `keys`, which owns
+`SignedRecord` and the record hash, `protocol`, which owns the wire format, and
+`index`, which verifies records; `engine` checks each chunk against the verified
+record before it writes.
 
 **TM-14. Keyed BLAKE3 per folder for chunk hashes; have-queries answered only
 inside the folder.** Plaintext chunk hashes use BLAKE3 in keyed mode with a key
@@ -632,15 +659,18 @@ folder. Stops confirmation-of-a-file through content hashes and deduplication
 used as an oracle (Tahoe-LAFS known issues; Harnik, Pinkas and Shulman-Peleg
 2010; Syncthing 1.28.0 regression). Enforced by `keys` (`plain_hash`,
 `cipher_hash`), `engine` (never hashes plaintext another way) and `protocol`
-(have-queries are folder-scoped). What will make "never another way" hold is
-cargo-deny: `deny.toml` is to let only `licketysync-keys` and
-`licketysync-protocol` depend on `blake3`, an entry that lands with the first of
-those crates to merge; `protocol` hashes public values only and never sees
-plaintext. Inside those two crates, a Semgrep tripwire in `.semgrep/project.yml`
-flags every call into and every import of `blake3` outside `keys`'s labels module
-and `protocol`'s hash module, which it excludes by path, outside test files, and
-outside a `mod tests`, with its cases in `.semgrep/tests/` run by CI; it catches
-mistakes, not intent (`suites.md`, hashing).
+(have-queries are folder-scoped). What makes "never another way" hold is
+cargo-deny, whose target is a `deny.toml` that lets only `licketysync-keys`
+depend on `blake3`. Today its `blake3` and `chacha20poly1305` entries also list
+`licketysync-protocol`, and the Semgrep tripwire also excludes `protocol`'s hash
+module, for the protocol crate's work in progress; the change that lands that
+crate removes that wrapper from both entries and that exclusion. `protocol` and
+`index` are built to reach hashes only through `keys`, and `protocol` never sees
+plaintext. In `keys` and `protocol`, a Semgrep tripwire in
+`.semgrep/project.yml` flags every call into and every import of `blake3`
+outside `keys`'s labels module, which it excludes by path, outside test files,
+and outside a `mod tests`, with its cases in `.semgrep/tests/` run by CI; it
+catches mistakes, not intent (`suites.md`, hashing).
 
 **TM-15. Padmé padding of chunk sizes; the volume and timing leak is documented,
 not claimed away.** Every chunk is padded by the Padmé rule (at most 12%
@@ -677,10 +707,23 @@ at a sequence it holds as an equivocation there, and when it does not hold that
 record's parent re-requests the writer from sequence 0, at most once per writer
 per connection, so that the lowest collision surfaces. Each mismatch lowers the
 requester's fork, so two peers whose forks and applied chains agree exchange
-nothing more. Stops equivocation, where one writer gives two peers different
-records under the same version and version vectors alone let both believe they
-agree (Kleppmann 2022, "Making CRDTs Byzantine fault tolerant"). Enforced by
-`index`, and by `engine` for the archive and the brake.
+nothing more. One key writes under at most `MAX_DEVICES_PER_KEY` (256) device
+IDs: a peer admits the 256 lowest it has counted from seq-1 records that passed
+the signature, write-tier and validity checks, refuses a record under any higher
+one as validity-only, blaming no one, and, when a lower one arrives, evicts the
+highest admitted writer, whose chain is withdrawn like a fork at 1 for that
+writer alone (archive and deletion brake, an Issues entry naming the evicted
+device, no fork push, never served onward). Exclusion only grows and each peer
+persists its admitted IDs, so every peer that holds the same key records and has
+received the same seq-1 records admits the same devices in any arrival order. A
+holder of the key can evict its honest devices by choosing lower IDs: no more
+power than equivocation gives it in phases 0 to 6, though in phase 7 a cutoff
+can restore a forked chain and not yet an evicted one (an open item); the bound
+on writers per folder is a stated residual (section 3.6). Stops equivocation,
+where one writer gives two peers different records under the same version and
+version vectors alone let both believe they agree (Kleppmann 2022, "Making CRDTs
+Byzantine fault tolerant"). Enforced by `index`, and by `engine` for the archive
+and the brake.
 
 **TM-17. Peers persist the newest version seen and refuse regressions.** Each
 peer stores, per folder and per writer, the cursor it advertises: the highest
@@ -690,15 +733,15 @@ included; a bounded request from a lower sequence (cutoff recovery, or a record
 whose parent the peer does not hold) fetches older records without lowering it,
 and fetching older ancestors stays allowed, since the chain needs them. What the
 peer applies for the writer ends at its applied head, which never moves
-backwards on a peer's say-so and moves back only by two signed causes the peer
+backwards on a peer's say-so and moves back only by three signed causes the peer
 itself verified, as `protocol.md` fixes: a stored cutoff (revocation or
-suspension), or an equivocation fork (TM-16), after which the applied head is
-the last record before the fork. The limit is stated: a peer with no persisted
-state for a writer, as on a first sync, trusts the first peer it meets for that
-writer, and a stale copy is detected when a fresher peer is met.
-Stops rollback, where a store serves an older snapshot as current (Tahoe-LAFS
-known issues; Syncthing's untrusted-device spec is silent on it). Enforced by
-`index`.
+suspension), an equivocation fork (TM-16), after which the applied head is the
+last record before the fork, or an eviction (TM-16), after which the evicted
+writer has none. The limit is stated: a peer with no persisted state for a
+writer, as on a first sync, trusts the first peer it meets for that writer, and
+a stale copy is detected when a fresher peer is met. Stops rollback, where a
+store serves an older snapshot as current (Tahoe-LAFS known issues; Syncthing's
+untrusted-device spec is silent on it). Enforced by `index`.
 
 **TM-18. Invite secrets travel only after `#`, and the client origin has no
 landing page.** In a link the folder ID, seed and checksum sit in the fragment,
@@ -738,11 +781,16 @@ it so that revoking the attacker would cut the victim off. Enforced by `keys`
 (records and chain rules) and `index` (ordering).
 
 **TM-20. Peer-supplied strings render as text only.** Device names, file names,
-labels, folder names and every other string that arrived from a peer are rendered
-as text, never as HTML or markup, in the web UI, the apps and the CLI's terminal
-output, and the UI ships a content security policy that forbids inline script.
-Stops peer-controlled names rendered as HTML (Syncthing CVE-2022-46165). Enforced
-by `app` and `web`; reviewed in `cli` (terminal escape sequences are stripped).
+labels, folder names and every other string that arrived from a peer are
+rendered as text, never as HTML or markup, in the web UI, the apps and the CLI's
+terminal output, and the UI ships a content security policy that forbids inline
+script. A device name and a Close's `detail` may carry Unicode format characters
+(category Cf, bidirectional controls among them): the wire grammar admits them,
+since refusing Cf would break emoji sequences, and the UI isolates each such
+string as bidirectional text when it shows it, so that it cannot reorder the
+text around it. Stops peer-controlled names rendered as HTML (Syncthing
+CVE-2022-46165). Enforced by `app` and `web`; reviewed in `cli` (terminal escape
+sequences are stripped).
 
 **TM-21. The local API checks Host and Origin and requires the token on every
 request.** The localhost listener accepts a request only if its Host header names
@@ -753,15 +801,20 @@ Stops DNS rebinding and cross-site requests
 against the local API (Dorsey 2018; Syncthing's host check). Enforced by `daemon`.
 
 **TM-22. Bounded per-peer tables tied to the connection.** Every table keyed by
-peer or request (pending chunks, reservations, registrations, in-flight requests,
-have-query state) has a fixed maximum, counts against the Hello's agreed limits,
-and is dropped with its connection; libp2p's connection, stream and transient
-connection limits are set and tested under a flood; QUIC's three-to-one
-anti-amplification limit stays at its default; and the advisory feed in CI
-(cargo-audit, daily) catches the next such advisory in a dependency. Stops resource
-exhaustion through unbounded streams, connections and registrations, and
-amplification through QUIC (go-libp2p and rust-libp2p 2022; rendezvous 2026).
-Enforced by `net` and `protocol`; the flood test is in `sim`.
+peer or request (pending chunks, reservations, registrations, in-flight
+requests, have-query state) has a fixed maximum, counts against the Hello's
+agreed limits, and is dropped with its connection; libp2p's connection, stream
+and transient connection limits are set and tested under a flood; QUIC's
+three-to-one anti-amplification limit stays at its default; and the advisory
+feed in CI (cargo-audit, daily) catches the next such advisory in a dependency.
+Stops resource exhaustion through unbounded streams, connections and
+registrations, and amplification through QUIC (go-libp2p and rust-libp2p 2022;
+rendezvous 2026). The stated cost of an unauthenticated peer: any Hello that
+passes its checks costs one hybrid signature (the DeviceProof sent in answer),
+and an outsider's FolderProof with a self-made leaf grant a few hybrid
+verifications before it is REJECTED (`protocol.md` §3.5 step 5); a
+per-connection verification budget is a phase 1 engine item. Enforced by `net`
+and `protocol`; the flood test is in `sim`.
 
 **TM-23. No `unwrap`, `expect`, `panic` or unchecked index on untrusted input.**
 `clippy::unwrap_used`, `expect_used` and `panic` are denied workspace-wide,

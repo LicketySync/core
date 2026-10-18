@@ -6,6 +6,124 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Specification follow-up from the index crate's review: device admission per write key
+  (ruling 33, which replaces ruling 31's mechanism, as amended by ruling 34 and the
+  round-2 rulings), the direction "keys owns hashing" (ruling 13b as amended), and spec
+  items from the protocol crate's reviews. `protocol.md` §4.4 step 6: a peer counts a
+  device ID of a write key from a seq-1 record that has passed steps 3 to 5, so a read,
+  sealed or not chain-valid key counts nothing and takes no writer slot, and it admits
+  the `MAX_DEVICES_PER_KEY` (256) lowest counted IDs in unsigned byte-wise order; the
+  invariant is that every admitted ID's seq-1 record is stored and served. The normative
+  order is step 3 (forged), step 4 (write tier), step 5 (validity), then (1) excluded,
+  (2) the folder bound, (3) count, admit and evict, then gap, duplicate and fork. A
+  record under an ID above the 256 admitted ones is refused validity-only at any `seq`,
+  before the gap and duplicate tests, blaming no one, with an Issues entry against the
+  key once per key and device for a verified record; a peer may make that test earlier,
+  after step 1, and before the signature it is a log line only, so a forged record under
+  an excluded ID may be refused either way (both conform; the reference vectors verify
+  first). A lower ID evicts the highest admitted writer: its chain is withdrawn as
+  fork 1 would withdraw it (archive and deletion brake), but it is never served or
+  forwarded, may be discarded once the archive has its paths and every connection open
+  at the eviction has closed (the chunks it names are served until then; a sealed peer
+  discards at the same point), raises an Issues entry naming the evicted device
+  (exclusions and evictions coalesce per key), and is not a fork and causes no fork
+  push. Exclusion only grows and each peer persists every key's admitted IDs (step 7),
+  so peers that hold the same key records and have received the same seq-1 records admit
+  the same IDs in any order. `have` and advertised cursors list admitted writers only
+  (§4.5), so evictions cannot push `have` past its bound. A folder-bound refusal also
+  refuses that writer's later records in the same reply (or push), never a gap, and the
+  writers refused in one reply are bounded by `MAX_WRITERS_PER_FOLDER`, more distinct
+  writers in a reply being a sender violation. The `MAX_WRITERS_PER_FOLDER` residual now
+  names who reaches it (a `may_share` write key minting 63 keys, fewer when honest
+  writers hold slots, the holders of 64 write keys acting together, or an honest folder
+  that large), its effect (refused honest newcomers, divergence, a refused writer's
+  chain re-sent up to once per `INDEX_RESYNC_INTERVAL` per connection) and its slots (an
+  eviction frees one only for the evicting ID of the same key). Writer side (ruling 34,
+  `keys.md` §4 and §4.2): a device with no admitted chain under a key writes no first
+  record under it once it knows of 256 counted IDs; a device that joins through a
+  `may_share` write key mints a child key of its own by default, while it sees the
+  parent below its `MAX_KEY_RECORDS_PER_SIGNER` quota (the folder-quota cost is stated),
+  and the browser client does so once per installation, never per session; a device
+  whose own ID is excluded or evicted re-records its current paths under a key of its
+  own and does not archive its own user's files (an engine rule); and the specs state
+  plainly that an eviction withdraws the evicted device's past writes under the key on
+  every peer (archive, 30 days), that devices starting under one key in a partition can
+  evict one another, and that a device writing before it sees the lower IDs has those
+  writes refused. Every claim that honest growth "never" loses a key's history is gone.
+  Updated with it: the §4.4 definitions, step 3 (a pointer to the early test), the fork
+  and gap bullets, step 7 and the guarantee sentence (two stated exceptions until
+  phase 7); §3.1's push coalescing; §4.5's `Cursor` and `have` comments, the responder
+  rule and forwarding (never an excluded or evicted writer's records); §5's no-blame
+  rule, the Forged, Sender violation, Excluded device ID, Eviction and Validity-only
+  rows and the per-connection limits; both constants rows; vector 6, whose
+  device-admission cases (a) to (n), written as starting state → input → outcome, add a
+  read key's seq-1 record, a forged low-ID record, a fork at seq 1, a restart, a forged
+  excluded record, a folder-bound refusal followed by seq 2 and 3, and a chain split
+  across pages; and vector 7 (`have` with 16 384 admitted and one evicted writer). From
+  the protocol crate's reviews: §2 says a `bool` other than 0 or 1 and a `uint32` of
+  2^32 or more are malformed (N5); a `ChunkReply`'s `data` is at most 4 325 416 bytes,
+  longer malformed (N7); `missing_features` holds up to 33 entries, 32 features and a
+  suite (N10); a chunk request follows only a record received from the holder or covered
+  by its cursor, no longer one the requester sent (W2 SF1); a new `REPLY_PAGE_TIMEOUT`
+  (10 min) closes with `TIMEOUT` a reply that brings no next page, counted from when the
+  request left the send queue and restarted by pages of the peer's on-open key set,
+  pages of replies to the requester's own requests and `CHUNK_OK` replies, not by
+  `CHUNK_BUSY`, Status, pushes or `Unsupported` (W2 SF2, §4.5, §4.6, §5, constants); an
+  unknown non-critical type is answered with `Unsupported` at most once per type per
+  connection (W2 NIT3); §3.5 step 5 states what an outsider's self-made leaf grant still
+  costs; vectors 1, 5, 7, 8 and 9 cover these. `threat-model.md`: §3.5, §3.6 (Can and
+  Cannot), TM-13, TM-14, TM-16 (evictions reported; in phase 7 a cutoff can restore a
+  forked chain but not yet an evicted one), TM-17, TM-20 (Unicode format characters in
+  device names and Close details stay admitted and the UI isolates bidirectional text)
+  and TM-22 (what an unauthenticated peer costs; a per-connection verification budget is
+  a phase 1 engine item). `suites.md` §2.4: only `keys` calls BLAKE3, in its labels
+  module, stated as the target with today's state beside it; `protocol` is to take the
+  folder hint and the proof key from `keys` and build the transcript hash with its
+  labelled hash; `index` uses `keys`'s record hash; every label is a `const` in `keys`'s
+  registry; the change that lands the protocol crate removes the `licketysync-protocol`
+  wrapper from `deny.toml`'s `blake3` and `chacha20poly1305` entries and the Semgrep
+  exclusion of `crates/protocol/src/hash.rs`. `suites.md` §3.1 now says what `deny.toml`
+  holds (`openssl`, `openssl-sys`, `md5`, `sha1`, `rust-crypto`, `pkcs8`, `der`, `spki`
+  and, until `net`, `ring` banned outright; wrappers for the crates `keys` uses and
+  those beneath them) and that `deny-production.toml` exists. Decisions for the plan
+  (also in the notes' decisions-pending): ruling 33 as amended by ruling 34, a deviation
+  from the plan's "Issued keys" (.63233, "any number of devices can use the same key"):
+  any number may read, at most 256 may write under one key, and a device that joins
+  through a `may_share` write key writes under a child key of its own by default;
+  `REPLY_PAGE_TIMEOUT` (10 min) and its restart rule; the reply-or-push rule (a
+  folder-bound refusal refuses its writer's later records in the same reply or push);
+  decision .173523 becomes "a peer holds at most MAX_WRITERS_PER_FOLDER, 16 384 admitted
+  writers, refusing more without blame, and admits for each write key the 256
+  (MAX_DEVICES_PER_KEY) lowest device IDs it has counted, a lower one evicting the
+  highest"; ruling 13b as amended, only `keys` calls BLAKE3, which refines .177123; the
+  dependency direction keys ← index (keys ← protocol is already in the plan, .177123); a
+  plan correction, key strings are 113 characters, not "about 100" (.63233); phase 7
+  items: a Revocation cutoff that names a writer the lowest-256 rule excluded, restoring
+  an evicted chain by a cutoff, and convergent admission with slot freeing for
+  `MAX_WRITERS_PER_FOLDER`; engine items: a per-connection verification budget
+  (phase 1), and re-recording an excluded or evicted device's paths under its own key.
+  Reviewed (2026-10-18) by six fresh-context agents (Claude Opus 5.5) in two rounds of
+  three, each with a security-reviewer pass, since this change touches keys and the
+  protocol, and then by delta confirms from the second round's three; the author was
+  a592da16a093b3de4. Round 1 on 74445c9 (ruling 31's over-limit evidence and the 13b
+  wording): security a632b1c1d055a59ef blocked by 2, and the mechanism was replaced by
+  ruling 33; reviewer 1 a4f73fc638a6173c4 and reviewer 2 a87b647d2e7036b0b stopped early,
+  since the text was being replaced, and delivered their drafts (blocked by 1 and by 2),
+  which the revision c3e2c06 took in. Round 2 on c3e2c06: reviewer 1 ad3dbf94dc9497dcd
+  blocked by 4, reviewer 2 a95e0d4f59cec4e1d blocked by 2 and security abdbe86aa754f3651
+  blocked by 3 blockers and 3 should-fixes, all ruled as ruling 34 and the round-2
+  rulings. Round 3, the same three on 11c2d0b: reviewer 2 clean with two should-fixes,
+  reviewer 1 blocked by 2 should-fixes and security by 4 (the reply deadline, discarding
+  an evicted writer's records, the per-reply set of refused writers, default child
+  minting), all ruled. Final confirms: reviewer 1 on 6edb02f clean with two nits, one of
+  them (a page waiting behind key-record pushes on a slow link) left as a follow-up for
+  the next specification change; security on 6edb02f blocked by 1 should-fix (a reply
+  spanning an eviction at the folder bound, reviewer 1's other nit), fixed in ca7172f
+  (this commit before its review record), which security confirmed clean. Every other
+  finding was fixed as the coordinator ruled on it and confirmed by a reviewer on a
+  later version. Main had not moved from b94dd0d, so nothing was rebased. The merge
+  agent wrote this review record, which was not re-reviewed.
+
 - Keys crate, phase 0 (`licketysync-keys`), built to `spec/keys.md` and
   `spec/suites.md` as main holds them (cfc41da and a544ad5, copied into `spec/`
   for the label-registry test) and to the rulings of 2026-10-17 numbered 8 (as

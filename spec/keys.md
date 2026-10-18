@@ -437,10 +437,39 @@ Examples the crate's vectors must reproduce: `padme(5) = 5`, `padme(9) = 10`,
 A key is the credential. The issuer picks a random seed, derives the key pair set and its
 key ID (§0.4), and signs a grant that binds the public halves to a folder, a tier, an
 expiry, a "may share" flag and an epoch, and that wraps the data key to the new key when
-the tier can read; the new key signs the same grant as its proof of possession (5.3). Up
-to `MAX_DEVICES_PER_KEY` (256) devices may write under the same key (`protocol.md` §4.4
-counts the device IDs it writes under); the plan's default is one key per recipient and
-per device so that each can be lowered or revoked alone.
+the tier can read; the new key signs the same grant as its proof of possession (5.3). Any
+number of devices may read with one key, and at most `MAX_DEVICES_PER_KEY` (256) may
+write under it (**device admission**, `protocol.md` §4.4 step 6): peers admit the 256
+lowest device IDs that have written a first record under the key, and a lower one evicts
+the highest. An eviction withdraws all of the evicted device's past writes under the key
+on every peer; they stay recoverable from the archive for 30 days (`threat-model.md`
+TM-35). So that honest devices rarely meet the limit, two rules hold. A device that joins
+through a write key with `may_share` mints a child key of its own by default (4.2) and
+writes under that, so that a shared key's 256 places go mostly to devices that joined
+through keys without `may_share`. It mints only while it sees the parent below its
+`MAX_KEY_RECORDS_PER_SIGNER` quota (4 096 records, §5); otherwise it writes under the
+parent, where device admission applies, or asks the issuer for a key. Each child grant
+also counts against the folder quotas (`MAX_KEY_RECORDS_PER_FOLDER`, 65 536), so honest
+joins through about 16 such parents can fill them, after which further grants are refused
+validity-only until phase 7. The browser client mints its own key once per installation
+and persists it, never per short-lived session. And a device with no admitted chain under
+a key writes no first record under it once it knows the key has 256 counted device IDs
+(any 256, not only lower ones): it raises the Issues entry "this key writes from more
+than 256 devices" and mints a child key for itself (4.2) when the key has `may_share`, or
+otherwise asks its issuer for a key of its own. A device that finds its own device ID
+excluded or evicted under a key gets a key of its own the same way, re-records under it
+every path whose current version came from its excluded or evicted writer, and does not
+move its own user's files into its archive for its own eviction (an engine rule). Stated
+plainly: any holder of a write key, or of a leaked write invite, can choose device IDs
+and so evict that key's honest devices, which is no more power than equivocation gives it
+in phases 0 to 6 (`threat-model.md` TM-16); devices that start writing under one key
+while they cannot see each other (a partition) can evict one another; and a device that
+writes before it has seen the lower IDs has those writes refused wherever they are seen.
+Deviation from the plan ("Issued keys": "any number of devices can use the same key"):
+any number may read, at most 256 may write under one key, and a device that joins through
+a `may_share` write key writes under a child key of its own by default. The plan's
+default is one key per recipient and per device so that each can be lowered or revoked
+alone.
 
 ### 4.1 Tiers
 
@@ -458,16 +487,18 @@ An **invite** is any issued key with a short expiry; there is no separate kind.
 - `may_share`: the holder may issue keys at or below its own tier (table above), and may
   revoke, suspend and lift keys it issued (section 7).
 - **Fresh keys.** A `may_share` key may mint a child at its own tier or lower at any
-  time, signed by itself, and the device may switch to the child at once. A self-minted
-  child inherits its parent's lifetime: it is beneath the parent in the chain, so it
-  expires, is suspended and is revoked with the parent. It therefore serves to give each
-  recipient or device a key of its own that can be lowered or revoked alone, and to lower
-  a device, but it cannot replace its parent. A device's **replacement key** (to retire a
-  key that may have leaked, or that is about to expire) is issued by the old key's
-  issuer, or by root over the linked-device channel, and the old key is then suspended or
-  revoked by that issuer. Deviation from the plan ("Fresh keys": a device "can rotate its
-  own key and retire the old one"): under cascading revocation a child cannot outlive the
-  key that minted it, so retiring goes through the issuer.
+  time, signed by itself, and the device may switch to the child at once; a device that
+  joins through a write key with `may_share` does so by default, while the parent is
+  below its signer quota (§4). A self-minted child inherits its parent's lifetime: it is
+  beneath the parent in the chain, so it expires, is suspended and is revoked with the
+  parent. It therefore serves to give each recipient or device a key of its own that can
+  be lowered or revoked alone, and to lower a device, but it cannot replace its parent. A
+  device's **replacement key** (to retire a key that may have leaked, or that is about to
+  expire) is issued by the old key's issuer, or by root over the linked-device channel,
+  and the old key is then suspended or revoked by that issuer. Deviation from the plan
+  ("Fresh keys": a device "can rotate its own key and retire the old one"): under
+  cascading revocation a child cannot outlive the key that minted it, so retiring goes
+  through the issuer.
 - `expires_at`: Unix seconds, `0` = never, compared with the device's wall clock as the
   runtime reports it (§0). Expiry bounds **only** the key's ability to present at the
   handshake (`protocol.md` §3.5) and to issue, revoke, suspend or lift; it does not end
