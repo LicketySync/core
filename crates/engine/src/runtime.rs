@@ -19,9 +19,11 @@
 //! transaction semantics on purpose: writes are staged and become durable only
 //! at [`Storage::commit`], so a crash mid-write is a precise, testable event
 //! rather than an accident of timing. The transport is a reliable, ordered
-//! stream per connection (protocol spec, 3.1): loss shows itself only as the
-//! connection ending, so the engine's recovery logic lives in one place,
-//! [`Peer::on_disconnected`]. There is no async and no threading here; the
+//! byte stream per connection (protocol spec, 3.1): the engine frames its own
+//! messages, and loss shows itself only as the connection ending, so the
+//! engine's recovery logic lives in one place, [`Peer::on_disconnected`]. Every
+//! promise here is about what one side sees; nothing orders what two machines
+//! see against each other. There is no async and no threading here; the
 //! runtime decides how handlers are scheduled and must call them one at a time.
 //! Every byte that arrives in [`Peer::on_message`] came from another machine
 //! and is untrusted.
@@ -32,9 +34,12 @@ use core::time::Duration;
 /// A point on the runtime's monotonic clock, in nanoseconds since the clock
 /// started. It is not wall time: it says how much time has passed, never the
 /// date (that is [`Clock::wall_time`], with its own rules), and two runtimes'
-/// instants are not comparable. `u64` nanoseconds last 584 years, so arithmetic
-/// that would overflow is a bug, and the checked and saturating forms below make
-/// the caller say which it wants.
+/// instants are not comparable. An `Instant` never survives a restart: a
+/// restarted process's clock starts afresh, so one kept from before (in
+/// storage, say) means nothing after it; keep wall time or a duration instead.
+/// `u64` nanoseconds last 584 years, so arithmetic that would overflow is a
+/// bug, and the checked and saturating forms below make the caller say which
+/// it wants.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Instant {
     nanos: u64,
@@ -202,14 +207,35 @@ impl fmt::Display for StorageError {
 
 impl std::error::Error for StorageError {}
 
-/// Why a message was not handed to the transport.
+/// The most bytes one [`Peer::on_message`] call hands over. A runtime may hand
+/// over fewer, split anywhere: chunk boundaries carry no meaning.
+pub const MAX_CHUNK: usize = 64 * 1024;
+
+/// The most bytes a connection's unsent queue may hold: what this side has
+/// written with [`Transport::send`] and the runtime has not yet handed to the
+/// network ([`Transport::unsent`]). A runtime may end a connection whose
+/// unsent queue would pass this, as if the network had cut it. It is only
+/// where the runtime cuts, not a budget to fill: the engine paces to a budget
+/// of its own, far below it, writing its next frame (a chunk reply, a page of
+/// records) only while `unsent` plus that frame stays within that budget.
+/// Nothing tells the engine that the queue has drained, so while it is over
+/// budget the engine arms a timer and reads `unsent` again when it fires.
+/// Every frame is itself bounded by the peer's `max_message_size` (protocol
+/// spec, 2).
+pub const MAX_SEND_QUEUE: usize = 128 * 1024 * 1024;
+
+/// Why bytes were not handed to the transport.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SendError {
-    /// There is no open connection to that peer right now: the runtime has not
-    /// reported [`Peer::on_connected`] for it, or has since reported
-    /// [`Peer::on_disconnected`]. The peer learns of connections only through
-    /// those two calls, so this is a bug in the caller, never routine.
+    /// This side has no open connection to that peer as far as it knows. The
+    /// cases, all of them: it has not heard [`Peer::on_connected`] for the
+    /// peer (always so for its own id); it has heard [`Peer::on_disconnected`]
+    /// for it since; or the same handler has already called
+    /// [`Transport::close`] for it. A peer learns of connections only through
+    /// those calls, so this is a bug in the caller, never routine. Inside a
+    /// connection as this side knows it, a send is never refused, even when
+    /// the connection has in fact already ended.
     NotConnected,
 }
 
@@ -251,40 +277,62 @@ pub trait Timers {
     fn cancel_timer(&mut self, id: TimerId);
 }
 
-/// Sending messages to connected peers over one reliable, ordered stream per
+/// Sending bytes to connected peers over one reliable, ordered byte stream per
 /// connection (protocol spec, 3.1: a QUIC stream, a TCP connection or the
-/// simulator's channel). Within a connection every message `send` accepts
-/// arrives whole, exactly once and in the order sent, or the connection ends:
-/// loss shows itself only as [`Peer::on_disconnected`], after which everything
-/// that was in flight on that connection is gone and the next connection to the
-/// same peer starts afresh. Nothing is duplicated or reordered within a
-/// connection; nothing is ordered across connections, so a message on a new
-/// connection may overtake one still travelling on an old or another one.
+/// simulator's channel). The stream carries bytes, not messages: `send`
+/// appends bytes, and [`Peer::on_message`] hands over the next bytes with
+/// arbitrary chunk boundaries, at most [`MAX_CHUNK`] at a time, so the engine
+/// frames its messages and enforces every size limit itself, through the
+/// protocol crate's frame decoder (protocol spec, 2). While a connection
+/// lasts, its bytes are never lost, duplicated or reordered. When it ends,
+/// whatever the other side had not yet received may be lost, and this side
+/// cannot tell which; loss shows itself only as [`Peer::on_disconnected`],
+/// after which the next connection to the same peer is a new stream that
+/// starts from nothing. Nothing is ordered across connections.
 pub trait Transport {
     /// This peer's own id, as the runtime names it.
     fn local_id(&self) -> PeerId;
-    /// Queues `bytes` on the open connection to `to`. Accepted means queued, not
-    /// delivered: if the connection ends first, the message is lost with it.
+
+    /// Appends `bytes` to the stream to `to`. Accepted means queued, not
+    /// delivered: if the connection ends before the other side has received
+    /// them, they may be lost. A runtime may end a connection whose unsent
+    /// queue this would take past [`MAX_SEND_QUEUE`]; see
+    /// [`Transport::unsent`] for how to stay below it.
     ///
     /// # Errors
-    /// [`SendError::NotConnected`] when no connection to `to` is open, that is,
-    /// outside the span between [`Peer::on_connected`] and
-    /// [`Peer::on_disconnected`] for `to`.
+    /// [`SendError::NotConnected`] when this side has no open connection to
+    /// `to` as far as it knows: before it has heard [`Peer::on_connected`] for
+    /// `to` (always, for its own id), after it has heard
+    /// [`Peer::on_disconnected`] for `to`, or after this same handler called
+    /// [`Transport::close`] for `to`. Inside a connection as this side knows
+    /// it, a send is never refused, even when the connection has in fact
+    /// already ended.
     fn send(&mut self, to: PeerId, bytes: Vec<u8>) -> Result<(), SendError>;
 
-    /// Hangs up on `to`: the open connection to it ends once this handler
-    /// returns. Both sides hear [`Peer::on_disconnected`], this side first,
-    /// and only after every other effect this handler asked for, before or
-    /// after the close, has taken effect; everything in flight on the
-    /// connection, in both directions and including what this handler queued
-    /// with [`Transport::send`] before calling `close`, is lost; a further
-    /// `send` to `to` from this handler is refused. A no-op when no connection
-    /// to `to` is open. Whether a new connection follows is the runtime's
-    /// business: the daemon's dialling policy, the simulator's scenario (a
-    /// closed pair never reconnects on its own there). A peer that needs a
-    /// last frame to arrive before it hangs up has no guarantee on any
-    /// transport; sending it and closing on a later event gives the frame its
-    /// chance.
+    /// The bytes accepted by [`Transport::send`] on the connection to `to` and
+    /// not yet handed to the network, this handler's own writes included: the
+    /// queue [`MAX_SEND_QUEUE`] bounds. It drains as the runtime puts bytes on
+    /// the wire, between handler calls, never during one, and no handler is
+    /// called when it has: an engine waiting for room polls it on a timer of
+    /// its own. The engine paces on it against its own budget, far below
+    /// `MAX_SEND_QUEUE`, which is only where the runtime cuts. 0 when no
+    /// connection to `to` is open as this side knows it.
+    fn unsent(&self, to: PeerId) -> usize;
+
+    /// Hangs up on `to`, abruptly: the connection ends once this handler
+    /// returns, and this side hears [`Peer::on_disconnected`] after every
+    /// other effect this handler asked for, before or after the close, has
+    /// taken effect, receiving nothing more on it. What this side sent may or
+    /// may not reach the other side, which learns of the end in its own time
+    /// (at once, or only when its runtime times the connection out); nothing
+    /// orders when it hears against when this side does. A further `send` to
+    /// `to` from this handler is refused; a no-op when no connection to `to`
+    /// is open. Whether a new connection follows is the runtime's business:
+    /// the daemon's dialling policy, the simulator's scenario (a closed pair
+    /// never reconnects on its own there). To say goodbye (protocol spec, 4.2)
+    /// the engine sends its Close frame, arms its own timer for 1 s, and calls
+    /// `close` when that timer fires or when it hears `on_disconnected`,
+    /// whichever comes first; even so, the frame may be lost.
     fn close(&mut self, to: PeerId);
 }
 
@@ -360,45 +408,59 @@ pub trait Context: Clock + Timers + Transport + Randomness {
 /// calls these handlers; the engine never sees the multiplicity.
 ///
 /// What a handler asks of its context (sends, timers, hang-ups) takes effect
-/// in the order it asked, all of it before that peer's next handler runs. A
-/// connection that ends is reported to each side in the order connections
-/// ended, never in the middle of another handler's effects, so a cancel never
-/// overtakes the arming it cancels and a message never overtakes one sent
-/// before it. Until a side has heard `on_disconnected`, the connection is open
-/// as far as it is concerned: its sends are accepted, and lost with the
-/// connection.
+/// in the order it asked, all of it before that peer's next handler runs, so a
+/// cancel never overtakes the arming it cancels and bytes never overtake bytes
+/// sent before them. Each side hears of its own connections' ends one at a
+/// time, in the order its runtime learned of them, never in the middle of a
+/// handler's effects; a hang-up this side asked for reaches this side after
+/// that handler's effects. These are promises about one side only: nothing
+/// orders what one side hears against what another side hears, or against
+/// when the other side hung up (a crashed peer may be learned of only by a
+/// timeout, a hang-up at once). Until a side has heard `on_disconnected`, the
+/// connection is open as far as it is concerned: its sends are accepted, and
+/// may be lost. When the runtime replaces the stream under a logical
+/// connection (libp2p moving to a newer connection to the same peer, say), the
+/// engine hears `on_disconnected` and then `on_connected`: a connection never
+/// moves to a new stream silently, since what the engine has decoded so far
+/// belongs to the old one.
 pub trait Peer {
     /// The process started (or restarted after a crash). Load state from
     /// `cx.storage()`, arm the first timers. Connections are reported after this
-    /// returns, one [`Peer::on_connected`] each.
+    /// returns, one [`Peer::on_connected`] each. A restarted process's clock
+    /// starts afresh: no [`Instant`] from before the restart means anything now.
     fn on_start(&mut self, cx: &mut dyn Context);
 
-    /// `bytes` arrived from `from`. They are untrusted: check every length
-    /// before allocating, ignore what does not parse, never index with an
-    /// offset they supplied.
+    /// The next `bytes` of the stream from `from`: between 1 and [`MAX_CHUNK`]
+    /// of them, split wherever the transport chose, so a frame may span calls
+    /// and one call may end several frames. Feed them to the frame decoder.
+    /// They are untrusted: check every length before allocating, ignore what
+    /// does not parse, never index with an offset they supplied.
     fn on_message(&mut self, cx: &mut dyn Context, from: PeerId, bytes: &[u8]);
 
-    /// The timer `id` fired.
+    /// The timer `id` fired, at or after its deadline, once per arming.
     fn on_timer(&mut self, cx: &mut dyn Context, id: TimerId);
 
-    /// A connection to `peer` is open; [`Transport::send`] to it works from this
-    /// call until [`Peer::on_disconnected`] says otherwise.
+    /// A connection to `peer` is open: a new stream that starts from nothing.
+    /// [`Transport::send`] to it works from this call until
+    /// [`Peer::on_disconnected`] says otherwise.
     fn on_connected(&mut self, cx: &mut dyn Context, peer: PeerId);
 
-    /// The connection to `peer` closed, whether the peer went away, the network
-    /// cut it, a message was lost or either side called [`Transport::close`].
-    /// Everything in flight on it, in both directions, is lost; a send to
-    /// `peer` from this call on is refused until the next
-    /// [`Peer::on_connected`] for it, which starts from nothing.
+    /// The connection to `peer` ended, whether the peer went away, the network
+    /// cut it or lost data, or either side called [`Transport::close`]. What
+    /// either side sent and the other had not yet received may be lost, and
+    /// this side cannot tell which; a partly received frame is discarded with
+    /// the stream. A send to `peer` from this call on is refused until the next
+    /// [`Peer::on_connected`] for it, which starts a new stream.
     fn on_disconnected(&mut self, cx: &mut dyn Context, peer: PeerId);
 
     /// The process is stopping cleanly. Commit what should survive. A crash
-    /// does not call this; that is the difference between the two. Connections
-    /// close after this handler returns, so anything it sends is lost with
-    /// them; there is no goodbye on the wire. It is the last call this
-    /// instance gets: a hang-up made inside it ([`Transport::close`]) reaches
-    /// only the other side, which hears [`Peer::on_disconnected`]; this side
-    /// never does.
+    /// does not call this; that is the difference between the two. It is the
+    /// last call this instance gets. What it sends (a `Close(SHUTDOWN)`
+    /// frame, say) the runtime flushes for up to 1 s and then closes each
+    /// connection, so the other side may receive it or may see only the
+    /// connection end. A hang-up made inside it ([`Transport::close`]) is
+    /// abrupt and reaches only the other side, which hears
+    /// [`Peer::on_disconnected`]; this side never does.
     fn on_stop(&mut self, cx: &mut dyn Context);
 }
 
@@ -479,6 +541,12 @@ mod tests {
         assert_eq!(t.to_string(), "t3");
         assert_eq!(format!("{t:>4}|"), "  t3|");
         assert!(TimerId::new(1) < TimerId::new(2));
+    }
+
+    #[test]
+    fn the_transport_bounds_are_the_ones_the_protocol_spec_names() {
+        assert_eq!(MAX_CHUNK, 65_536);
+        assert_eq!(MAX_SEND_QUEUE, 134_217_728);
     }
 
     #[test]
@@ -589,6 +657,16 @@ mod tests {
             self.sent.push((to, bytes));
             Ok(())
         }
+        fn unsent(&self, to: PeerId) -> usize {
+            if !self.connected.contains(&to) {
+                return 0;
+            }
+            self.sent
+                .iter()
+                .filter(|(p, _)| *p == to)
+                .map(|(_, b)| b.len())
+                .sum()
+        }
         fn close(&mut self, to: PeerId) {
             self.connected.retain(|p| *p != to);
             self.closed.push(to);
@@ -684,12 +762,20 @@ mod tests {
             Err(SendError::NotConnected)
         );
 
+        assert_eq!(cx.unsent(p1), 5, "the recorder never drains: the greeting");
         peer.on_message(&mut cx, p1, b"ping");
         assert_eq!(cx.sent.get(1), Some(&(p1, b"ping\x5a\x5a".to_vec())));
+        assert_eq!(cx.unsent(p1), 11);
+        assert_eq!(
+            cx.unsent(PeerId::new(9)),
+            0,
+            "nothing for a peer not connected"
+        );
         peer.on_message(&mut cx, p1, b"");
         assert_eq!(cx.closed, vec![p1], "an empty message makes it hang up");
         assert_eq!(cx.send(p1, vec![]), Err(SendError::NotConnected));
         assert_eq!(cx.sent.len(), 2);
+        assert_eq!(cx.unsent(p1), 0, "a closed connection has nothing unsent");
 
         cx.now = 1_000_000_000;
         peer.on_timer(&mut cx, TICK);

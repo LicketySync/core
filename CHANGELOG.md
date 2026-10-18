@@ -6,6 +6,99 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The runtime contract, real-network edition (ruling 14, a fix forward on the
+  merged simulator). Every promise in `licketysync_engine::runtime` is now about
+  what one side sees: each side hears of its own connections' ends one at a
+  time, in the order its runtime learned of them, never in the middle of a
+  handler's effects, and a hang-up it asked for reaches it after that handler's
+  effects; nothing orders what one side hears against another side, or against
+  when the other side hung up. The two tests that pinned a cross-peer order are
+  renamed as properties of this simulator. `Transport` is a byte stream: `send`
+  appends bytes and `on_message` hands over 1 to `MAX_CHUNK` (64 KiB) bytes
+  split anywhere, so framing and every size limit are the engine's (the protocol
+  crate's frame decoder); a runtime may end a connection whose unsent queue
+  would pass `MAX_SEND_QUEUE` (128 MiB), and the new `Transport::unsent(to)`
+  reports that queue (added at the protocol spec's security confirm): the engine
+  paces on it against a budget of its own, far below `MAX_SEND_QUEUE`, which is
+  only where a runtime cuts, and polls it on a timer, since nothing signals that
+  the queue has drained. When a connection ends, what the other side had not
+  received may be lost, and the side cannot tell which. The Close flush is the
+  engine's (send Close, then `close` on its own 1 s timer or on
+  `on_disconnected`); after `on_stop` the runtime flushes what it wrote for up
+  to 1 s (`STOP_FLUSH`) and then closes. The refused-send cases are listed in
+  the `send` and `SendError` docs; an `Instant` never survives a restart, and a
+  change of underlying stream is reported as `on_disconnected` then
+  `on_connected`. In the simulator, writes made at one instant are cut at seeded
+  boundaries into pieces of at most 64 KiB (so writes coalesce and fragment),
+  each travelling with its own first-in first-out latency; a drop is a lost
+  piece; at an end each side that can still receive is handed a seeded prefix of
+  what was travelling towards it before its `on_disconnected`
+  (`NetworkConfig::deliver_at_close`, default one half), and the rest, with
+  anything not yet handed to the network, is lost; a clean stop's connections
+  stay open while its stream drains, for up to a second, and a restart ends them
+  before the new instance connects; a write past `max_send_queue` ends the
+  connection (`DropReason::Overflow`); the unsent queue drains at the end of
+  each instant, so `unsent` is 0 at each new instant (there is no bandwidth
+  model; one is a follow-up, beside the per-side detection delay); every
+  instance's monotonic clock starts afresh while the wall clock does not; and
+  `Sim::stats` returns a `NetStats` of what the network did. Bug fixes, each
+  with a regression test named after it: a reconnection scheduled by a drop
+  reopened a pair that had hung up since (SF 6; it now carries the epoch the
+  drop left and does nothing if the epoch moved, and a hang-up when no
+  connection is open moves no epoch, so the hang-up an engine makes on hearing
+  `on_disconnected` after its goodbye does not cancel the reconnection); and,
+  found by the reworked prober, a peer that hung up on a connection whose end
+  was already on its way still received the bytes that end owed it, whether the
+  notice was queued or being handed over. The toy, prober and test peers frame
+  their messages with a small length-prefix helper (`licketysync_sim::frame`, a
+  bounded `Deframer`). The `contract` probers now frame their messages, hang up
+  far less often (about 1 in 40 actions, 1 in 60 on connecting, 1 in 20 on
+  hearing a disconnect), sometimes the engine's way (a goodbye frame, then
+  `close` on a 1 s timer or the other side's hang-up), say goodbye or hang up
+  from `on_stop`, number their timers in a block per instance, arm spare timers
+  up to 2 s ahead, and check four more rules (chunk size, `unsent` arithmetic,
+  early timers, timers of an earlier instance); half the crashes and stops come
+  just after a reconnection round; and a goodbye's receiver hangs up only half
+  the time, leaving the end to the goodbye's sender (its timer, or after a stop
+  the flush). Measured on main and on this tree over seeds 0 to 199 of the
+  contract scenario, by counting trace records: of the 2,400 crashes and stops,
+  those followed at the same instant by some peer's `on_disconnected` for the
+  peer that went down went from 155 to 1,866 (2,269 were heard of before the
+  restart; `NetStats::downs_heard`, downs of a peer with a connection open, is
+  2,172); of the 1,200 stops, those whose `on_stop` sent a frame went from 50 to
+  783, and those whose `on_stop` hung up from 8 to 106 (`Report::stop_hang_ups`,
+  which counts the hang-ups themselves, is 982); the `on_disconnected` calls at
+  the instant the partition began, two for each connection it cut plus any
+  hang-ups those provoked at once, went from 6 to 948 (`NetStats::partitioned`,
+  the connections it cut, is 453); `NetStats::stopped`, connections a clean stop
+  ended rather than a hang-up, is 817; and sampled every 100 ms over seeds 0 to
+  19, with `Sim::is_connected` over the 10 pairs, 3 to 10 connections were open
+  in 90% of samples, where on main 0 to 2 were in 94%. Over seeds 0 to 299 the
+  probers' `Report` went from 418,539 sends, 60,073 messages checked and 84,466
+  hang-ups to 954,334 sends (`sends`, those the runtime accepted), 653,174
+  frames checked (`frames`) in 824,814 chunks (`chunks`) and 30,442 hang-ups
+  (`hang_ups`, those ending a goodbye included). The suite test sets floors on
+  these counts, `NetStats::stopped` among them. The timer-after-a-crash test now
+  has the restarted instance arm a different timer and asserts the old one never
+  fires. Thirteen mutations of the scheduler, an earlier review's two survivors
+  among them, failed the suite on the first version of this change; on this one,
+  fifteen of the sixteen its reviewer tried fail it, removing the restart rule
+  among them (the sixteenth, letting the side that hung up receive what was in
+  flight, changes nothing a peer sees, since those bytes are then discarded),
+  and so does letting a close with no connection open move the epoch again.
+  Every fingerprint changes. Reviewed (2026-10-17) by fresh-context agents:
+  ad1e98affa01ff5a5 reviewed the merged rework on f1a0138 (blocked by 1: the
+  contract promised an order across machines that only one process can give,
+  which led to ruling 14), then this change's first version,
+  ff424ba461fd8f49c29617d443104fae46fe5aa4 (clean, with one should-fix: the
+  restart rule was tested by nothing); a663de736552845f3 reviewed that version
+  (blocked by 1: a no-op close cancelled the network's reconnection after a
+  drop). Both items were fixed in 931c199, and the fresh reviewer
+  a01f3b9a3545befbf confirmed the delta from the first version to 931c199
+  clean. No security-reviewer pass was required: nothing here touches keys, the
+  protocol, file paths or the local API. At merge 931c199 was rebased onto
+  a544ad5 without a conflict (`git range-diff` shows the patch unchanged), and
+  the merge agent wrote this review record, which was not re-reviewed.
 - Simulator and runtime traits (phase 0's gate, "simulated peers converge").
   `licketysync_engine::runtime` is the surface the engine will run on: a
   monotonic `Instant` for intervals and timeouts, `PeerId` and `TimerId`, and
@@ -16,55 +109,52 @@ paths or the API also names the security-reviewer pass.
   precise event), `Randomness`, their union `Context`, and the event-driven
   `Peer` with six handlers (`on_start`, `on_message`, `on_timer`,
   `on_connected`, `on_disconnected`, `on_stop`) that do no I/O except through
-  the context. `Transport` promises the contract of `spec/protocol.md` 3.1: one
-  reliable, ordered stream per connection, so a message is never lost,
-  duplicated or reordered within a connection and loss shows itself only as
-  `on_disconnected`; nothing is ordered across connections, and `send` is
-  accepted only between `on_connected` and `on_disconnected` for that peer,
-  which strictly alternate per peer (a runtime whose transport holds several
-  connections to one peer collapses them into one). `close` hangs up: both sides
-  hear `on_disconnected`, what was in flight is lost (sends from `on_stop` are
-  lost the same way), and whether a new connection follows is the runtime's
-  business. What a handler asks for (sends, timers, hang-ups) takes effect in
-  the order asked, all of it before that peer's next handler runs; a
-  connection's end is reported to each side in the order connections ended,
-  never in the middle of another handler's effects; and until a side has heard
-  `on_disconnected` the connection is open as far as it is concerned, so its
-  sends are accepted and lost with the connection (`DropReason::Closed`). The
-  daemon must give the same guarantees. `licketysync-sim` implements all this as
-  a discrete-event simulator: a queue ordered by time then sequence number;
-  per-message latency within bounds with first-in first-out delivery per
-  direction; connection drops (with the configured probability a message takes
-  its connection down instead of arriving: both sides hear `on_disconnected`,
-  everything in flight on it is lost, and the two reconnect after a configurable
+  the context. `Transport` promises the contract of `spec/protocol.md` 3.1,
+  every promise about what one side sees (the entry above made the stream one of
+  bytes and its loss "may be lost", ruling 14): nothing is ordered across
+  connections, `send` is accepted only between `on_connected` and
+  `on_disconnected` for that peer, which strictly alternate per peer (a runtime
+  whose transport holds several connections to one peer collapses them into
+  one), `close` hangs up and whether a new connection follows is the runtime's
+  business; what a handler asks for (sends, timers, hang-ups) takes effect in
+  the order asked, all of it before that peer's next handler runs; each side
+  hears of its own connections' ends one at a time, never in the middle of a
+  handler's effects; and until a side has heard `on_disconnected` the connection
+  is open as far as it is concerned, so its sends are accepted and may be lost
+  (`DropReason::Closed`). `licketysync-sim` implements all this as a
+  discrete-event simulator: a queue ordered by time then sequence number;
+  per-piece latency within bounds with first-in first-out delivery per
+  direction; connection drops (with the configured probability a piece takes its
+  connection down instead of arriving: both sides hear `on_disconnected`, what
+  was in flight on it may be lost, and the two reconnect after a configurable
   delay); reordering across connections when the latency range is wide;
-  partitions over a time window that close the connections they cut and make
-  in-flight messages stale; crash (memory, timers and staged writes gone;
-  committed storage kept), clean stop (`on_stop` first) and restart through the
-  peer factory; per-peer clock skew applied to both clocks over a scenario-set
-  wall epoch; bounded disks and a full-disk window; and a `Reconnect` fault as
-  the way back after a peer hung up (the simulator never reconnects such a pair
-  by itself; a partition ending or a restart also does). Closing a connection
-  only queues its two notices, the closer's first; they are delivered first in
-  first out once the handler that closed it (or, when a connection opens, both
-  sides' `on_connected`, which run before either side's effects are applied) has
-  had every effect applied, and each peer's context reports as connected exactly
-  the peers it has heard `on_connected` for and not `on_disconnected`. Fault
-  times are unskewed simulation time and a window given backwards is the same
-  window. Both sides learn of a connection's end at the same instant, a phase-0
-  simplification; a per-side detection delay and a wall-clock step fault are
-  follow-ups. Timer generations come from one counter per run that is never
-  reset, so a firing queued before a cancel, a re-arm or a crash can never match
-  a later arming. A `Scenario` builder takes the seed, peer count, network,
-  faults, wall epoch, event budget and a convergence predicate;
-  `run_until(time)` and `run_until_quiescent(limit)` return an `Outcome` with
-  the seed, the FNV-1a hash of every event and the last events, so a failing
-  seed replays exactly. "Quiescent" means the predicate holds with no message in
-  flight and no fault (or reconnection) pending; timers alone do not count as
-  busy. A run that spends its event budget (default one million) stops and is
-  reported as not converged, so a peer that never settles cannot hang the
-  nightly job. The `licketysync-sim` binary runs a named scenario over a seed
-  range and stops at the first that does not converge; the nightly "long
+  partitions over a time window that close the connections they cut; crash
+  (memory, timers and staged writes gone; committed storage kept), clean stop
+  (`on_stop` first) and restart through the peer factory; per-peer clock skew
+  applied to both clocks over a scenario-set wall epoch; bounded disks and a
+  full-disk window; and a `Reconnect` fault as the way back after a peer hung up
+  (the simulator never reconnects such a pair by itself; a partition ending or a
+  restart also does). Closing a connection only queues its two notices, the
+  closer's first; they are delivered first in first out (a property of this
+  simulator, not of the contract) once the handler that closed it (or, when a
+  connection opens, both sides' `on_connected`, which run before either side's
+  effects are applied) has had every effect applied, and each peer's context
+  reports as connected exactly the peers it has heard `on_connected` for and not
+  `on_disconnected`. Fault times are unskewed simulation time and a window given
+  backwards is the same window. Both sides learn of a connection's end at the
+  same instant, a phase-0 simplification; a per-side detection delay and a
+  wall-clock step fault are follow-ups. Timer generations come from one counter
+  per run that is never reset, so a firing queued before a cancel, a re-arm or a
+  crash can never match a later arming. A `Scenario` builder takes the seed,
+  peer count, network, faults, wall epoch, event budget and a convergence
+  predicate; `run_until(time)` and `run_until_quiescent(limit)` return an
+  `Outcome` with the seed, the FNV-1a hash of every event and the last events,
+  so a failing seed replays exactly. "Quiescent" means the predicate holds with
+  no message in flight and no fault (or reconnection) pending; timers alone do
+  not count as busy. A run that spends its event budget (default one million)
+  stops and is reported as not converged, so a peer that never settles cannot
+  hang the nightly job. The `licketysync-sim` binary runs a named scenario over
+  a seed range and stops at the first that does not converge; the nightly "long
   simulator runs" job now calls it for 20,000 seeds per scenario (it ran
   `--ignored` tests, which the plan forbids without an issue link). Scenarios:
   `clean`, `drops`, `reconnect`, `cross-reorder`, `partition`, `crash`, `skew`,

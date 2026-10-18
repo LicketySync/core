@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use licketysync_engine::runtime::{Context, Instant, Peer, PeerId, SendError, Storage, TimerId};
+use licketysync_sim::frame::{frame, Deframer};
 use licketysync_sim::scenario::{DEFAULT_MAX_EVENTS, DEFAULT_WALL_EPOCH};
 use licketysync_sim::scenarios;
 use licketysync_sim::toy::{all_hold, total_items, SetUnion, LIMIT};
@@ -98,6 +99,21 @@ fn count(trace: &[TraceEvent], pred: impl Fn(&EventKind) -> bool) -> usize {
     trace.iter().filter(|e| pred(&e.kind)).count()
 }
 
+/// Bytes written, handed over and dropped over a whole trace. Once nothing is
+/// in flight, every byte written was handed over once or dropped once.
+fn byte_balance(trace: &[TraceEvent]) -> (usize, usize, usize) {
+    let mut balance = (0, 0, 0);
+    for e in trace {
+        match &e.kind {
+            EventKind::Send { bytes, .. } => balance.0 += bytes.len(),
+            EventKind::Deliver { bytes, .. } => balance.1 += bytes.len(),
+            EventKind::Dropped { len, .. } => balance.2 += len,
+            _ => {}
+        }
+    }
+    balance
+}
+
 #[test]
 fn a_dropped_connection_disconnects_both_sides_loses_what_was_in_flight_and_comes_back() {
     let mut sim = toy(6)
@@ -128,34 +144,36 @@ fn a_dropped_connection_disconnects_both_sides_loses_what_was_in_flight_and_come
     };
     assert_ne!(a, p(99), "the drop names its sender and destination");
     let after = trace.get(at + 1..).unwrap_or_default();
+    let drop_time = trace.get(at).map(|e| e.time);
     let disconnected_a = after
         .iter()
         .position(|e| e.peer == Some(a) && e.kind == EventKind::Disconnected(b));
     let disconnected_b = after
         .iter()
         .position(|e| e.peer == Some(b) && e.kind == EventKind::Disconnected(a));
+    assert!(
+        disconnected_a < disconnected_b && disconnected_a.is_some(),
+        "both sides hear of the drop, the sender first: {disconnected_a:?} {disconnected_b:?}"
+    );
     assert_eq!(
-        (disconnected_a, disconnected_b),
-        (Some(0), Some(1)),
-        "both sides hear of the drop at once, the sender first"
+        disconnected_b.and_then(|i| after.get(i)).map(|e| e.time),
+        drop_time,
+        "at the same instant (the phase-0 simplification)"
     );
     let reconnected = after
         .iter()
         .position(|e| e.peer == Some(a) && e.kind == EventKind::Connected(b));
     assert!(reconnected.is_some_and(|i| i > 1), "they reconnect later");
-    let drop_time = trace.get(at).map(|e| e.time);
     let reconnect_time = reconnected.and_then(|i| after.get(i)).map(|e| e.time);
     assert!(
         reconnect_time > drop_time,
         "after the reconnect delay: {drop_time:?} then {reconnect_time:?}"
     );
-    let sends = count(trace, |k| matches!(k, EventKind::Send { .. }));
-    let delivered = count(trace, |k| matches!(k, EventKind::Deliver { .. }));
-    let dropped = count(trace, |k| matches!(k, EventKind::Dropped { .. }));
+    let (sent, delivered, dropped) = byte_balance(trace);
     assert_eq!(
-        sends,
+        sent,
         delivered + dropped,
-        "every message arrives once or is dropped once; nothing is duplicated"
+        "every byte arrives once or is dropped once; nothing is duplicated"
     );
     let stale = count(trace, |k| {
         matches!(
@@ -176,14 +194,15 @@ fn a_dropped_connection_disconnects_both_sides_loses_what_was_in_flight_and_come
 /// the message numbers in arrival order.
 type Received = Rc<RefCell<BTreeMap<(PeerId, PeerId, u32), Vec<u32>>>>;
 
-/// On every connection to a peer, sends `BURST` numbered messages tagged
-/// with how many connections to that peer this side has seen; records what
-/// it receives per sender and per connection.
+/// On every connection to a peer, sends `BURST` numbered frames tagged with
+/// how many connections to that peer this side has seen; reassembles what it
+/// receives and records it per sender and per connection.
 #[derive(Default)]
 struct Burst {
     connections: BTreeMap<PeerId, u32>,
     received: Received,
     me: Option<PeerId>,
+    streams: BTreeMap<PeerId, Deframer>,
 }
 
 const BURST: u32 = 16;
@@ -196,35 +215,45 @@ impl Peer for Burst {
         let Some(me) = self.me else {
             return;
         };
-        let (Some(gen), Some(i)) = (
-            bytes
-                .get(..4)
-                .and_then(|b| <[u8; 4]>::try_from(b).ok())
-                .map(u32::from_be_bytes),
-            bytes
-                .get(4..8)
-                .and_then(|b| <[u8; 4]>::try_from(b).ok())
-                .map(u32::from_be_bytes),
-        ) else {
-            return;
-        };
-        self.received
-            .borrow_mut()
-            .entry((from, me, gen))
-            .or_default()
-            .push(i);
+        let frames = self
+            .streams
+            .get_mut(&from)
+            .and_then(|d| d.push(bytes).ok())
+            .unwrap_or_default();
+        for payload in frames {
+            let (Some(gen), Some(i)) = (
+                payload
+                    .get(..4)
+                    .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                    .map(u32::from_be_bytes),
+                payload
+                    .get(4..8)
+                    .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                    .map(u32::from_be_bytes),
+            ) else {
+                continue;
+            };
+            self.received
+                .borrow_mut()
+                .entry((from, me, gen))
+                .or_default()
+                .push(i);
+        }
     }
     fn on_timer(&mut self, _cx: &mut dyn Context, _id: TimerId) {}
     fn on_connected(&mut self, cx: &mut dyn Context, peer: PeerId) {
+        self.streams.insert(peer, Deframer::new(8));
         let gen = self.connections.entry(peer).or_insert(0);
         *gen += 1;
         for i in 0..BURST {
             let mut msg = gen.to_be_bytes().to_vec();
             msg.extend_from_slice(&i.to_be_bytes());
-            assert_eq!(cx.send(peer, msg), Ok(()));
+            assert_eq!(cx.send(peer, frame(&msg).unwrap_or_default()), Ok(()));
         }
     }
-    fn on_disconnected(&mut self, _cx: &mut dyn Context, _peer: PeerId) {}
+    fn on_disconnected(&mut self, _cx: &mut dyn Context, peer: PeerId) {
+        self.streams.remove(&peer);
+    }
     fn on_stop(&mut self, _cx: &mut dyn Context) {}
 }
 
@@ -259,10 +288,11 @@ fn messages_on_one_connection_arrive_in_order_and_once_whatever_their_latency() 
         assert_eq!(got, &want, "{from} -> {to}: in order, each once");
     }
     let trace = sim.trace().unwrap_or_default();
+    let (sent, delivered, dropped) = byte_balance(trace);
     assert_eq!(
-        count(trace, |k| matches!(k, EventKind::Send { .. })),
-        count(trace, |k| matches!(k, EventKind::Deliver { .. })),
-        "as many deliveries as sends: nothing duplicated, nothing lost"
+        (delivered, dropped),
+        (sent, 0),
+        "every byte handed over: nothing duplicated, nothing lost"
     );
     assert!(
         trace
@@ -282,8 +312,8 @@ fn messages_on_one_connection_arrive_in_order_and_once_whatever_their_latency() 
 #[test]
 fn a_drop_cuts_the_stream_cleanly_and_the_next_connection_starts_afresh() {
     let mut any_lost = false;
-    for seed in 0..4 {
-        let flaky = NetworkConfig::default().drops(0.05);
+    for seed in 0..8 {
+        let flaky = NetworkConfig::default().drops(0.1);
         let (received, scenario) = bursts(seed, 2, flaky);
         let mut sim = scenario.build();
         let o = sim.run_until_quiescent(LIMIT);
@@ -304,7 +334,7 @@ fn a_drop_cuts_the_stream_cleanly_and_the_next_connection_starts_afresh() {
         assert_eq!(
             last_gen as usize,
             1 + lost,
-            "every lost message cost one connection and brought one back"
+            "every lost piece cost one connection and brought one back"
         );
         for ((from, to, gen), got) in received.iter() {
             let want: Vec<u32> = (0..u32::try_from(got.len()).unwrap_or(0)).collect();
@@ -317,14 +347,14 @@ fn a_drop_cuts_the_stream_cleanly_and_the_next_connection_starts_afresh() {
                 assert_eq!(got, &whole, "the last connection carried it all");
             }
         }
+        let (sent, delivered, dropped) = byte_balance(trace);
         assert_eq!(
-            count(trace, |k| matches!(k, EventKind::Send { .. })),
-            count(trace, |k| matches!(k, EventKind::Deliver { .. }))
-                + count(trace, |k| matches!(k, EventKind::Dropped { .. })),
-            "every send was delivered once or dropped once"
+            sent,
+            delivered + dropped,
+            "every byte was handed over once or dropped once"
         );
     }
-    assert!(any_lost, "seeds 0 to 3 at 5% include at least one drop");
+    assert!(any_lost, "seeds 0 to 7 at 10% include at least one drop");
 }
 
 #[test]
@@ -881,17 +911,20 @@ fn timer_generations_never_reset_a_timer_rearmed_inside_its_handler_ignores_the_
     );
 }
 
-/// On its first start arms a timer for 5 s; on a restart arms one for 7 s;
-/// logs every firing.
+/// On its first start arms timer `T` for 5 s; on a restart arms a different
+/// timer, `T2`, for 5 s on its own fresh clock (7 s of simulation time);
+/// logs every firing with its id and the instance's clock.
 struct ArmAcrossCrash {
-    log: Rc<RefCell<Vec<Instant>>>,
+    log: Rc<RefCell<Vec<(TimerId, Instant)>>>,
 }
+
+const T2: TimerId = TimerId::new(8);
 
 impl Peer for ArmAcrossCrash {
     fn on_start(&mut self, cx: &mut dyn Context) {
         let restarted = cx.storage().get(b"booted").ok().flatten().is_some();
         if restarted {
-            cx.set_timer(T, Instant::from_secs(7));
+            cx.set_timer(T2, Instant::from_secs(5));
         } else {
             assert_eq!(cx.storage().put(b"booted", b"1"), Ok(()));
             assert_eq!(cx.storage().commit(), Ok(()));
@@ -900,8 +933,7 @@ impl Peer for ArmAcrossCrash {
     }
     fn on_message(&mut self, _cx: &mut dyn Context, _from: PeerId, _bytes: &[u8]) {}
     fn on_timer(&mut self, cx: &mut dyn Context, id: TimerId) {
-        assert_eq!(id, T);
-        self.log.borrow_mut().push(cx.now());
+        self.log.borrow_mut().push((id, cx.now()));
     }
     fn on_connected(&mut self, _cx: &mut dyn Context, _peer: PeerId) {}
     fn on_disconnected(&mut self, _cx: &mut dyn Context, _peer: PeerId) {}
@@ -911,45 +943,91 @@ impl Peer for ArmAcrossCrash {
 #[test]
 fn timer_generations_never_reset_a_timer_armed_before_a_crash_does_not_fire_on_the_restarted_instance(
 ) {
-    let faults = [
-        Fault::Crash {
-            peer: p(0),
-            at: Instant::from_secs(1),
-        },
-        Fault::Restart {
-            peer: p(0),
-            at: Instant::from_secs(2),
-        },
-    ];
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let shared = Rc::clone(&log);
+    let mut sim = Scenario::new(1, 1, move |_| ArmAcrossCrash {
+        log: Rc::clone(&shared),
+    })
+    .fault(Fault::Crash {
+        peer: p(0),
+        at: Instant::from_secs(1),
+    })
+    .fault(Fault::Restart {
+        peer: p(0),
+        at: Instant::from_secs(2),
+    })
+    .record_trace(true)
+    .build();
+    sim.run_until(Instant::from_secs(20));
     assert_eq!(
-        firings(|log| ArmAcrossCrash { log }, &faults),
-        vec![Instant::from_secs(7)],
-        "never at 5 s, where the crashed instance's arming was queued"
+        *log.borrow(),
+        vec![(T2, Instant::from_secs(5))],
+        "only the restarted instance's own timer, at 5 s on its clock; never the crashed one's T, \
+         which a crash that left its timers armed would fire at 5 s of simulation time"
     );
+    let fired: Vec<Instant> = sim
+        .trace()
+        .unwrap_or_default()
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::TimerFired(_)))
+        .map(|e| e.time)
+        .collect();
+    assert_eq!(fired, vec![Instant::from_secs(7)], "7 s of simulation time");
 }
 
 /// Sends to its neighbour from the wrong places: before `on_connected`, and
 /// inside `on_disconnected` for that very peer.
 struct Impatient {
     log: Rc<RefCell<Vec<(&'static str, bool)>>>,
+    inbox: Inbox,
+}
+
+/// One deframer per connection, for the small test peers here that send
+/// frames and log what arrives one whole frame at a time.
+#[derive(Default)]
+struct Inbox {
+    streams: BTreeMap<PeerId, Deframer>,
+}
+
+impl Inbox {
+    fn open(&mut self, peer: PeerId) {
+        self.streams.insert(peer, Deframer::new(1024));
+    }
+    fn close(&mut self, peer: PeerId) {
+        self.streams.remove(&peer);
+    }
+    fn take(&mut self, from: PeerId, bytes: &[u8]) -> Vec<Vec<u8>> {
+        self.streams
+            .get_mut(&from)
+            .and_then(|d| d.push(bytes).ok())
+            .unwrap_or_default()
+    }
+}
+
+fn framed(text: &[u8]) -> Vec<u8> {
+    frame(text).unwrap_or_default()
 }
 
 impl Peer for Impatient {
     fn on_start(&mut self, cx: &mut dyn Context) {
         let other = PeerId::new(1 - cx.local_id().as_u64());
-        let ok = cx.send(other, b"too early".to_vec()).is_ok();
+        let ok = cx.send(other, framed(b"too early")).is_ok();
         self.log.borrow_mut().push(("start", ok));
     }
-    fn on_message(&mut self, _cx: &mut dyn Context, _from: PeerId, _bytes: &[u8]) {
-        self.log.borrow_mut().push(("message", true));
+    fn on_message(&mut self, _cx: &mut dyn Context, from: PeerId, bytes: &[u8]) {
+        for _ in self.inbox.take(from, bytes) {
+            self.log.borrow_mut().push(("message", true));
+        }
     }
     fn on_timer(&mut self, _cx: &mut dyn Context, _id: TimerId) {}
     fn on_connected(&mut self, cx: &mut dyn Context, peer: PeerId) {
-        let ok = cx.send(peer, b"hello".to_vec()).is_ok();
+        self.inbox.open(peer);
+        let ok = cx.send(peer, framed(b"hello")).is_ok();
         self.log.borrow_mut().push(("connected", ok));
     }
     fn on_disconnected(&mut self, cx: &mut dyn Context, peer: PeerId) {
-        let ok = cx.send(peer, b"too late".to_vec()).is_ok();
+        self.inbox.close(peer);
+        let ok = cx.send(peer, framed(b"too late")).is_ok();
         self.log.borrow_mut().push(("disconnected", ok));
     }
     fn on_stop(&mut self, _cx: &mut dyn Context) {}
@@ -961,6 +1039,7 @@ fn a_send_is_accepted_only_between_on_connected_and_on_disconnected() {
     let shared = Rc::clone(&log);
     let mut sim = Scenario::new(1, 2, move |_| Impatient {
         log: Rc::clone(&shared),
+        inbox: Inbox::default(),
     })
     .fault(Fault::Crash {
         peer: p(1),
@@ -1016,10 +1095,11 @@ fn a_send_is_accepted_only_between_on_connected_and_on_disconnected() {
         4,
         "two at start, one in on_disconnected, one at the restart"
     );
+    let (_, delivered, _) = byte_balance(trace);
     assert_eq!(
-        count(trace, |k| matches!(k, EventKind::Deliver { .. })),
-        4,
-        "nothing sent from the wrong place was delivered"
+        delivered,
+        4 * framed(b"hello").len(),
+        "nothing sent from the wrong place was delivered: four hellos, every byte"
     );
 }
 
@@ -1045,14 +1125,15 @@ impl Peer for GreetOnce {
 
 #[test]
 fn a_connection_is_not_open_while_a_drop_waits_to_reconnect_and_the_lost_message_stays_lost() {
-    // Half the messages drop; with seed 1 both greetings do, the first taking
-    // the connection down and the second going stale on it. Were the transport
-    // to resend a lost message on the new connection, that resend would either
-    // arrive (a delivery below) or drop again (a second loss): both fail here.
+    // Every piece is lost and nothing in flight survives an end, so the first
+    // piece of either greeting to arrive takes the connection down and the
+    // rest is lost with it. Were the transport to resend a lost greeting on
+    // the new connection, that resend would be lost again: a second `Lost`.
     let mut sim = Scenario::new(1, 2, |_| GreetOnce::default())
         .network(
             NetworkConfig::default()
-                .drops(0.5)
+                .drops(1.0)
+                .deliver_at_close(0.0)
                 .reconnect(Duration::from_secs(30), Duration::from_secs(30)),
         )
         .record_trace(true)
@@ -1071,29 +1152,28 @@ fn a_connection_is_not_open_while_a_drop_waits_to_reconnect_and_the_lost_message
         !sim.is_connected(p(0), p(1)),
         "both run and nothing partitions them, but the connection is down"
     );
+    let lost = |trace: &[TraceEvent]| {
+        count(trace, |k| {
+            matches!(
+                k,
+                EventKind::Dropped {
+                    reason: DropReason::Lost,
+                    ..
+                }
+            )
+        })
+    };
     let trace = sim.trace().unwrap_or_default().to_vec();
-    let lost = count(&trace, |k| {
-        matches!(
-            k,
-            EventKind::Dropped {
-                reason: DropReason::Lost,
-                ..
-            }
-        )
-    });
-    let stale = count(&trace, |k| {
-        matches!(
+    assert_eq!(lost(&trace), 1, "one piece took the connection down");
+    assert!(
+        count(&trace, |k| matches!(
             k,
             EventKind::Dropped {
                 reason: DropReason::Stale,
                 ..
             }
-        )
-    });
-    assert_eq!(
-        (lost, stale),
-        (1, 1),
-        "the first greeting took the connection down; the other was in flight on it"
+        )) >= 1,
+        "the other greeting was in flight on it and was lost with it"
     );
     let dropped_at = trace
         .iter()
@@ -1114,10 +1194,15 @@ fn a_connection_is_not_open_while_a_drop_waits_to_reconnect_and_the_lost_message
         "two peers connected, then reconnected"
     );
     assert_eq!(
-        count(trace, |k| matches!(k, EventKind::Deliver { .. })),
-        0,
+        (
+            lost(trace),
+            count(trace, |k| matches!(k, EventKind::Deliver { .. }))
+        ),
+        (1, 0),
         "the transport never resends what a dropped connection lost"
     );
+    let (sent, delivered, dropped) = byte_balance(trace);
+    assert_eq!((delivered, dropped), (0, sent));
 }
 
 /// Who was called, which handler, and about whom.
@@ -1128,39 +1213,41 @@ type CallLog = Rc<RefCell<Vec<(PeerId, &'static str, PeerId)>>>;
 /// `on_disconnected`. Every handler call is logged.
 struct HangUp {
     log: CallLog,
+    inbox: Inbox,
 }
 
 impl Peer for HangUp {
     fn on_start(&mut self, _cx: &mut dyn Context) {}
     fn on_message(&mut self, cx: &mut dyn Context, from: PeerId, bytes: &[u8]) {
         let me = cx.local_id();
-        self.log.borrow_mut().push((me, "message", from));
-        if bytes == b"bad" {
-            assert_eq!(cx.send(from, b"bye".to_vec()), Ok(()));
-            cx.close(from);
-            assert_eq!(
-                cx.send(from, b"after".to_vec()),
-                Err(SendError::NotConnected),
-                "after close, the same handler cannot send to that peer"
-            );
+        for message in self.inbox.take(from, bytes) {
+            self.log.borrow_mut().push((me, "message", from));
+            if message == b"bad" {
+                assert_eq!(cx.send(from, framed(b"bye")), Ok(()));
+                cx.close(from);
+                assert_eq!(
+                    cx.send(from, framed(b"after")),
+                    Err(SendError::NotConnected),
+                    "after close, the same handler cannot send to that peer"
+                );
+            }
         }
     }
     fn on_timer(&mut self, _cx: &mut dyn Context, _id: TimerId) {}
     fn on_connected(&mut self, cx: &mut dyn Context, peer: PeerId) {
         let me = cx.local_id();
+        self.inbox.open(peer);
         self.log.borrow_mut().push((me, "connected", peer));
         if me == p(0) {
-            assert_eq!(cx.send(peer, b"bad".to_vec()), Ok(()));
+            assert_eq!(cx.send(peer, framed(b"bad")), Ok(()));
         }
     }
     fn on_disconnected(&mut self, cx: &mut dyn Context, peer: PeerId) {
         let me = cx.local_id();
+        self.inbox.close(peer);
         self.log.borrow_mut().push((me, "disconnected", peer));
         cx.close(peer);
-        assert_eq!(
-            cx.send(peer, b"late".to_vec()),
-            Err(SendError::NotConnected)
-        );
+        assert_eq!(cx.send(peer, framed(b"late")), Err(SendError::NotConnected));
     }
     fn on_stop(&mut self, _cx: &mut dyn Context) {}
 }
@@ -1171,6 +1258,7 @@ fn a_peer_can_hang_up_and_the_pair_stays_closed_until_the_scenario_reconnects_it
     let shared = Rc::clone(&log);
     let mut sim = Scenario::new(1, 2, move |_| HangUp {
         log: Rc::clone(&shared),
+        inbox: Inbox::default(),
     })
     .fault(Fault::Reconnect {
         a: p(0),
@@ -1217,11 +1305,12 @@ fn a_peer_can_hang_up_and_the_pair_stays_closed_until_the_scenario_reconnects_it
                 ..
             }
         )),
-        "the \"bye\" queued before the close in the same handler went down with the connection"
+        "the \"bye\" written before the close in the same handler never left p1"
     );
+    let (_, delivered, _) = byte_balance(trace);
     assert_eq!(
-        count(trace, |k| matches!(k, EventKind::Deliver { .. })),
-        1,
+        delivered,
+        framed(b"bad").len(),
         "only \"bad\" was ever delivered"
     );
     let o = sim.run_until_quiescent(LIMIT);
@@ -1249,6 +1338,7 @@ fn a_peer_can_hang_up_and_the_pair_stays_closed_until_the_scenario_reconnects_it
     );
     let unchanged = Scenario::new(1, 2, |_| HangUp {
         log: Rc::new(RefCell::new(Vec::new())),
+        inbox: Inbox::default(),
     })
     .build()
     .run_until_quiescent(LIMIT);

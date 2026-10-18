@@ -6,21 +6,31 @@
 //! `contract` scenario that runs five of them under every fault at once.
 //!
 //! [`Prober`] behaves like the engine at its most awkward: from every handler,
-//! `on_connected`, `on_disconnected` and `on_stop` included, it sends, hangs
-//! up and arms or cancels a timer at random, while the scenario crashes, stops
-//! and restarts peers, partitions them, reconnects every pair once a second
-//! and the network drops connections. Each instance checks, as the calls
-//! arrive, what the engine's runtime documentation promises it, one [`Rule`]
-//! each: calls about a peer alternate between `on_connected` and
-//! `on_disconnected`; messages arrive only inside a connection, all from the
-//! sender's side of that same connection, each exactly once and in the order
-//! sent, and never after this side hung up; a send to a peer it has heard
-//! `on_connected` for, and not `on_disconnected`, is accepted unless it hung
-//! up on that peer in the same handler; a timer fires only while armed;
+//! `on_connected`, `on_disconnected` and `on_stop` included, it sends, hangs up
+//! (abruptly, or the engine's way: a goodbye frame, then `close` when its own
+//! 1 s timer fires or the other side hangs up) and arms or cancels a timer at
+//! random; receiving a goodbye, it hangs up at once or, half the time, leaves
+//! the connection for the other side to end (its goodbye timer, or the
+//! runtime's flush after a clean stop). Meanwhile the scenario crashes, stops
+//! and restarts peers, partitions them, reconnects every pair once a second and
+//! the network drops connections. Its messages are frames (the [`crate::frame`]
+//! format) on the byte stream, so every check works on whole frames reassembled
+//! from chunks split anywhere. Each instance checks, as the calls arrive, what
+//! the runtime documentation promises the one side it is, one [`Rule`] each:
+//! calls about a peer alternate between `on_connected` and `on_disconnected`;
+//! each chunk holds 1 to `MAX_CHUNK` bytes; frames arrive only inside a
+//! connection, all from the sender's side of that same connection, each once
+//! and in the order sent with none missing in between (a connection's end may
+//! lose the tail, never the middle), and never after this side hung up; a send
+//! inside a connection as this side knows it is accepted unless it hung up on
+//! that peer in the same handler, and `unsent` grows by exactly what it accepts
+//! (the prober paces on it, as the engine will); a timer fires only while
+//! armed, never before its deadline, and never one an earlier instance armed;
 //! nothing is called after `on_stop`; and every hang-up is answered by
-//! `on_disconnected`. A breach goes into the [`Report`] every instance
-//! shares, and the scenario converges only when there is none. The probers
-//! stop acting at [`QUIET_AFTER`] so that the network drains and the run ends
+//! `on_disconnected`. It checks nothing across machines, because the contract
+//! promises nothing there. A breach goes into the [`Report`] every instance
+//! shares, and the scenario converges only when there is none. The probers stop
+//! acting at [`QUIET_AFTER`] so that the network drains and the run ends
 //! quiescent.
 
 use core::cell::RefCell;
@@ -29,24 +39,43 @@ use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use licketysync_engine::runtime::{Context, Instant, Peer, PeerId, TimerId};
+use licketysync_engine::runtime::{
+    Context, Instant, Peer, PeerId, TimerId, MAX_CHUNK, MAX_SEND_QUEUE,
+};
 
+use crate::frame::{frame, Deframer};
 use crate::network::{NetworkConfig, Partition};
-use crate::scenario::{Fault, Outcome, Scenario};
+use crate::scenario::{Fault, NetStats, Outcome, Scenario, DEFAULT_WALL_EPOCH};
 use crate::toy::LIMIT;
 
-/// The probers' own clock time after which they only check: no sends, hang-ups
-/// or timers. The last scheduled fault is a second earlier.
-pub const QUIET_AFTER: Instant = Instant::from_secs(25);
+/// Seconds into the run, by the wall clock, after which the probers only
+/// check and finish what they started (a goodbye's hang-up): no new sends,
+/// hang-ups or timers. The last scheduled fault is a second earlier. It is
+/// read from the wall clock because that is the one clock a restarted
+/// instance shares with its predecessor; deciding when a test peer falls
+/// silent is not one of the decisions the wall clock is barred from.
+pub const QUIET_AFTER: u64 = 25;
 
 /// How many probers the scenario runs.
 pub const PEERS: u32 = 5;
 
-/// The prober's tick: it acts on every one.
-const KICK: TimerId = TimerId::new(1);
+/// Each instance numbers its timers in a block of its own, so a timer an
+/// earlier instance armed can never pass for one of this instance's: slot 0
+/// is the tick, slot 1 the spare, slot `2 + p` the goodbye timer for peer `p`.
+const TIMER_BLOCK: u64 = 16;
+const TICK_SLOT: u64 = 0;
+const SPARE_SLOT: u64 = 1;
+const GOODBYE_SLOT: u64 = 2;
 
-/// The timer it arms and cancels at random, to check cancellation.
-const AUX: TimerId = TimerId::new(2);
+/// How long a prober waits after its goodbye before it hangs up anyway
+/// (protocol spec, 4.2).
+const GOODBYE_WAIT: Duration = Duration::from_secs(1);
+
+/// A frame's payload: instance, connection, sequence (each a big-endian
+/// `u64`), then the kind.
+const PAYLOAD: usize = 25;
+const DATA: u8 = 0;
+const GOODBYE: u8 = 1;
 
 /// A promise of the runtime documentation that a prober checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,56 +83,76 @@ pub enum Rule {
     /// `on_connected` for a peer already connected, or `on_disconnected` for
     /// one that is not.
     Alternation,
-    /// A message from a peer this side has not heard `on_connected` for.
+    /// A chunk of no bytes, or of more than `MAX_CHUNK`.
+    BadChunk,
+    /// Bytes from a peer this side has not heard `on_connected` for.
     MessageOutsideConnection,
-    /// A message from a peer after this side hung up on it.
+    /// Bytes from a peer after this side hung up on it.
     MessageAfterHangUp,
-    /// Within one connection, a message the sender sent on another one.
+    /// Within one connection, a frame the sender sent on another one.
     CrossConnection,
-    /// Within one connection, a message other than the next one sent: lost,
-    /// duplicated or overtaken.
+    /// Within one connection, a frame other than the next one sent:
+    /// duplicated, overtaken, or with one missing before it.
     OutOfOrder,
-    /// A message that no prober sends.
+    /// Bytes that are no prober's frames.
     Garbled,
     /// A send refused although this side had heard `on_connected` for the
     /// peer, no `on_disconnected` since, and had not hung up on it in the
     /// same handler.
     RefusedWhileConnected,
+    /// `Transport::unsent` did not grow by exactly what an accepted write
+    /// added, within one handler.
+    UnsentMiscount,
     /// A timer fired that was cancelled, had fired already or was never armed.
     UnarmedTimerFired,
+    /// A timer fired before its deadline.
+    EarlyTimer,
+    /// A timer fired that an earlier instance of this peer armed.
+    ForeignTimer,
     /// A handler was called after `on_stop`.
     CallAfterStop,
-    /// A running peer hung up and never heard `on_disconnected` for it.
+    /// A running peer hung up (or said goodbye) and never heard
+    /// `on_disconnected` for it.
     UnansweredHangUp,
 }
 
 impl Rule {
     /// Every rule, in report order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 14] = [
         Self::Alternation,
+        Self::BadChunk,
         Self::MessageOutsideConnection,
         Self::MessageAfterHangUp,
         Self::CrossConnection,
         Self::OutOfOrder,
         Self::Garbled,
         Self::RefusedWhileConnected,
+        Self::UnsentMiscount,
         Self::UnarmedTimerFired,
+        Self::EarlyTimer,
+        Self::ForeignTimer,
         Self::CallAfterStop,
         Self::UnansweredHangUp,
     ];
 }
 
 /// What the probers of one or more runs saw: each breach by rule (a count
-/// and the first description), and how much they did, so that a clean report
-/// can be told from one where nothing was tried.
+/// and the first description), how much they did, and what the network did,
+/// so that a clean report can be told from one where nothing was tried.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report {
     breaches: BTreeMap<Rule, (u64, String)>,
     instances: u64,
     sends: u64,
-    messages: u64,
+    chunks: u64,
+    frames: u64,
     hang_ups: u64,
+    goodbyes_sent: u64,
+    goodbyes_received: u64,
+    stop_hang_ups: u64,
     cancels: u64,
+    timers_fired: u64,
+    net: NetStats,
 }
 
 impl Report {
@@ -140,22 +189,58 @@ impl Report {
         self.sends
     }
 
-    /// Messages that arrived and were checked.
+    /// Chunks that arrived.
     #[must_use]
-    pub const fn messages(&self) -> u64 {
-        self.messages
+    pub const fn chunks(&self) -> u64 {
+        self.chunks
     }
 
-    /// Hang-ups asked for.
+    /// Whole frames reassembled and checked.
+    #[must_use]
+    pub const fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    /// Hang-ups asked for, those that end a goodbye included.
     #[must_use]
     pub const fn hang_ups(&self) -> u64 {
         self.hang_ups
+    }
+
+    /// Goodbye frames sent (from `on_stop` too).
+    #[must_use]
+    pub const fn goodbyes_sent(&self) -> u64 {
+        self.goodbyes_sent
+    }
+
+    /// Goodbye frames that arrived.
+    #[must_use]
+    pub const fn goodbyes_received(&self) -> u64 {
+        self.goodbyes_received
+    }
+
+    /// Hang-ups asked for inside `on_stop`.
+    #[must_use]
+    pub const fn stop_hang_ups(&self) -> u64 {
+        self.stop_hang_ups
     }
 
     /// Timer cancellations asked for.
     #[must_use]
     pub const fn cancels(&self) -> u64 {
         self.cancels
+    }
+
+    /// Timers that fired.
+    #[must_use]
+    pub const fn timers_fired(&self) -> u64 {
+        self.timers_fired
+    }
+
+    /// What the network did in the runs.
+    #[must_use]
+    pub const fn net(&self) -> &NetStats {
+        &self.net
     }
 
     /// Adds `other`'s counts to this report's, keeping this report's first
@@ -168,11 +253,21 @@ impl Report {
                 .or_insert_with(|| (0, first.clone()));
             entry.0 = entry.0.saturating_add(*n);
         }
-        self.instances = self.instances.saturating_add(other.instances);
-        self.sends = self.sends.saturating_add(other.sends);
-        self.messages = self.messages.saturating_add(other.messages);
-        self.hang_ups = self.hang_ups.saturating_add(other.hang_ups);
-        self.cancels = self.cancels.saturating_add(other.cancels);
+        for (mine, theirs) in [
+            (&mut self.instances, other.instances),
+            (&mut self.sends, other.sends),
+            (&mut self.chunks, other.chunks),
+            (&mut self.frames, other.frames),
+            (&mut self.hang_ups, other.hang_ups),
+            (&mut self.goodbyes_sent, other.goodbyes_sent),
+            (&mut self.goodbyes_received, other.goodbyes_received),
+            (&mut self.stop_hang_ups, other.stop_hang_ups),
+            (&mut self.cancels, other.cancels),
+            (&mut self.timers_fired, other.timers_fired),
+        ] {
+            *mine = mine.saturating_add(theirs);
+        }
+        self.net.absorb(&other.net);
     }
 
     fn breach(&mut self, rule: Rule, what: String) {
@@ -185,14 +280,22 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "{} breaches; {} instances, {} sends, {} messages checked, {} hang-ups, {} cancels",
+            "{} breaches; {} instances, {} sends, {} frames checked in {} chunks, \
+             {} hang-ups ({} in on_stop), {} goodbyes sent and {} received, \
+             {} cancels, {} timers fired",
             self.breaches(),
             self.instances,
             self.sends,
-            self.messages,
+            self.frames,
+            self.chunks,
             self.hang_ups,
-            self.cancels
+            self.stop_hang_ups,
+            self.goodbyes_sent,
+            self.goodbyes_received,
+            self.cancels,
+            self.timers_fired
         )?;
+        writeln!(f, "  network: {}", self.net)?;
         for rule in Rule::ALL {
             if let Some((n, first)) = self.breaches.get(&rule) {
                 writeln!(f, "  {rule:?}: {n}, first: {first}")?;
@@ -213,7 +316,7 @@ struct Outgoing {
     next: u64,
 }
 
-/// What this side expects next on one connection, once the first message has
+/// What this side expects next on one connection, once the first frame has
 /// named the sender's instance and connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Incoming {
@@ -233,11 +336,15 @@ pub struct Prober {
     /// The peers heard `on_connected` for and not `on_disconnected`.
     out: BTreeMap<PeerId, Outgoing>,
     incoming: BTreeMap<PeerId, Incoming>,
+    streams: BTreeMap<PeerId, Deframer>,
     /// Hung up on in the current handler: a send to them is refused.
     hung_up_now: BTreeSet<PeerId>,
     /// Hung up on, `on_disconnected` not yet heard.
     hung_up: BTreeSet<PeerId>,
-    aux_armed: bool,
+    /// Said goodbye to: no more sends; hang up on the goodbye timer.
+    leaving: BTreeSet<PeerId>,
+    /// This instance's armed timers and their deadlines.
+    deadlines: BTreeMap<TimerId, Instant>,
 }
 
 fn random(cx: &mut dyn Context) -> u64 {
@@ -247,19 +354,20 @@ fn random(cx: &mut dyn Context) -> u64 {
 }
 
 fn quiet(cx: &dyn Context) -> bool {
-    cx.now() >= QUIET_AFTER
+    cx.wall_time() >= DEFAULT_WALL_EPOCH.saturating_add(QUIET_AFTER)
 }
 
-fn encode(instance: u64, connection: u64, seq: u64) -> Vec<u8> {
-    let mut m = Vec::with_capacity(24);
+fn encode(instance: u64, connection: u64, seq: u64, kind: u8) -> Vec<u8> {
+    let mut m = Vec::with_capacity(PAYLOAD);
     m.extend_from_slice(&instance.to_be_bytes());
     m.extend_from_slice(&connection.to_be_bytes());
     m.extend_from_slice(&seq.to_be_bytes());
+    m.push(kind);
     m
 }
 
-fn decode(bytes: &[u8]) -> Option<(u64, u64, u64)> {
-    if bytes.len() != 24 {
+fn decode(bytes: &[u8]) -> Option<(u64, u64, u64, u8)> {
+    if bytes.len() != PAYLOAD {
         return None;
     }
     let word = |i: usize| {
@@ -268,7 +376,11 @@ fn decode(bytes: &[u8]) -> Option<(u64, u64, u64)> {
             .and_then(|b| <[u8; 8]>::try_from(b).ok())
             .map(u64::from_be_bytes)
     };
-    Some((word(0)?, word(8)?, word(16)?))
+    let kind = *bytes.get(24)?;
+    if kind != DATA && kind != GOODBYE {
+        return None;
+    }
+    Some((word(0)?, word(8)?, word(16)?, kind))
 }
 
 impl Prober {
@@ -287,17 +399,25 @@ impl Prober {
             connections: 0,
             out: BTreeMap::new(),
             incoming: BTreeMap::new(),
+            streams: BTreeMap::new(),
             hung_up_now: BTreeSet::new(),
             hung_up: BTreeSet::new(),
-            aux_armed: false,
+            leaving: BTreeSet::new(),
+            deadlines: BTreeMap::new(),
         }
     }
 
-    /// Hang-ups this instance asked for and has not yet heard
+    /// Hang-ups and goodbyes this instance began and has not yet heard
     /// `on_disconnected` for.
     #[must_use]
     pub fn pending_hang_ups(&self) -> usize {
-        self.hung_up.len()
+        self.hung_up.union(&self.leaving).count()
+    }
+
+    fn count(&self, what: impl FnOnce(&mut Report) -> &mut u64) {
+        let mut r = self.report.borrow_mut();
+        let n = what(&mut r);
+        *n = n.saturating_add(1);
     }
 
     fn breach(&self, cx: &dyn Context, rule: Rule, what: &str) {
@@ -316,32 +436,82 @@ impl Prober {
         }
     }
 
+    const fn timer(&self, slot: u64) -> TimerId {
+        TimerId::new(
+            self.instance
+                .saturating_mul(TIMER_BLOCK)
+                .saturating_add(slot),
+        )
+    }
+
+    fn arm(&mut self, cx: &mut dyn Context, slot: u64, at: Instant) {
+        let id = self.timer(slot);
+        cx.set_timer(id, at);
+        self.deadlines.insert(id, at);
+    }
+
+    fn disarm(&mut self, cx: &mut dyn Context, slot: u64) {
+        let id = self.timer(slot);
+        cx.cancel_timer(id);
+        self.deadlines.remove(&id);
+        self.count(|r| &mut r.cancels);
+    }
+
+    /// A connected peer this side may still write to, chosen by `r`.
     fn pick(&self, r: u64) -> Option<PeerId> {
-        let n = u64::try_from(self.out.len()).ok()?;
+        let open: Vec<PeerId> = self
+            .out
+            .keys()
+            .copied()
+            .filter(|q| !self.leaving.contains(q))
+            .collect();
+        let n = u64::try_from(open.len()).ok()?;
         if n == 0 {
             return None;
         }
         let i = usize::try_from(r % n).ok()?;
-        self.out.keys().nth(i).copied()
+        open.get(i).copied()
     }
 
-    fn send(&mut self, cx: &mut dyn Context, to: PeerId) {
+    /// Writes the next frame of `kind` to `to`; whether it was accepted.
+    fn write(&mut self, cx: &mut dyn Context, to: PeerId, kind: u8) -> bool {
+        if self.leaving.contains(&to) {
+            return false;
+        }
         let Some(conn) = self.out.get(&to).copied() else {
-            return;
+            return false;
         };
-        let message = encode(self.instance, conn.connection, conn.next);
-        if cx.send(to, message).is_ok() {
+        let Some(bytes) = frame(&encode(self.instance, conn.connection, conn.next, kind)) else {
+            return false;
+        };
+        let len = bytes.len();
+        let before = cx.unsent(to);
+        if before.saturating_add(len) > MAX_SEND_QUEUE {
+            return false;
+        }
+        if cx.send(to, bytes).is_ok() {
+            let after = cx.unsent(to);
+            if after != before.saturating_add(len) {
+                self.breach(
+                    cx,
+                    Rule::UnsentMiscount,
+                    &format!("unsent to {to} went from {before} to {after} on a {len}-byte write"),
+                );
+            }
             if let Some(c) = self.out.get_mut(&to) {
                 c.next = c.next.saturating_add(1);
             }
-            let mut r = self.report.borrow_mut();
-            r.sends = r.sends.saturating_add(1);
-        } else if !self.hung_up_now.contains(&to) {
-            self.breach(
-                cx,
-                Rule::RefusedWhileConnected,
-                &format!("send to {to} refused inside the connection"),
-            );
+            self.count(|r| &mut r.sends);
+            true
+        } else {
+            if !self.hung_up_now.contains(&to) {
+                self.breach(
+                    cx,
+                    Rule::RefusedWhileConnected,
+                    &format!("send to {to} refused inside the connection"),
+                );
+            }
+            false
         }
     }
 
@@ -349,13 +519,23 @@ impl Prober {
         cx.close(on);
         self.hung_up_now.insert(on);
         self.hung_up.insert(on);
-        let mut r = self.report.borrow_mut();
-        r.hang_ups = r.hang_ups.saturating_add(1);
+        self.count(|r| &mut r.hang_ups);
     }
 
-    /// Sends, hangs up and touches the spare timer at random. `eager` from
-    /// timers and connection changes (up to two sends); from `on_message` a
-    /// third of the time one send, so that replies die out.
+    /// The engine's way to hang up: a goodbye frame, then `close` when the
+    /// goodbye timer fires or the other side hangs up, whichever comes first.
+    fn say_goodbye(&mut self, cx: &mut dyn Context, to: PeerId) {
+        if self.write(cx, to, GOODBYE) {
+            self.leaving.insert(to);
+            self.count(|r| &mut r.goodbyes_sent);
+            let at = cx.now().saturating_add(GOODBYE_WAIT);
+            self.arm(cx, GOODBYE_SLOT.saturating_add(to.as_u64()), at);
+        }
+    }
+
+    /// Sends, hangs up (one way or the other) and touches the spare timer at
+    /// random. `eager` from timers and connection changes (up to two sends);
+    /// from a frame a third of the time one send, so that replies die out.
     fn act(&mut self, cx: &mut dyn Context, eager: bool) {
         if quiet(cx) {
             return;
@@ -363,66 +543,52 @@ impl Prober {
         let r = random(cx);
         if eager || r % 3 == 0 {
             if let Some(q) = self.pick(r >> 8) {
-                self.send(cx, q);
+                self.write(cx, q, DATA);
             }
         }
-        if (r >> 16) % 7 == 0 {
-            if let Some(q) = self.pick(r >> 20) {
-                self.hang_up(cx, q);
+        if (r >> 16) % 40 == 0 {
+            if let Some(q) = self.pick(r >> 22) {
+                if (r >> 30) % 2 == 0 {
+                    self.hang_up(cx, q);
+                } else {
+                    self.say_goodbye(cx, q);
+                }
             }
         }
-        if eager && (r >> 28) % 2 == 0 {
+        if eager && (r >> 31) % 2 == 0 {
             if let Some(q) = self.pick(r >> 32) {
-                self.send(cx, q);
+                self.write(cx, q, DATA);
             }
         }
         match (r >> 40) % 5 {
             0 => {
                 let at = cx
                     .now()
-                    .saturating_add(Duration::from_millis(1 + (r >> 44) % 500));
-                cx.set_timer(AUX, at);
-                self.aux_armed = true;
+                    .saturating_add(Duration::from_millis(1 + (r >> 44) % 2000));
+                self.arm(cx, SPARE_SLOT, at);
             }
-            1 => {
-                cx.cancel_timer(AUX);
-                self.aux_armed = false;
-                let mut rep = self.report.borrow_mut();
-                rep.cancels = rep.cancels.saturating_add(1);
-            }
+            1 => self.disarm(cx, SPARE_SLOT),
             _ => {}
         }
     }
 
-    fn check_message(&mut self, cx: &dyn Context, from: PeerId, bytes: &[u8]) {
-        if !self.out.contains_key(&from) {
-            self.breach(
-                cx,
-                Rule::MessageOutsideConnection,
-                &format!("message from {from}"),
-            );
-        }
-        if self.hung_up.contains(&from) {
-            self.breach(
-                cx,
-                Rule::MessageAfterHangUp,
-                &format!("message from {from}"),
-            );
-        }
-        let Some((instance, connection, seq)) = decode(bytes) else {
+    /// Checks one whole frame from `from`; its kind, if it parses.
+    fn check_frame(&mut self, cx: &dyn Context, from: PeerId, payload: &[u8]) -> Option<u8> {
+        self.count(|r| &mut r.frames);
+        let Some((instance, connection, seq, kind)) = decode(payload) else {
             self.breach(
                 cx,
                 Rule::Garbled,
-                &format!("{} bytes from {from}", bytes.len()),
+                &format!("a {}-byte frame from {from}", payload.len()),
             );
-            return;
+            return None;
         };
         let expected = self.incoming.get(&from).copied();
         match expected {
             None if seq != 0 => self.breach(
                 cx,
                 Rule::OutOfOrder,
-                &format!("first message from {from} on this connection is number {seq}"),
+                &format!("first frame from {from} on this connection is number {seq}"),
             ),
             Some(e) if (e.instance, e.connection) != (instance, connection) => self.breach(
                 cx,
@@ -436,7 +602,7 @@ impl Prober {
             Some(e) if e.next != seq => self.breach(
                 cx,
                 Rule::OutOfOrder,
-                &format!("from {from}: message {seq}, expected {}", e.next),
+                &format!("from {from}: frame {seq}, expected {}", e.next),
             ),
             _ => {}
         }
@@ -448,6 +614,7 @@ impl Prober {
                 next: seq.saturating_add(1),
             },
         );
+        Some(kind)
     }
 }
 
@@ -458,32 +625,89 @@ impl Peer for Prober {
             let at = cx
                 .now()
                 .saturating_add(Duration::from_millis(random(cx) % 2000));
-            cx.set_timer(KICK, at);
+            self.arm(cx, TICK_SLOT, at);
         }
     }
 
     fn on_message(&mut self, cx: &mut dyn Context, from: PeerId, bytes: &[u8]) {
         self.begin(cx, "on_message");
-        {
-            let mut r = self.report.borrow_mut();
-            r.messages = r.messages.saturating_add(1);
+        self.count(|r| &mut r.chunks);
+        if bytes.is_empty() || bytes.len() > MAX_CHUNK {
+            self.breach(
+                cx,
+                Rule::BadChunk,
+                &format!("a chunk of {} bytes from {from}", bytes.len()),
+            );
         }
-        self.check_message(cx, from, bytes);
+        if !self.out.contains_key(&from) {
+            self.breach(
+                cx,
+                Rule::MessageOutsideConnection,
+                &format!("bytes from {from}"),
+            );
+            return;
+        }
+        if self.hung_up.contains(&from) {
+            self.breach(cx, Rule::MessageAfterHangUp, &format!("bytes from {from}"));
+        }
+        let frames = match self.streams.get_mut(&from).map(|d| d.push(bytes)) {
+            Some(Ok(frames)) => frames,
+            Some(Err(e)) => {
+                self.breach(cx, Rule::Garbled, &format!("from {from}: {e}"));
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        for payload in frames {
+            if self.check_frame(cx, from, &payload) == Some(GOODBYE) {
+                self.count(|r| &mut r.goodbyes_received);
+                // Half the time the receiver keeps the connection open, so
+                // that the goodbye's sender ends it: its own timer, or, for a
+                // stopped peer, the runtime's flush.
+                if !self.hung_up.contains(&from) && random(cx) % 2 == 0 {
+                    self.hang_up(cx, from);
+                }
+            }
+        }
         self.act(cx, false);
     }
 
     fn on_timer(&mut self, cx: &mut dyn Context, id: TimerId) {
         self.begin(cx, "on_timer");
-        if id == AUX {
-            if !self.aux_armed {
-                self.breach(cx, Rule::UnarmedTimerFired, "the spare timer fired unarmed");
-            }
-            self.aux_armed = false;
-        } else if id == KICK && !quiet(cx) {
+        self.count(|r| &mut r.timers_fired);
+        if id.as_u64() / TIMER_BLOCK != self.instance {
+            self.breach(
+                cx,
+                Rule::ForeignTimer,
+                &format!("timer {id}, armed by an earlier instance"),
+            );
+            return;
+        }
+        match self.deadlines.remove(&id) {
+            None => self.breach(
+                cx,
+                Rule::UnarmedTimerFired,
+                &format!("timer {id} fired unarmed"),
+            ),
+            Some(at) if cx.now() < at => self.breach(
+                cx,
+                Rule::EarlyTimer,
+                &format!("timer {id} fired before its deadline {at}"),
+            ),
+            Some(_) => {}
+        }
+        let slot = id.as_u64() % TIMER_BLOCK;
+        if slot == TICK_SLOT && !quiet(cx) {
             let at = cx
                 .now()
                 .saturating_add(Duration::from_millis(100 + random(cx) % 900));
-            cx.set_timer(KICK, at);
+            self.arm(cx, TICK_SLOT, at);
+        } else if slot >= GOODBYE_SLOT {
+            let to = PeerId::new(slot - GOODBYE_SLOT);
+            if self.leaving.contains(&to) && !self.hung_up.contains(&to) {
+                self.hang_up(cx, to);
+            }
+            return;
         }
         self.act(cx, true);
     }
@@ -506,11 +730,12 @@ impl Peer for Prober {
             },
         );
         self.incoming.remove(&peer);
+        self.streams.insert(peer, Deframer::new(PAYLOAD));
         if quiet(cx) {
             return;
         }
-        self.send(cx, peer);
-        if random(cx) % 5 == 0 {
+        self.write(cx, peer, DATA);
+        if random(cx) % 60 == 0 {
             self.hang_up(cx, peer);
         }
         self.act(cx, true);
@@ -526,14 +751,22 @@ impl Peer for Prober {
             );
         }
         self.incoming.remove(&peer);
+        self.streams.remove(&peer);
         self.hung_up.remove(&peer);
+        if self.leaving.remove(&peer) {
+            self.disarm(cx, GOODBYE_SLOT.saturating_add(peer.as_u64()));
+        }
         if quiet(cx) {
             return;
         }
         let r = random(cx);
-        if r % 3 == 0 {
+        if r % 20 == 0 {
             if let Some(q) = self.pick(r >> 8) {
-                self.hang_up(cx, q);
+                if (r >> 16) % 2 == 0 {
+                    self.hang_up(cx, q);
+                } else {
+                    self.say_goodbye(cx, q);
+                }
             }
         }
         self.act(cx, true);
@@ -541,19 +774,37 @@ impl Peer for Prober {
 
     fn on_stop(&mut self, cx: &mut dyn Context) {
         self.begin(cx, "on_stop");
-        self.act(cx, true);
+        if !quiet(cx) {
+            let peers: Vec<PeerId> = self.out.keys().copied().collect();
+            for q in peers {
+                if self.leaving.contains(&q) {
+                    continue;
+                }
+                if random(cx) % 3 == 0 {
+                    self.hang_up(cx, q);
+                    self.count(|r| &mut r.stop_hang_ups);
+                } else if self.write(cx, q, GOODBYE) {
+                    self.leaving.insert(q);
+                    self.count(|r| &mut r.goodbyes_sent);
+                }
+            }
+            self.act(cx, true);
+        }
         self.stopped = true;
     }
 }
 
 /// The `contract` scenario for `seed`, and the report its probers write to.
 /// Five probers over a network with latencies of 1 to 300 ms that drops one
-/// message in twenty and reconnects in 10 to 500 ms; twelve crashes or clean
-/// stops, each restarted 0.7 s later, rotating over the peers by seed; peers
-/// 0 and 1 cut from 2 and 3 from 3 s to 9 s; and a reconnection of every pair
-/// at 0.333 s past each second up to 24 s, the way back after a hang-up.
-/// Converged when no prober saw a breach and none still waits for an answer
-/// to a hang-up.
+/// piece in twenty and reconnects in 10 to 500 ms; twelve crashes or clean
+/// stops, each restarted 0.7 s later, rotating over the peers by seed, half of
+/// them just after a reconnection round so that they find connections open;
+/// peers 0 and 1 cut from 2 and 3 from 3 s to 9 s; and a reconnection of
+/// every pair at 0.333 s past each second up to 24 s, the way back after a
+/// hang-up. A goodbye's receiver hangs up half the time and otherwise leaves
+/// the end to the goodbye's sender, so that the flush after a clean stop also
+/// ends connections by draining. Converged when no prober saw a breach and
+/// none still waits for an answer to a hang-up or a goodbye.
 #[must_use]
 pub fn scenario(seed: u64) -> (Scenario<Prober>, SharedReport) {
     let report: SharedReport = Rc::default();
@@ -574,7 +825,12 @@ pub fn scenario(seed: u64) -> (Scenario<Prober>, SharedReport) {
     for k in 0..12u64 {
         let peer = PeerId::new(seed.wrapping_add(k) % peers);
         let second = 1 + 2 * k;
-        let at = Instant::from_millis(second * 1000 + (seed % 7) * 13);
+        let offset = if k % 4 < 2 {
+            333 + 5 + (seed % 7) * 3
+        } else {
+            (seed % 7) * 13
+        };
+        let at = Instant::from_millis(second * 1000 + offset);
         s = s.fault(if k % 2 == 0 {
             Fault::Crash { peer, at }
         } else {
@@ -608,16 +864,18 @@ pub fn scenario(seed: u64) -> (Scenario<Prober>, SharedReport) {
 }
 
 /// Runs the `contract` scenario for `seed` until it is quiescent, and returns
-/// the outcome with what the probers saw. The outcome is converged only when
-/// the report is clean; the [`Rule::UnansweredHangUp`] entries, which the
-/// predicate counts from the probers still running, are written into the
-/// returned report here so that it says which peer it was.
+/// the outcome with what the probers saw and what the network did. The
+/// outcome is converged only when the report is clean; the
+/// [`Rule::UnansweredHangUp`] entries, which the predicate counts from the
+/// probers still running, are written into the returned report here so that
+/// it says which peer it was.
 #[must_use]
 pub fn run(seed: u64) -> (Outcome, Report) {
     let (s, shared) = scenario(seed);
     let mut sim = s.build();
     let outcome = sim.run_until_quiescent(LIMIT);
     let mut report = shared.borrow().clone();
+    report.net = sim.stats().clone();
     for (id, p) in sim.peers() {
         if p.pending_hang_ups() > 0 {
             report.breach(
@@ -638,11 +896,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn messages_round_trip_and_anything_else_is_garbled() {
-        assert_eq!(decode(&encode(3, 4, 5)), Some((3, 4, 5)));
-        assert_eq!(decode(&encode(u64::MAX, 0, 1)), Some((u64::MAX, 0, 1)));
-        assert_eq!(decode(&[0; 23]), None);
-        assert_eq!(decode(&[0; 25]), None);
+    fn frames_round_trip_and_anything_else_is_garbled() {
+        assert_eq!(decode(&encode(3, 4, 5, DATA)), Some((3, 4, 5, DATA)));
+        assert_eq!(
+            decode(&encode(u64::MAX, 0, 1, GOODBYE)),
+            Some((u64::MAX, 0, 1, GOODBYE))
+        );
+        assert_eq!(decode(&encode(1, 1, 1, 2)), None, "an unknown kind");
+        assert_eq!(decode(&[0; 24]), None);
+        assert_eq!(decode(&[0; 26]), None);
         assert_eq!(decode(&[]), None);
     }
 
@@ -661,44 +923,68 @@ mod tests {
         let mut b = Report {
             instances: 2,
             sends: 3,
-            messages: 4,
-            hang_ups: 5,
-            cancels: 6,
+            chunks: 4,
+            frames: 5,
+            hang_ups: 6,
+            goodbyes_sent: 7,
+            goodbyes_received: 8,
+            stop_hang_ups: 9,
+            cancels: 10,
+            timers_fired: 11,
+            net: NetStats {
+                opened: 12,
+                ..NetStats::default()
+            },
             ..Report::default()
         };
         b.breach(Rule::OutOfOrder, "b's".into());
         b.breach(Rule::CallAfterStop, "late".into());
         a.absorb(&b);
+        a.absorb(&Report::default());
         assert_eq!(a.breaches_of(Rule::OutOfOrder), 3);
         assert_eq!(a.first(Rule::OutOfOrder), Some("first"));
         assert_eq!(a.first(Rule::CallAfterStop), Some("late"));
         assert_eq!(
-            (
+            [
                 a.instances(),
                 a.sends(),
-                a.messages(),
+                a.chunks(),
+                a.frames(),
                 a.hang_ups(),
-                a.cancels()
-            ),
-            (2, 3, 4, 5, 6)
+                a.goodbyes_sent(),
+                a.goodbyes_received(),
+                a.stop_hang_ups(),
+                a.cancels(),
+                a.timers_fired(),
+                a.net().opened
+            ],
+            [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         );
         let text = a.to_string();
         assert!(
-            text.starts_with("5 breaches; 2 instances, 3 sends"),
+            text.starts_with("5 breaches; 2 instances, 3 sends, 5 frames checked in 4 chunks"),
             "{text}"
         );
+        assert!(text.contains("network: 12 connections opened"), "{text}");
         assert!(text.contains("OutOfOrder: 3, first: first"), "{text}");
         assert!(text.contains("CallAfterStop: 1, first: late"), "{text}");
-        assert_eq!(Rule::ALL.len(), 10);
+        assert_eq!(Rule::ALL.len(), 14);
     }
 
     #[test]
-    fn instances_are_numbered_in_the_order_they_are_built() {
+    fn instances_are_numbered_in_the_order_they_are_built_and_own_their_timer_blocks() {
         let report: SharedReport = Rc::default();
         let a = Prober::new(Rc::clone(&report));
         let b = Prober::new(Rc::clone(&report));
         assert_eq!((a.instance, b.instance), (1, 2));
         assert_eq!(report.borrow().instances(), 2);
         assert_eq!(a.pending_hang_ups(), 0);
+        assert_eq!(a.timer(TICK_SLOT), TimerId::new(16));
+        assert_eq!(b.timer(SPARE_SLOT), TimerId::new(33));
+        assert_eq!(
+            b.timer(GOODBYE_SLOT + u64::from(PEERS) - 1).as_u64() / TIMER_BLOCK,
+            2,
+            "every goodbye timer of an instance stays in its block"
+        );
     }
 }

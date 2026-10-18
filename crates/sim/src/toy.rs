@@ -12,25 +12,34 @@
 //! reconnection starts with a fresh exchange, so nothing relies on a lost
 //! message being sent again) and however messages on different connections
 //! overtake each other, and a restarted peer comes back with what it had
-//! committed. It reads the wall clock on every tick, only to show that the
-//! clock reaches a peer; nothing it decides depends on it. It is deliberately
+//! committed. The transport carries bytes in chunks split anywhere, so each
+//! set travels as one frame of the [`crate::frame`] format and each
+//! connection has its own [`Deframer`]; a frame that announces more than a
+//! set may hold makes the receiver hang up. It reads the wall clock on every
+//! tick, only to show that the clock reaches a peer; nothing it decides
+//! depends on it. It is deliberately
 //! simple: it exists so that every handler of the engine's [`Peer`] trait and
 //! every fault the simulator injects is exercised by the tests, not to resemble
 //! the real engine.
 
 use core::time::Duration;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use licketysync_engine::runtime::{Context, Instant, Peer, PeerId, TimerId};
 
+use crate::frame::{frame, Deframer};
 use crate::scenario::Sim;
 
 /// The gossip tick.
 pub const TICK: TimerId = TimerId::new(1);
 
-/// The most items a message may carry; longer ones are ignored, as every peer
-/// must ignore what it cannot afford to parse.
+/// The most items a message may carry; a frame announcing more makes the
+/// receiver hang up before it buffers any of it, as every peer must refuse
+/// what it cannot afford to parse.
 pub const MAX_ITEMS_PER_MESSAGE: usize = 65_536;
+
+/// The longest frame payload a toy peer accepts: a full set.
+const MAX_FRAME: usize = MAX_ITEMS_PER_MESSAGE * 8;
 
 const ITEM_PREFIX: &[u8] = b"item/";
 const CLEAN_STOP_KEY: &[u8] = b"clean-stop";
@@ -41,6 +50,7 @@ pub struct SetUnion {
     items: BTreeSet<u64>,
     unsaved: BTreeSet<u64>,
     peers: BTreeSet<PeerId>,
+    streams: BTreeMap<PeerId, Deframer>,
     items_per_peer: u32,
     tick: Duration,
     deaf: bool,
@@ -57,6 +67,7 @@ impl SetUnion {
             items: BTreeSet::new(),
             unsaved: BTreeSet::new(),
             peers: BTreeSet::new(),
+            streams: BTreeMap::new(),
             items_per_peer,
             tick,
             deaf: false,
@@ -168,8 +179,33 @@ impl SetUnion {
     }
 
     fn send_to(&mut self, cx: &mut dyn Context, to: PeerId) {
-        if cx.send(to, Self::encode(&self.items)).is_err() {
+        let Some(message) = frame(&Self::encode(&self.items)) else {
+            return;
+        };
+        if cx.send(to, message).is_err() {
             self.peers.remove(&to);
+        }
+    }
+
+    /// One whole set from `from`.
+    fn on_set(&mut self, cx: &mut dyn Context, from: PeerId, payload: &[u8]) {
+        let Some(theirs) = Self::decode(payload) else {
+            return;
+        };
+        let theirs: BTreeSet<u64> = theirs.into_iter().collect();
+        let mut learned = false;
+        for item in &theirs {
+            if self.items.insert(*item) {
+                self.unsaved.insert(*item);
+                learned = true;
+            }
+        }
+        if learned {
+            self.persist(cx);
+            self.broadcast(cx, Some(from));
+        }
+        if self.items.iter().any(|item| !theirs.contains(item)) {
+            self.send_to(cx, from);
         }
     }
 
@@ -209,23 +245,17 @@ impl Peer for SetUnion {
         if self.deaf {
             return;
         }
-        let Some(theirs) = Self::decode(bytes) else {
+        let Some(stream) = self.streams.get_mut(&from) else {
             return;
         };
-        let theirs: BTreeSet<u64> = theirs.into_iter().collect();
-        let mut learned = false;
-        for item in &theirs {
-            if self.items.insert(*item) {
-                self.unsaved.insert(*item);
-                learned = true;
+        if let Ok(frames) = stream.push(bytes) {
+            for payload in frames {
+                self.on_set(cx, from, &payload);
             }
-        }
-        if learned {
-            self.persist(cx);
-            self.broadcast(cx, Some(from));
-        }
-        if self.items.iter().any(|item| !theirs.contains(item)) {
-            self.send_to(cx, from);
+        } else {
+            self.streams.remove(&from);
+            self.peers.remove(&from);
+            cx.close(from);
         }
     }
 
@@ -250,11 +280,13 @@ impl Peer for SetUnion {
 
     fn on_connected(&mut self, cx: &mut dyn Context, peer: PeerId) {
         self.peers.insert(peer);
+        self.streams.insert(peer, Deframer::new(MAX_FRAME));
         self.send_to(cx, peer);
     }
 
     fn on_disconnected(&mut self, _cx: &mut dyn Context, peer: PeerId) {
         self.peers.remove(&peer);
+        self.streams.remove(&peer);
     }
 
     fn on_stop(&mut self, cx: &mut dyn Context) {

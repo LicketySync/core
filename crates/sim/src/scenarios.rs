@@ -197,7 +197,7 @@ static ALL: [NamedScenario; 11] = [
     },
     NamedScenario {
         name: "drops",
-        about: "a fifth of messages take their connection down; back in 0.1 to 1 s",
+        about: "a fifth of pieces take their connection down; back in 0.1 to 1 s",
         run: drops,
     },
     NamedScenario {

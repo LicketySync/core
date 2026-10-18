@@ -18,22 +18,28 @@ use std::collections::VecDeque;
 
 use licketysync_engine::runtime::{Instant, PeerId, TimerId};
 
-/// Why a message was not delivered.
+/// Why bytes were not handed to their receiver. `len` in the event says how
+/// many: one piece for `Lost`, `NotRunning` and `Stale`, one write for
+/// `Closed` and `Overflow`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DropReason {
-    /// The network lost it and took its connection down with it (the
+    /// The network lost this piece and took its connection down with it (the
     /// configured drop probability).
     Lost = 0,
-    /// The destination was not running when it arrived.
+    /// The receiver was not running: it had crashed or stopped.
     NotRunning = 1,
-    /// The connection it was sent on had closed; it arrived in a later epoch.
+    /// The connection ended while this piece was in flight, and it was not
+    /// among the prefix that still arrived (`deliver_at_close`).
     Stale = 2,
-    /// The connection had closed before the network took the message. The
-    /// sender was right to send it: it had heard `on_connected` and not yet
+    /// The connection had closed before the write was taken. The sender was
+    /// right to write: it had heard `on_connected` and not yet
     /// `on_disconnected`, either because the other side hung up inside its own
     /// `on_connected` in the same batch, or because the notice of the close
     /// had not reached the sender yet.
     Closed = 3,
+    /// The write would have taken the stream past its bound on bytes not yet
+    /// handed over (`max_send_queue`), so the connection was ended instead.
+    Overflow = 4,
 }
 
 /// Which storage call failed.
@@ -75,7 +81,8 @@ pub enum EventKind {
     /// The peer hung up on `PeerId`; the `Disconnected` events follow when a
     /// connection was open.
     Close(PeerId),
-    /// These bytes from `from` reached the peer's `on_message`.
+    /// These bytes from `from` reached the peer's `on_message`: one chunk of
+    /// the stream, cut wherever the network chose.
     Deliver {
         /// The sender.
         from: PeerId,
@@ -412,9 +419,10 @@ mod tests {
                 DropReason::Lost as u8,
                 DropReason::NotRunning as u8,
                 DropReason::Stale as u8,
-                DropReason::Closed as u8
+                DropReason::Closed as u8,
+                DropReason::Overflow as u8
             ],
-            [0, 1, 2, 3]
+            [0, 1, 2, 3, 4]
         );
         assert_eq!(
             [
@@ -475,6 +483,11 @@ mod tests {
                 to: p,
                 len: 4,
                 reason: DropReason::Closed,
+            },
+            EventKind::Dropped {
+                to: p,
+                len: 4,
+                reason: DropReason::Overflow,
             },
             EventKind::TimerSet {
                 id: t,

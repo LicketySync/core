@@ -12,10 +12,10 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 
 use licketysync_engine::runtime::{
     Clock, Context, Entry, Instant, Peer, PeerId, Randomness, SendError, Storage, StorageError,
-    TimerId, Timers, Transport,
+    TimerId, Timers, Transport, MAX_CHUNK,
 };
 
-use crate::network::{Links, NetworkConfig, Partition};
+use crate::network::{Links, NetworkConfig, Partition, Piece, Probability, Stream};
 use crate::rng::SimRng;
 use crate::storage::SimStorage;
 use crate::trace::{DropReason, EventKind, StorageOp, Trace, TraceEvent};
@@ -36,6 +36,15 @@ pub const DEFAULT_WALL_EPOCH: u64 = 1_767_225_600;
 /// re-arming a past deadline, two peers answering each other forever at one
 /// instant) stops in about a second.
 pub const DEFAULT_MAX_EVENTS: u64 = 1_000_000;
+
+/// How long a cleanly stopped peer's connections stay open so that what it
+/// wrote, `on_stop` included, can still arrive (protocol spec, 4.2). A stream
+/// that empties sooner ends then; what has not arrived by the end may be lost.
+pub const STOP_FLUSH: Duration = Duration::from_secs(1);
+
+/// The chance a cut takes all it can (up to `MAX_CHUNK`) as one piece rather
+/// than a shorter one of seeded length.
+const WHOLE_PIECE: Probability = Probability::from_per_million(500_000);
 
 /// A fault the scenario injects at a simulation time. Every time here is
 /// unskewed simulation time, not any peer's view of its clock; a window whose
@@ -149,9 +158,10 @@ impl<P: Peer> Scenario<P> {
         self
     }
 
-    /// Makes `peer`'s clocks, monotonic and wall, read `by` ahead of the
-    /// simulation's. Relative skew is what matters; to put one peer behind the
-    /// rest, put the rest ahead.
+    /// Makes `peer`'s clocks read `by` ahead: its wall clock against the
+    /// simulation's, and its monotonic clock against the start of each of its
+    /// instances (every instance's clock starts afresh, at `by`). Relative skew
+    /// is what matters; to put one peer behind the rest, put the rest ahead.
     #[must_use]
     pub fn clock_ahead(mut self, peer: PeerId, by: Duration) -> Self {
         self.skews.insert(peer, by);
@@ -230,6 +240,8 @@ impl<P: Peer> Scenario<P> {
             max_events: self.max_events,
             exhausted: false,
             notices: VecDeque::new(),
+            next_piece: 0,
+            stats: NetStats::default(),
         };
         for i in 0..self.peers {
             let id = PeerId::new(u64::from(i));
@@ -243,6 +255,7 @@ impl<P: Peer> Scenario<P> {
                     skew: self.skews.get(&id).copied().unwrap_or(Duration::ZERO),
                     timers: BTreeMap::new(),
                     heard: BTreeSet::new(),
+                    origin: Instant::ZERO,
                 },
             );
         }
@@ -276,24 +289,137 @@ struct Node<P> {
     /// `on_disconnected`: what its context reports as connected. It lags the
     /// network while a notice of a close is on its way (see [`Sim::settle`]),
     /// so a send in that window is accepted, as the transport contract says it
-    /// must be, and is lost with the connection.
+    /// must be, and may be lost.
     heard: BTreeSet<PeerId>,
+    /// Simulation time when the running instance started: its monotonic
+    /// clock reads the time since, plus the skew, so no `Instant` survives a
+    /// restart.
+    origin: Instant,
+}
+
+/// A notice owed to `to` that its connection to `about` ended, with the bytes
+/// of `about`'s stream that still reach it first (the prefix chosen when the
+/// connection ended).
+struct Notice {
+    to: PeerId,
+    about: PeerId,
+    chunks: VecDeque<Vec<u8>>,
+}
+
+/// Why a connection ended, which decides who may still receive what was in
+/// flight. The first peer named in [`Sim::end_connection`] is the one the
+/// cause belongs to: the one that hung up, sent the lost piece or the write
+/// past the bound, or went down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum End {
+    /// It hung up: it receives nothing more; the other side may.
+    HangUp,
+    /// Its piece was lost: the other side receives nothing more of its
+    /// stream (the prefix ended there); it may still receive.
+    Drop,
+    /// A partition cut them: both may.
+    Partition,
+    /// Its write passed the queue bound: both may.
+    Overflow,
+    /// It crashed: the other side may.
+    Crash,
+    /// It stopped cleanly and its stream drained, ran out of time or was cut
+    /// by its restart: the other side may.
+    Stop,
+}
+
+/// What the network did over a run, for activity floors: a run in which
+/// nothing happens checks nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetStats {
+    /// Connections opened.
+    pub opened: u64,
+    /// Connections ended by a peer's `Transport::close`.
+    pub hung_up: u64,
+    /// Connections ended by a lost piece.
+    pub dropped: u64,
+    /// Connections ended by a partition starting.
+    pub partitioned: u64,
+    /// Connections ended because a write passed the send-queue bound.
+    pub overflowed: u64,
+    /// Connections ended by a crash of one end.
+    pub crashed: u64,
+    /// Connections ended by a clean stop of one end: at once when nothing it
+    /// wrote was still on its way, otherwise once its stream drained,
+    /// [`STOP_FLUSH`] ran out or it restarted.
+    pub stopped: u64,
+    /// Crashes and clean stops of a peer that had a connection open: some
+    /// live peer was going to hear of them.
+    pub downs_heard: u64,
+    /// Chunks handed to `on_message` while their connection lasted.
+    pub chunks: u64,
+    /// Pieces handed over after their connection had ended, just before the
+    /// receiver's `on_disconnected`.
+    pub delivered_at_close: u64,
+    /// Pieces lost because their connection ended.
+    pub lost_at_close: u64,
+}
+
+impl NetStats {
+    /// Adds `other`'s counts to these.
+    pub fn absorb(&mut self, other: &Self) {
+        for (mine, theirs) in [
+            (&mut self.opened, other.opened),
+            (&mut self.hung_up, other.hung_up),
+            (&mut self.dropped, other.dropped),
+            (&mut self.partitioned, other.partitioned),
+            (&mut self.overflowed, other.overflowed),
+            (&mut self.crashed, other.crashed),
+            (&mut self.stopped, other.stopped),
+            (&mut self.downs_heard, other.downs_heard),
+            (&mut self.chunks, other.chunks),
+            (&mut self.delivered_at_close, other.delivered_at_close),
+            (&mut self.lost_at_close, other.lost_at_close),
+        ] {
+            *mine = mine.saturating_add(theirs);
+        }
+    }
+}
+
+impl fmt::Display for NetStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} connections opened; ended by {} hang-ups, {} drops, {} partition cuts, \
+             {} overflows, {} crashes, {} stops; {} downs heard; {} chunks; at a close \
+             {} pieces delivered and {} lost",
+            self.opened,
+            self.hung_up,
+            self.dropped,
+            self.partitioned,
+            self.overflowed,
+            self.crashed,
+            self.stopped,
+            self.downs_heard,
+            self.chunks,
+            self.delivered_at_close,
+            self.lost_at_close
+        )
+    }
 }
 
 enum Event {
-    Deliver {
+    /// The end of the instant at which `from` wrote to `to`: what it wrote is
+    /// cut into pieces and sent on their way, if that connection (epoch) is
+    /// still open.
+    Cut {
         from: PeerId,
         to: PeerId,
-        bytes: Vec<u8>,
         epoch: u64,
     },
-    /// The message `from` sent to `to` is lost and takes the connection down
-    /// when its latency has elapsed, if that connection (epoch) is still open.
-    Drop {
+    /// Piece `piece` of `from -> to` arrives (or, if it is the lost one, takes
+    /// the connection down), if that connection is still open; a piece of an
+    /// ended connection was dealt with when it ended.
+    Arrive {
         from: PeerId,
         to: PeerId,
-        len: usize,
         epoch: u64,
+        piece: u64,
     },
     Timer {
         peer: PeerId,
@@ -311,9 +437,17 @@ enum FaultEvent {
     PartitionEnd(u64),
     DiskFull(PeerId),
     DiskFreed(PeerId),
-    /// From a `Fault::Reconnect`, or the network's own after a dropped
-    /// connection.
+    /// From a `Fault::Reconnect`.
     Reconnect(PeerId, PeerId),
+    /// The network's own reconnection after a drop, carrying the epoch the
+    /// drop left: if a connection between the pair has opened and closed
+    /// since, the epoch has moved and this does nothing (and while one is
+    /// open, connecting does nothing either). A hang-up when no connection is
+    /// open moves no epoch, so it does not cancel this.
+    NetReconnect(PeerId, PeerId, u64),
+    /// [`STOP_FLUSH`] after a clean stop: if the stopped peer's stream to the
+    /// other is still draining on that connection (epoch), it ends now.
+    DrainDeadline(PeerId, PeerId, u64),
 }
 
 /// A queue entry, ordered by time and then by creation order, so that two
@@ -433,6 +567,9 @@ struct SimContext<'a> {
     wall: u64,
     local: PeerId,
     connected: BTreeSet<PeerId>,
+    /// Bytes written and not yet handed to the network, per connected peer,
+    /// this handler's own writes included.
+    unsent: BTreeMap<PeerId, usize>,
     rng: &'a mut SimRng,
     fx: Effects<'a>,
 }
@@ -464,6 +601,8 @@ impl Transport for SimContext<'_> {
 
     fn send(&mut self, to: PeerId, bytes: Vec<u8>) -> Result<(), SendError> {
         if self.connected.contains(&to) {
+            let queued = self.unsent.entry(to).or_insert(0);
+            *queued = queued.saturating_add(bytes.len());
             self.fx.list.push(Effect::Send { to, bytes });
             Ok(())
         } else {
@@ -474,8 +613,17 @@ impl Transport for SimContext<'_> {
         }
     }
 
+    fn unsent(&self, to: PeerId) -> usize {
+        if self.connected.contains(&to) {
+            self.unsent.get(&to).copied().unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
     fn close(&mut self, to: PeerId) {
         self.connected.remove(&to);
+        self.unsent.remove(&to);
         self.fx.list.push(Effect::Close(to));
     }
 }
@@ -508,8 +656,8 @@ pub struct Outcome {
     pub exhausted: bool,
     /// How many events were processed.
     pub events: u64,
-    /// Messages still in flight at the end, a lost message that has not yet
-    /// taken its connection down included.
+    /// Pieces still in flight at the end (a lost one that has not yet taken
+    /// its connection down included), and streams with writes not yet cut.
     pub in_flight: usize,
     /// The hash of every event; two runs with the same seed have the same.
     pub trace_hash: u64,
@@ -573,11 +721,13 @@ pub struct Sim<P> {
     wall_epoch: u64,
     max_events: u64,
     exhausted: bool,
-    /// `(to, about)`: `to` is still to hear `on_disconnected(about)`. Closing a
+    /// Notices of ended connections still to be delivered. Ending a
     /// connection only queues its two notices; [`Sim::settle`] delivers them,
     /// first in first out, once the handler (or the pair of `on_connected`
-    /// handlers) that caused the close has had all its effects applied.
-    notices: VecDeque<(PeerId, PeerId)>,
+    /// handlers) that caused the end has had all its effects applied.
+    notices: VecDeque<Notice>,
+    next_piece: u64,
+    stats: NetStats,
 }
 
 impl<P: Peer> Sim<P> {
@@ -631,7 +781,11 @@ impl<P: Peer> Sim<P> {
     /// `on_connected` for the other and neither `on_disconnected` since (the
     /// two agree whenever this can be asked, since every step ends with the
     /// notices of its closes delivered). Two running, unpartitioned peers are
-    /// not connected while a dropped connection waits to come back.
+    /// not connected while a dropped connection waits to come back. A cleanly
+    /// stopped peer's connection still counts as open while its stream drains
+    /// (for up to [`STOP_FLUSH`]), though only the other side is listening:
+    /// it ends once the stream has drained, or the stopped peer restarts, and
+    /// at the latest when the flush runs out.
     #[must_use]
     pub fn is_connected(&self, a: PeerId, b: PeerId) -> bool {
         self.links.is_open(a, b)
@@ -643,14 +797,23 @@ impl<P: Peer> Sim<P> {
         (self.predicate)(self)
     }
 
-    /// Messages scheduled for delivery, or to take their connection down.
+    /// Pieces in flight (to arrive, or to take their connection down) and
+    /// streams with writes not yet cut.
     #[must_use]
     pub const fn in_flight(&self) -> usize {
         self.in_flight
     }
 
-    /// Fault events still to come, the reconnections after dropped
-    /// connections among them.
+    /// What the network has done so far.
+    #[must_use]
+    pub const fn stats(&self) -> &NetStats {
+        &self.stats
+    }
+
+    /// Fault events still to come, among them the reconnections after dropped
+    /// connections and, for each connection a clean stop left draining, its
+    /// flush deadline [`STOP_FLUSH`] (1 s) later, which counts until it comes
+    /// even when the stream drained sooner.
     #[must_use]
     pub const fn pending_faults(&self) -> usize {
         self.pending_faults
@@ -718,24 +881,13 @@ impl<P: Peer> Sim<P> {
         self.now = next.time;
         self.processed = self.processed.saturating_add(1);
         match next.event {
-            Event::Deliver {
+            Event::Cut { from, to, epoch } => self.cut(from, to, epoch),
+            Event::Arrive {
                 from,
                 to,
-                bytes,
                 epoch,
-            } => {
-                self.in_flight = self.in_flight.saturating_sub(1);
-                self.deliver(from, to, &bytes, epoch);
-            }
-            Event::Drop {
-                from,
-                to,
-                len,
-                epoch,
-            } => {
-                self.in_flight = self.in_flight.saturating_sub(1);
-                self.drop_connection(from, to, len, epoch);
-            }
+                piece,
+            } => self.arrive(from, to, epoch, piece),
             Event::Timer {
                 peer,
                 id,
@@ -878,12 +1030,19 @@ impl<P: Peer> Sim<P> {
             return Vec::new();
         };
         let connected = node.heard.clone();
-        let skewed = now.saturating_add(node.skew);
+        let unsent = connected
+            .iter()
+            .map(|q| (*q, self.links.stream(id, *q).map_or(0, |s| s.unsent.len())))
+            .collect();
+        let local = Instant::ZERO
+            .saturating_add(now.saturating_duration_since(node.origin))
+            .saturating_add(node.skew);
         let mut cx = SimContext {
-            now: skewed,
-            wall: wall_epoch.saturating_add(skewed.as_secs()),
+            now: local,
+            wall: wall_epoch.saturating_add(now.saturating_add(node.skew).as_secs()),
             local: id,
             connected,
+            unsent,
             rng: &mut self.rng,
             fx: Effects {
                 storage: &mut node.storage,
@@ -910,10 +1069,11 @@ impl<P: Peer> Sim<P> {
 
     fn apply_effect(&mut self, id: PeerId, effect: Effect) {
         match effect {
-            Effect::Send { to, bytes } => self.send(id, to, bytes),
+            Effect::Send { to, bytes } => self.send(id, to, &bytes),
             Effect::Close(to) => {
                 self.record(Some(id), EventKind::Close(to));
-                self.disconnect(id, to);
+                self.end_connection(id, to, End::HangUp);
+                self.discard_owed(id, to);
             }
             Effect::SetTimer { id: timer, at } => {
                 self.timer_generation = self.timer_generation.wrapping_add(1);
@@ -922,7 +1082,10 @@ impl<P: Peer> Sim<P> {
                     return;
                 };
                 node.timers.insert(timer, generation);
-                let at_sim = at.checked_sub(node.skew).unwrap_or(Instant::ZERO);
+                let since_start = at.checked_sub(node.skew).unwrap_or(Instant::ZERO);
+                let at_sim = node
+                    .origin
+                    .saturating_add(Duration::from_nanos(since_start.as_nanos()));
                 self.record(Some(id), EventKind::TimerSet { id: timer, at });
                 self.schedule(
                     at_sim,
@@ -943,108 +1106,315 @@ impl<P: Peer> Sim<P> {
         }
     }
 
-    /// Puts a message on the open connection `from -> to`: it arrives after
-    /// its latency, behind everything sent before it in that direction, or,
-    /// with the configured probability, takes the connection down instead.
-    /// The handler that queued it had heard `on_connected` and no
+    /// Appends a write to the open connection's stream `from -> to`. What is
+    /// written at one instant is gathered and cut into pieces at its end (see
+    /// [`Sim::cut`]). The writer had heard `on_connected` and no
     /// `on_disconnected`; if the connection has closed anyway (the other side
-    /// of a `connect` hung up inside `on_connected`, or the notice of a close
-    /// has not reached `from` yet), the message is lost here as
-    /// `DropReason::Closed`.
-    fn send(&mut self, from: PeerId, to: PeerId, bytes: Vec<u8>) {
+    /// of a `connect` hung up inside `on_connected`, or the notice of an end
+    /// has not reached `from` yet), the write is lost here as
+    /// `DropReason::Closed`. A write that would take the stream's unsent
+    /// queue (written at this instant, not yet cut) past its bound ends the
+    /// connection instead (`DropReason::Overflow`).
+    fn send(&mut self, from: PeerId, to: PeerId, bytes: &[u8]) {
         self.record(
             Some(from),
             EventKind::Send {
                 to,
-                bytes: bytes.clone(),
+                bytes: bytes.to_vec(),
             },
         );
-        if !self.links.is_open(from, to) {
-            self.record(
-                Some(from),
-                EventKind::Dropped {
-                    to,
-                    len: bytes.len(),
-                    reason: DropReason::Closed,
-                },
-            );
-            return;
-        }
-        let epoch = self.links.epoch(from, to);
-        let latency = self
-            .rng
-            .duration_between(self.network.min_latency, self.network.max_latency);
-        let at = self.links.fifo(from, to, self.now.saturating_add(latency));
-        let event = if self.rng.chance(self.network.drop) {
-            Event::Drop {
-                from,
-                to,
-                len: bytes.len(),
-                epoch,
-            }
-        } else {
-            Event::Deliver {
-                from,
-                to,
-                bytes,
-                epoch,
-            }
-        };
-        self.in_flight = self.in_flight.saturating_add(1);
-        self.schedule(at, event);
-    }
-
-    fn deliver(&mut self, from: PeerId, to: PeerId, bytes: &[u8], epoch: u64) {
-        let reason = if !self.is_running(to) {
-            Some(DropReason::NotRunning)
-        } else if self.links.epoch(from, to) != epoch {
-            Some(DropReason::Stale)
+        let len = bytes.len();
+        let reason = if !self.links.is_open(from, to) {
+            Some(DropReason::Closed)
+        } else if self
+            .links
+            .stream(from, to)
+            .map_or(0, |s| s.unsent.len())
+            .saturating_add(len)
+            > self.network.max_send_queue
+        {
+            Some(DropReason::Overflow)
         } else {
             None
         };
         if let Some(reason) = reason {
+            self.record(Some(from), EventKind::Dropped { to, len, reason });
+            if reason == DropReason::Overflow {
+                self.end_connection(from, to, End::Overflow);
+            }
+            return;
+        }
+        if bytes.is_empty() {
+            return;
+        }
+        let epoch = self.links.epoch(from, to);
+        let stream = self.links.stream_mut(from, to);
+        stream.unsent.extend_from_slice(bytes);
+        stream.queued = stream.queued.saturating_add(len);
+        if !stream.cut_pending {
+            stream.cut_pending = true;
+            self.in_flight = self.in_flight.saturating_add(1);
+            self.schedule(self.now, Event::Cut { from, to, epoch });
+        }
+    }
+
+    /// Seeded piece lengths for `len` bytes: each at most `MAX_CHUNK`, half
+    /// the time as long as it can be, otherwise of a length drawn below that.
+    fn piece_lengths(&mut self, mut len: usize) -> Vec<usize> {
+        let mut lengths = Vec::new();
+        while len > 0 {
+            let most = len.min(MAX_CHUNK);
+            let this = if self.rng.chance(WHOLE_PIECE) {
+                most
+            } else {
+                let bound = u64::try_from(most).unwrap_or(u64::MAX);
+                usize::try_from(self.rng.below(bound)).map_or(most, |n| n.saturating_add(1))
+            };
+            lengths.push(this);
+            len = len.saturating_sub(this);
+        }
+        lengths
+    }
+
+    /// Cuts `bytes` into pieces of seeded lengths.
+    fn pieces_of(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
+        let mut rest = bytes;
+        let mut out = Vec::new();
+        for n in self.piece_lengths(bytes.len()) {
+            let (piece, tail) = rest.split_at(n.min(rest.len()));
+            out.push(piece.to_vec());
+            rest = tail;
+        }
+        out
+    }
+
+    /// The end of the instant at which `from` wrote to `to`: cuts what was
+    /// written into pieces and sends each on its way with its own latency,
+    /// behind every piece before it; each may be the one the network loses.
+    fn cut(&mut self, from: PeerId, to: PeerId, epoch: u64) {
+        if self.links.epoch(from, to) != epoch || !self.links.is_open(from, to) {
+            return;
+        }
+        let unsent = {
+            let stream = self.links.stream_mut(from, to);
+            if !stream.cut_pending {
+                return;
+            }
+            stream.cut_pending = false;
+            core::mem::take(&mut stream.unsent)
+        };
+        self.in_flight = self.in_flight.saturating_sub(1);
+        for bytes in self.pieces_of(&unsent) {
+            self.next_piece = self.next_piece.wrapping_add(1);
+            let id = self.next_piece;
+            let lost = self.rng.chance(self.network.drop);
+            let latency = self
+                .rng
+                .duration_between(self.network.min_latency, self.network.max_latency);
+            let proposed = self.now.saturating_add(latency);
+            let stream = self.links.stream_mut(from, to);
+            let at = stream.arrival(proposed);
+            stream.travelling.push_back(Piece { id, bytes, lost });
+            self.in_flight = self.in_flight.saturating_add(1);
+            self.schedule(
+                at,
+                Event::Arrive {
+                    from,
+                    to,
+                    epoch,
+                    piece: id,
+                },
+            );
+        }
+    }
+
+    /// Piece `id` of `from -> to` reaches the far end. A lost piece takes the
+    /// connection down and schedules the network's reconnection; any other
+    /// is handed to the receiver as one `on_message`, or dropped if the
+    /// receiver is a stopped peer whose own stream is still draining. When a
+    /// stopped sender's stream has drained, its connection ends.
+    fn arrive(&mut self, from: PeerId, to: PeerId, epoch: u64, id: u64) {
+        if self.links.epoch(from, to) != epoch || !self.links.is_open(from, to) {
+            return;
+        }
+        let piece = {
+            let stream = self.links.stream_mut(from, to);
+            if stream.travelling.front().map(|p| p.id) != Some(id) {
+                return;
+            }
+            let Some(piece) = stream.travelling.pop_front() else {
+                return;
+            };
+            stream.queued = stream.queued.saturating_sub(piece.bytes.len());
+            piece
+        };
+        self.in_flight = self.in_flight.saturating_sub(1);
+        let len = piece.bytes.len();
+        if piece.lost {
             self.record(
                 Some(from),
                 EventKind::Dropped {
                     to,
-                    len: bytes.len(),
-                    reason,
+                    len,
+                    reason: DropReason::Lost,
                 },
             );
-        } else {
+            self.end_connection(from, to, End::Drop);
+            let delay = self
+                .rng
+                .duration_between(self.network.min_reconnect, self.network.max_reconnect);
+            let after = self.links.epoch(from, to);
+            self.schedule_fault_event(
+                self.now.saturating_add(delay),
+                FaultEvent::NetReconnect(from, to, after),
+            );
+            return;
+        }
+        if self.is_running(to) {
             self.record(
                 Some(to),
                 EventKind::Deliver {
                     from,
-                    bytes: bytes.to_vec(),
+                    bytes: piece.bytes.clone(),
                 },
             );
-            self.invoke(to, Call::Message(from, bytes));
+            self.stats.chunks = self.stats.chunks.saturating_add(1);
+            self.invoke(to, Call::Message(from, &piece.bytes));
+        } else {
+            self.record(
+                Some(from),
+                EventKind::Dropped {
+                    to,
+                    len,
+                    reason: DropReason::NotRunning,
+                },
+            );
+        }
+        let drained = self.links.stream(from, to).is_none_or(Stream::is_empty);
+        if self.links.is_draining(from, to) && drained {
+            self.end_connection(from, to, End::Stop);
         }
     }
 
-    /// The lost message's moment: if the connection it was sent on is still
-    /// the open one, it goes down now and a reconnection is scheduled; if
-    /// something closed it first, the message is merely stale.
-    fn drop_connection(&mut self, from: PeerId, to: PeerId, len: usize, epoch: u64) {
-        let current = self.links.is_open(from, to) && self.links.epoch(from, to) == epoch;
-        let reason = if current {
-            DropReason::Lost
-        } else {
-            DropReason::Stale
-        };
-        self.record(Some(from), EventKind::Dropped { to, len, reason });
-        if !current {
+    /// Ends the open connection between `a` and `b`, if there is one, for the
+    /// reason `how` (whose cause is `a`). Each side that can still receive
+    /// is given a seeded prefix of what the other had in flight, to be handed
+    /// over just before its `on_disconnected`; the rest is lost. No handler
+    /// runs here: the two notices are queued, `a`'s first, and
+    /// [`Sim::settle`] delivers them once the handler that caused the end has
+    /// had every effect applied. Until a side has heard, it still counts the
+    /// connection as open; what it writes meanwhile is accepted and lost
+    /// (`DropReason::Closed`). Nothing here reconnects them: the network's
+    /// own reconnection after a drop, a `Fault::Reconnect`, a partition
+    /// ending or a restart does.
+    fn end_connection(&mut self, a: PeerId, b: PeerId, how: End) {
+        let Some((a_to_b, b_to_a)) = self.links.close(a, b) else {
             return;
+        };
+        let units = |s: &Stream| {
+            s.travelling
+                .len()
+                .saturating_add(usize::from(s.cut_pending))
+        };
+        self.in_flight = self
+            .in_flight
+            .saturating_sub(units(&a_to_b).saturating_add(units(&b_to_a)));
+        let count = match how {
+            End::HangUp => &mut self.stats.hung_up,
+            End::Drop => &mut self.stats.dropped,
+            End::Partition => &mut self.stats.partitioned,
+            End::Overflow => &mut self.stats.overflowed,
+            End::Crash => &mut self.stats.crashed,
+            End::Stop => &mut self.stats.stopped,
+        };
+        *count = count.saturating_add(1);
+        let (a_may, b_may) = match how {
+            End::HangUp | End::Crash | End::Stop => (false, true),
+            End::Drop => (true, false),
+            End::Partition | End::Overflow => (true, true),
+        };
+        let to_b = self.at_close(a, b, a_to_b, b_may && self.is_running(b));
+        let to_a = self.at_close(b, a, b_to_a, a_may && self.is_running(a));
+        self.notices.push_back(Notice {
+            to: a,
+            about: b,
+            chunks: to_a,
+        });
+        self.notices.push_back(Notice {
+            to: b,
+            about: a,
+            chunks: to_b,
+        });
+    }
+
+    /// A hang-up on a connection whose end is already on its way to `to`
+    /// (its notice still queued, or being handed over this moment) means `to`
+    /// receives nothing more on it: the bytes that notice would still have
+    /// handed over first are dropped.
+    fn discard_owed(&mut self, to: PeerId, about: PeerId) {
+        let mut owed = Vec::new();
+        for notice in &mut self.notices {
+            if notice.to == to && notice.about == about {
+                owed.extend(notice.chunks.drain(..));
+            }
         }
-        self.disconnect(from, to);
-        let delay = self
-            .rng
-            .duration_between(self.network.min_reconnect, self.network.max_reconnect);
-        self.schedule_fault_event(
-            self.now.saturating_add(delay),
-            FaultEvent::Reconnect(from, to),
-        );
+        for bytes in owed {
+            self.stats.lost_at_close = self.stats.lost_at_close.saturating_add(1);
+            self.record(
+                Some(about),
+                EventKind::Dropped {
+                    to,
+                    len: bytes.len(),
+                    reason: DropReason::Stale,
+                },
+            );
+        }
+    }
+
+    /// What of the ended stream `from -> to` still reaches `to`: when it may
+    /// receive, each travelling piece in order with the configured chance,
+    /// until the first that does not (or a lost one). Bytes written but not
+    /// yet handed to the network never left the sender and are lost with the
+    /// connection. Everything not handed over is recorded as dropped.
+    fn at_close(
+        &mut self,
+        from: PeerId,
+        to: PeerId,
+        stream: Stream,
+        may_receive: bool,
+    ) -> VecDeque<Vec<u8>> {
+        let mut pieces: Vec<(Vec<u8>, bool)> = stream
+            .travelling
+            .into_iter()
+            .map(|p| (p.bytes, p.lost))
+            .collect();
+        if !stream.unsent.is_empty() {
+            pieces.push((stream.unsent, true));
+        }
+        let reason = if self.is_running(to) {
+            DropReason::Stale
+        } else {
+            DropReason::NotRunning
+        };
+        let mut open = may_receive;
+        let mut handed = VecDeque::new();
+        for (bytes, lost) in pieces {
+            open = open && !lost && self.rng.chance(self.network.deliver_at_close);
+            if open {
+                handed.push_back(bytes);
+            } else {
+                self.stats.lost_at_close = self.stats.lost_at_close.saturating_add(1);
+                self.record(
+                    Some(from),
+                    EventKind::Dropped {
+                        to,
+                        len: bytes.len(),
+                        reason,
+                    },
+                );
+            }
+        }
+        handed
     }
 
     fn fire_timer(&mut self, peer: PeerId, id: TimerId, generation: u64) {
@@ -1081,6 +1451,16 @@ impl<P: Peer> Sim<P> {
                 }
             }
             FaultEvent::Reconnect(a, b) => self.connect(a, b),
+            FaultEvent::NetReconnect(a, b, epoch) => {
+                if self.links.epoch(a, b) == epoch {
+                    self.connect(a, b);
+                }
+            }
+            FaultEvent::DrainDeadline(p, q, epoch) => {
+                if self.links.epoch(p, q) == epoch && self.links.is_draining(p, q) {
+                    self.end_connection(p, q, End::Stop);
+                }
+            }
         }
     }
 
@@ -1092,6 +1472,7 @@ impl<P: Peer> Sim<P> {
             return;
         }
         node.peer = Some((self.factory)(id));
+        node.origin = self.now;
         self.record(Some(id), EventKind::Start);
         self.invoke(id, Call::Start);
     }
@@ -1115,8 +1496,8 @@ impl<P: Peer> Sim<P> {
     /// it no longer changes behaviour: applying `a`'s effects before running
     /// `b` would keep every guarantee above, and only move trace records and
     /// random draws, giving a different but equally valid run. It is kept
-    /// because it fixes that order, and so keeps every fingerprint recorded so
-    /// far.
+    /// because it keeps the trace order: both sides' `Connected` records come
+    /// before either side's effects.
     fn connect(&mut self, a: PeerId, b: PeerId) {
         self.settle();
         if !self.is_running(a) || !self.is_running(b) || self.links.cut(a, b) {
@@ -1125,6 +1506,7 @@ impl<P: Peer> Sim<P> {
         if !self.links.open(a, b) {
             return;
         }
+        self.stats.opened = self.stats.opened.saturating_add(1);
         self.record(Some(a), EventKind::Connected(b));
         self.hear_connected(a, b);
         let effects_a = self.run(a, Call::Connected(b));
@@ -1142,54 +1524,78 @@ impl<P: Peer> Sim<P> {
         }
     }
 
-    /// Delivers the notices of closed connections, first in first out: for
-    /// each, `to` hears `on_disconnected(about)` and that call's effects are
-    /// applied before the next notice is delivered. A close those effects ask
-    /// for queues its own notices behind the ones already waiting, so every
-    /// peer hears its connections end in the order they closed, and never in
-    /// the middle of applying another handler's effects. A notice for a peer
-    /// that is not running (it crashed or stopped meanwhile) or that never
-    /// heard `on_connected(about)` is dropped. Called at the end of every
-    /// step, before and after every `connect`, and at the end of a take-down.
-    /// It terminates: a notice is queued only when an open connection closes,
-    /// and nothing it runs can open one.
+    /// Delivers the notices of ended connections, first in first out: for
+    /// each, `to` is handed the bytes that still reach it, one `on_message`
+    /// each, then hears `on_disconnected(about)`, every call's effects applied
+    /// before the next. An end those effects cause queues its own notices
+    /// behind the ones already waiting, so each peer hears of its own
+    /// connections' ends one at a time, in the order the simulator ended
+    /// them, and never in the middle of applying another handler's effects;
+    /// that the simulator also keeps one order across peers is a property of
+    /// this simulator, not a promise of the runtime contract. A notice for a
+    /// peer that is not running (it crashed or stopped meanwhile) or that
+    /// never heard `on_connected(about)` is dropped, with its bytes. Called at
+    /// the end of every step, before and after every `connect`, and at the
+    /// end of a take-down. It terminates: a notice is queued only when an open
+    /// connection ends, and nothing it runs can open one.
     fn settle(&mut self) {
-        while let Some((to, about)) = self.notices.pop_front() {
-            let Some(node) = self.nodes.get_mut(&to) else {
+        while let Some((to, about)) = self.notices.front().map(|n| (n.to, n.about)) {
+            let listening = self
+                .nodes
+                .get(&to)
+                .is_some_and(|n| n.peer.is_some() && n.heard.contains(&about));
+            if !listening {
+                let chunks = self
+                    .notices
+                    .pop_front()
+                    .map(|n| n.chunks)
+                    .unwrap_or_default();
+                for bytes in chunks {
+                    self.stats.lost_at_close = self.stats.lost_at_close.saturating_add(1);
+                    self.record(
+                        Some(about),
+                        EventKind::Dropped {
+                            to,
+                            len: bytes.len(),
+                            reason: DropReason::NotRunning,
+                        },
+                    );
+                }
                 continue;
-            };
-            if node.peer.is_none() || !node.heard.remove(&about) {
+            }
+            // The notice stays at the front while its bytes are handed over,
+            // one chunk per call, so that a hang-up made in one of those calls
+            // still finds it and cancels the rest.
+            let next = self.notices.front_mut().and_then(|n| n.chunks.pop_front());
+            if let Some(bytes) = next {
+                self.stats.delivered_at_close = self.stats.delivered_at_close.saturating_add(1);
+                self.record(
+                    Some(to),
+                    EventKind::Deliver {
+                        from: about,
+                        bytes: bytes.clone(),
+                    },
+                );
+                self.invoke(to, Call::Message(about, &bytes));
                 continue;
+            }
+            self.notices.pop_front();
+            if let Some(node) = self.nodes.get_mut(&to) {
+                node.heard.remove(&about);
             }
             self.record(Some(to), EventKind::Disconnected(about));
             self.invoke(to, Call::Disconnected(about));
         }
     }
 
-    /// Closes the open connection between `a` and `b`, if there is one: what
-    /// was in flight on it is stale at once, and a notice for each side is
-    /// queued, `a`'s first. No handler runs here: when this is a hang-up
-    /// (`Transport::close`), the closing handler's remaining effects are
-    /// applied first, in the order it asked for them, and [`Sim::settle`]
-    /// then has both sides hear `on_disconnected`. Until a side has heard, it
-    /// still counts the connection as open; what it sends meanwhile is
-    /// accepted and lost (`DropReason::Closed`). Nothing here reconnects
-    /// them: the network's own reconnection after a drop, a
-    /// `Fault::Reconnect`, a partition ending or a restart does.
-    fn disconnect(&mut self, a: PeerId, b: PeerId) {
-        if !self.links.close(a, b) {
-            return;
-        }
-        self.notices.push_back((a, b));
-        self.notices.push_back((b, a));
-    }
-
-    /// Ends `p`'s process: `on_stop` first when graceful, its effects
-    /// applied; then every open connection closes, the instance, its timers,
-    /// what it had heard and its staged writes go, and each peer that was
-    /// connected hears `on_disconnected` with `p` already gone, in id order.
-    /// `p` itself is never called again: a notice owed to it (from a hang-up
-    /// inside `on_stop`) is dropped.
+    /// Ends `p`'s process. A crash ends every open connection at once; the
+    /// other side may still be handed part of what `p` had in flight. A clean
+    /// stop runs `on_stop` first, its effects applied, and then keeps each
+    /// connection open for up to [`STOP_FLUSH`] while `p`'s stream drains, so
+    /// what `p` wrote, `on_stop` included, can still arrive; a stream already
+    /// empty ends at once. Either way the instance, its timers, what it had
+    /// heard and its staged writes go, and `p` itself is never called again:
+    /// a notice owed to it (from a hang-up inside `on_stop`) is dropped.
     fn take_down(&mut self, p: PeerId, graceful: bool) {
         if !self.is_running(p) {
             return;
@@ -1198,9 +1604,6 @@ impl<P: Peer> Sim<P> {
             self.invoke(p, Call::Stop);
         }
         let others = self.links.open_with(p);
-        for q in &others {
-            self.links.close(p, *q);
-        }
         if let Some(node) = self.nodes.get_mut(&p) {
             node.peer = None;
             node.heard.clear();
@@ -1215,16 +1618,37 @@ impl<P: Peer> Sim<P> {
                 EventKind::Crash
             },
         );
+        if !others.is_empty() {
+            self.stats.downs_heard = self.stats.downs_heard.saturating_add(1);
+        }
         for q in others {
-            self.notices.push_back((q, p));
+            let pending = self.links.stream(p, q).is_some_and(|s| !s.is_empty());
+            if graceful && pending {
+                self.links.start_draining(p, q);
+                let epoch = self.links.epoch(p, q);
+                self.schedule_fault_event(
+                    self.now.saturating_add(STOP_FLUSH),
+                    FaultEvent::DrainDeadline(p, q, epoch),
+                );
+            } else {
+                self.end_connection(p, q, if graceful { End::Stop } else { End::Crash });
+            }
         }
         self.settle();
     }
 
+    /// Starts a fresh instance of `p`, with a fresh clock, and connects it to
+    /// every running peer it is not cut from. A connection the previous
+    /// instance was still draining ends first: a new process never inherits
+    /// one.
     fn bring_up(&mut self, p: PeerId) {
         if self.is_running(p) || !self.nodes.contains_key(&p) {
             return;
         }
+        for q in self.links.open_with(p) {
+            self.end_connection(p, q, End::Stop);
+        }
+        self.settle();
         self.start_peer(p);
         let others: Vec<PeerId> = self.nodes.keys().copied().filter(|q| *q != p).collect();
         for q in others {
@@ -1252,7 +1676,7 @@ impl<P: Peer> Sim<P> {
         self.links.add_partition(handle, partition);
         self.record(None, EventKind::PartitionStart);
         for (a, b) in newly_cut {
-            self.disconnect(a, b);
+            self.end_connection(a, b, End::Partition);
         }
     }
 
