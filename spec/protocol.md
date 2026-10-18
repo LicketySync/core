@@ -273,8 +273,8 @@ The key used is the holder's highest presentable key for the folder (`keys.md` �
 (`keys.md` §5.5), parent-first, so that its last record is the key's own grant (root has
 no grant): at most 16 grants, preceded by the Folder record when the prover is joining
 from a link (`keys.md` §6.2), so at most 17 records. With both signatures on every grant
-(`keys.md` §5.3) a full payload is at most 192 840 bytes, 192 856 sealed, within the 262
-144-byte bound on `sealed`. A prover always sends the chain it holds (a bare-string
+(`keys.md` §5.3) a full payload is at most 192 840 bytes, 192 856 sealed, within the
+262 144-byte bound on `sealed`. A prover always sends the chain it holds (a bare-string
 joiner holds none, `keys.md` §6), sends at most four FolderProofs per folder per
 connection (its other keys, lower tiers, each under a fresh nonce), and stops at
 FEATURE_REQUIRED. The signature covers the key ID, so a proof cannot be replayed as
@@ -600,8 +600,11 @@ named here in **bold**.
 3. `HybridVerify(signing_pk, "licketysync/v1/sig/index", body, signature)`; failure:
    **forged**. No later step runs without it: nothing below may be charged to the
    writer unless the writer signed it.
-4. The key's governing grant (`keys.md` §5.5) has tier 1; a record signed by a key
-   granted only read or sealed is the writer's doing: **writer fault**.
+4. The key's governing grant (`keys.md` §5.5) has tier 1; otherwise a **validity-only
+   rejection**, never a writer fault, because it rests only on grants not being stored
+   (`keys.md` §5.4 step 8): the record is fetched again after a key-record resync, in
+   case a write grant of the key arrives. The cost: a read key that writes is refused,
+   not flagged (TM-9 still holds, since nothing it signs is applied).
 5. **Validity.** The writer's **binding cutoffs** are every stored Revocation cutoff in
    scope for it and, among the stored Suspension cutoffs in scope, the one with the
    highest `seq` (`keys.md` §7: scope, the implicit cutoff `(0, empty)`, precedence). The
@@ -619,12 +622,14 @@ named here in **bold**.
      ended.
    A non-empty `resumes` naming no stored record is a **missing dependency**; one naming
    a stored record that is not a Suspension with a binding cutoff for this writer at
-   `seq - 1` is the writer's doing: **writer fault**. Anything else is a **validity-only
-   rejection**: this verifier knows a revocation, suspension or cutoff the sender may
-   not, or its clock has not yet passed `until`; it rejects, keeps the connection and
-   pushes the explaining key records, and its next `IndexRequest` (on open, on a gap,
-   after a key-record resync, or when its clock passes `until`; section 4.5) fetches the
-   record again.
+   `seq - 1` is the writer's doing: **writer fault** (open item for phase 7: which
+   Suspension binds can differ between peers, so this blame may need to wait until the
+   peers agree on the binding cutoff). Anything else is a **validity-only rejection**:
+   this verifier knows a revocation, suspension or cutoff the sender may not, or its
+   clock has not yet passed `until`; it rejects, keeps the connection and pushes the
+   explaining key records, and its next `IndexRequest` (on open, on a gap, after a
+   key-record resync, or when its clock passes `until`; section 4.5) fetches the record
+   again.
 6. **Chain, forks, cutoffs and duplicates.** Let `n` be this peer's cursor for
    `(writer_key_id, device_id)` (0 if nothing is stored) and `chain[i]` its chain record
    at `seq = i`, as defined above.
@@ -720,9 +725,11 @@ named here in **bold**.
      names, since this peer has not reached `seq - 1`. On a push, ignore the record and
      ask again from the current cursor in the next `IndexRequest` on that connection, at
      most one gap-triggered request per `INDEX_RESYNC_INTERVAL` per folder per connection
-     (a request already outstanding, or one already due, covers the gaps found
-     meanwhile, 4.5); in a reply to a cursor the sender promised contiguity, so this is a
-     **sender violation**.
+     (a request already outstanding, or one already due, covers the gaps found meanwhile,
+     4.5); in a reply to a cursor the sender promised contiguity, so this is a **sender
+     violation**, except that a gap that follows records of the same writer this peer
+     refused as validity-only in that same reply is a gap: the peer asks again, and the
+     sender is not blamed.
    - Otherwise `seq = n + 1` and `previous` is the hash of `chain[n]` (empty when
      `seq = 1`): the record joins the chain and the cursor becomes `seq`; it is applied
      when the writer has no fork and no cutoff withholds it, and withdrawn when it has a
@@ -919,7 +926,7 @@ message KeyRecords {
 
 message KeyRecordsRequest {
   bytes folder_id      = 1;
-  repeated bytes have  = 2;   // record hashes of key records the requester holds: 32 each, sorted, unique; <= 16 384 (rotated beyond that, below); the reply carries only what is absent
+  repeated bytes have  = 2;   // record hashes of key records the requester holds, and of those it refused and remembers: 32 each, sorted, unique; <= 32 768 (up to 16 384 held, rotated beyond that, plus up to MAX_REFUSED_REMEMBERED refused; 1 114 112 bytes at most); the reply carries only what is absent
   uint32 request_id    = 3;   // >= 1, as in IndexRequest
 }
 ```
@@ -927,47 +934,76 @@ message KeyRecordsRequest {
 - On open, each side sends its whole set of key records for the folder (Folder record,
   grants, rotations, wraps, revocations, suspensions, lifts; `keys.md` §2.2, §5, §7),
   paged, with `request_id = 0`, finishing the set (the first page with `more = false`)
-  before any push for the folder. The set carries a reply's obligations: dependency order
-  over the sender's own records, so a dependency absent from it is a sender violation;
-  a grant held from the handshake (3.5, step 6) is stored when the rotation it waited
-  for arrives in it. The receiver merges by `record_hash`, verifying each new one by its
-  section in `keys.md`; a Rotation's `view` is checked against records the receiver
-  holds, and a `Cutoff` is applied to its writer's records, within its scope, as they are
-  held and as they arrive (section 4.4, step 6).
-- **Ordering rule**: a sender never sends a record before the records it depends on,
-  on the same connection: the Folder record first; a grant after its issuer's grant and
-  after the rotation that created its epoch; a rotation, wrap, revocation, suspension or
-  lift after its signer's grant and after the records it names (`cause`, `view`,
-  `suspension`); an index record after its writer's grant and, for a restart record,
-  after the Suspension its `resumes` names and the Lift that ended it. A push of a newly
-  accepted grant includes its canonical chain to root (`keys.md` §5.5, at most 16
-  grants); the receiver skips records it already has.
+  before any push for the folder, in the order the sender stored the records. The set
+  carries a reply's obligations: dependency order over the sender's own records, so a
+  dependency absent from it is a sender violation, unless the receiver refused it (open
+  item for phase 7, once a second suite exists: align this with "refused and remembers",
+  since a refusal for a suite this release does not implement is not remembered); a grant
+  held from the handshake (3.5, step 6) is stored when the rotation it waited for arrives
+  in it. The receiver merges by `record_hash`, verifying each new one by its section in
+  `keys.md`; a Rotation's `view` is checked against records the receiver holds, and a
+  `Cutoff` is applied to its writer's records, within its scope, as they are held and as
+  they arrive (section 4.4, step 6).
+- **Ordering rule**: a sender never sends a record before the records it depends on, on
+  the same connection: the Folder record first; a grant after its issuer's grant and
+  after the rotation that created its epoch; a Rotation after a grant of its signer at
+  tier 1 or 2 (the grant that entitles it, `keys.md` §7.1 step 4; none for root), after
+  the rotation that created `new_epoch - 1` (none when `new_epoch` is 2), and after the
+  records it names (`cause`, `view`); a wrap, revocation, suspension or lift after its
+  signer's grant and after the records it names (`suspension`); an index record after a
+  grant of its writer at tier 1 and, for a restart record, after the Suspension its
+  `resumes` names and the Lift that ended it. In the on-open set and in replies a sender
+  sends key records in the order it stored them, which is itself a dependency order and
+  narrows how arrival order decides which records fit a quota (`keys.md` §5). A push of a
+  newly accepted grant carries its canonical chain to root parent-first (`keys.md` §5.5,
+  at most 16 grants); the receiver skips records it already has.
 - **Missing dependency.** A record whose dependency is absent when it arrives is not a
   close: the receiver ignores it (it is not stored) and sends `KeyRecordsRequest` for the
-  folder, listing in `have` the key records it holds. When it holds more than 16 384 it
-  lists 16 384 of them, rotating which on successive requests; the rest come back and
-  are skipped as duplicates, so a folder with more key records than that re-sends some
-  of them once per `KEY_RESYNC_INTERVAL` per connection, a cost bounded by that interval
-  (paging the request by record-hash range, with the sender-violation rule relaxed for
-  paged replies, is a phase 7 follow-up). At most one `KeyRecordsRequest` per folder is
-  outstanding on a connection, and the requester sends the next only
-  `KEY_RESYNC_INTERVAL` (30 s) after the previous reply's last page arrived. The
-  responder replies with every key record it holds that is not in `have`, in dependency
-  order, paged, each page queued behind the connection's other traffic like a chunk
-  reply rather than all at once. It closes with `PROTOCOL_ERROR` when a request for the
-  folder arrives while its reply to the previous one is still going out, or less than
-  `KEY_RESYNC_INTERVAL / 2` after it queued that reply's last page. Both ends anchor on
-  the reply's last page, not on when requests were sent, so an honest requester whose
-  reply sat behind large chunk replies never trips the close; the margin covers delivery
-  jitter inside the stream, and the rule bounds what a connection can make the
-  responder send. Peers may differ in what they hold at any moment, and an honest relay
-  cannot know what the receiver lacks.
+  folder, listing in `have` the key records it holds and the up to
+  `MAX_REFUSED_REMEMBERED` it refused and remembers. It remembers, per folder, only the
+  records it refused under a quota and, transitively, those refused because they depend
+  on a remembered one or because a grant-not-stored check failed for want of a grant of a
+  key with a remembered refusal; for each, the hash and the key ID it grants (a grant) or
+  the epoch it creates (a Rotation), the oldest forgotten first and nothing kept across a
+  restart (`keys.md` §5). Every dependency the Missing-dependency row of section 5 lists
+  is matched against them, by hash, by the key ID a remembered grant grants or by the
+  epoch a remembered Rotation creates (that row's list: a signer's or issuer's grant, a
+  Wrap's key, an epoch, a
+  Revocation's or Suspension's target grant, an index record's writer grant, and the
+  hash-named `cause`, `view`, `suspension` and `resumes`); a record whose dependency is a
+  remembered refusal is not missing, it is a validity-only rejection that earns no
+  `KeyRecordsRequest`, and its absence from a reply is no sender violation. A remembered
+  record that arrives again is judged again and is forgotten once stored. Residuals:
+  after a restart each refused record is sent once more; past `MAX_REFUSED_REMEMBERED`, a
+  forgotten refusal's dependents are missing dependencies again, re-requested once per
+  `KEY_RESYNC_INTERVAL`. When it holds more than 16 384 it lists 16 384 of them, rotating
+  which on successive requests; the rest come back and are skipped as duplicates, so a
+  folder with more key records than that re-sends some of them once per
+  `KEY_RESYNC_INTERVAL` per connection, a cost bounded by that interval (paging the
+  request by record-hash range, with the sender-violation rule relaxed for paged replies,
+  is a phase 7 follow-up). At most one `KeyRecordsRequest` per folder is outstanding on a
+  connection, and the requester sends the next only `KEY_RESYNC_INTERVAL` (30 s) after
+  the previous reply's last page arrived. The responder replies with every key record it
+  holds that is not in `have`, in dependency order, paged, each page queued behind the
+  connection's other traffic like a chunk reply rather than all at once. It closes with
+  `PROTOCOL_ERROR` when a request for the folder arrives while its reply to the previous
+  one is still going out, or less than `KEY_RESYNC_INTERVAL / 2` after it queued that
+  reply's last page. Both ends anchor on the reply's last page, not on when requests were
+  sent, so an honest requester whose reply sat behind large chunk replies never trips the
+  close; the margin covers delivery jitter inside the stream, and the rule bounds what a
+  connection can make the responder send. Peers may differ in what they hold at any
+  moment, and an honest relay cannot know what the receiver lacks.
 - A key record whose signature fails, or a grant whose proof-of-possession signature is
-  missing or fails (`keys.md` §5.4 step 2), is **forged**; one that a structural check
-  charges to its signer (a grant from an issuer without `may_share`, a rotation that
-  omits a key in its own view, a Wrap for a key granted only sealed) is **signer fault**:
-  the record is rejected, the signer's key is flagged, and the connection stays open
-  (section 5).
+  missing or fails (`keys.md` §5.4 step 2), is **forged**; one that a check on the
+  record's own declared inputs charges to its signer (a rotation that omits a key in its
+  own view, a view not closed under issuers, a `cause` naming a record of another type)
+  is **signer fault**: the record is rejected, the signer's key is flagged, and the
+  connection stays open (section 5). A check that rests only on a grant not being stored
+  (a grant from an issuer without `may_share` under its governing grant, a Wrap for a key
+  granted only sealed, a signer not entitled as issuer or ancestor, a Rotation signer
+  with no stored grant of tier 1 or 2, an index record whose writer has no stored grant
+  of tier 1) is a validity-only rejection, never a signer fault (`keys.md` §5.4 step 8):
+  no peer can know it holds all of a key's grants.
 - Peers in phases 0 to 6 run, for rotation, wrap, revocation, suspension and lift
   records, the parse, resolve-the-signer, signature and entitlement steps of their
   procedures, store and forward what passes, and raise an issue that this release does
@@ -1071,7 +1107,9 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
   blamed for: it forwarded bytes that do not parse or do not verify, or broke the
   protocol's order or bounds. *Reject and keep* is for differences in knowledge: the
   verifier holds a record the sender may not, or lacks one the sender assumed. *Flag the
-  writer* (or issuer, signer) is for anything a valid signature covers: the body is what
+  writer* (or issuer, signer) is for anything a valid signature covers, unless the
+  failure rests only on a grant not being stored, which is a difference in knowledge
+  (`keys.md` §5.4 step 8): the body is what
   its signer made, the sender merely carried it, so the issue is raised against that key
   and the connection stays open. Every outcome raises an issue or a log line that names
   the cause; none drops the item without trace.
@@ -1092,18 +1130,18 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 | DeviceProof does not verify | `Close(PROOF_REJECTED)` |
 | `HELLO_TIMEOUT` or `IDLE_TIMEOUT` elapsed; `PROOF_TIMEOUT` elapsed with nothing opened | `Close(TIMEOUT)`; `Close(NO_COMMON_FOLDER)` |
 | **Forged**: a record whose signature fails, or a grant whose proof-of-possession `key_signature` is missing or fails (a grant inside a FolderProof payload excepted: REJECTED); a chunk whose ciphertext hash fails | `Close(VERIFICATION_FAILED)`; issue naming the peer |
-| **Sender violation**: a gap inside a cursor reply; a dependency absent inside a reply the sender itself paged | `Close(PROTOCOL_ERROR)` |
+| **Sender violation**: a gap inside a cursor reply (a gap that follows records of the same writer this peer refused as validity-only in that reply excepted: it is a gap, and the peer asks again); a dependency absent inside a reply the sender itself paged (one the receiver refused and remembers is not absent) | `Close(PROTOCOL_ERROR)` |
 | FolderProof payload fails for any reason (hint, seal, parse, the leaf's proof signature, chain, a forged grant or a failed proof of possession in it, an unknown key, presentability, the open-folder bound, the held-grant bound, a fifth proof for one folder) | `ProofResult(REJECTED)`, keep; evidence only after the signature verified, and nothing else pushed before the folder is open |
 | Required feature or suite missing | `ProofResult(FEATURE_REQUIRED)` naming each missing feature, a missing suite as `suite:<n>`; keep |
-| **Missing dependency**: writer's or issuer's grant, a record named by `cause`, `view`, `suspension` or `resumes`, the key a Wrap serves, the rotation of a grant's epoch, a Rotation's `new_epoch` above current + 1, a Wrap's `epoch` above current, not held here (a cutoff's writer or `head_hash` is never one) | Reject (not stored), keep; `KeyRecordsRequest` or `IndexRequest` to re-request |
+| **Missing dependency**: writer's, signer's or issuer's grant, a record named by `cause`, `view`, `suspension` or `resumes`, the key a Wrap serves, the rotation of a grant's epoch, a Rotation's `new_epoch` above current + 1, a Wrap's `epoch` above current, not held here (a cutoff's writer or `head_hash` is never one, and a dependency this peer refused and remembers is not absent: the dependent is validity-only) | Reject (not stored), keep; `KeyRecordsRequest` or `IndexRequest` to re-request |
 | **Gap** on a push (`seq > cursor + 1`, whatever `previous` names) | Ignore, keep; ask from the cursor in the next `IndexRequest`, at most once per `INDEX_RESYNC_INTERVAL` |
 | **Duplicate** (`seq ≤ cursor`, the same hash as the chain or evidence record held there; a record that collides at or above the writer's fork, a duplicate of the fork, which an implementation may report as an outcome of its own; a key record with the same `record_hash`) | Ignore, keep |
-| A rival or stale Rotation (`new_epoch ≤` current, another hash) | Store as evidence once its parse, signer and signature steps pass, keep; settled by `keys.md` §7.1 step 7 when it is for the current epoch |
+| A rival or stale Rotation (`new_epoch ≤` current, another hash) | Store as evidence once its parse, signer, signature and entitlement steps pass (`keys.md` §7.1 steps 1 to 4, the signer rule included), at most one per epoch for each signer other than root (root's always stored), keep; settled by `keys.md` §7.1 step 7 (phase 7) when it is for the current epoch; while the epoch has more than one stored rotation no key for it is used, and a check against a `confirm` chosen among its rivals blames no signer (`keys.md` §3.1) |
 | **Rollback**: a peer offers cursors below those stored here | Ignore, keep; nothing is asked for; a cursor never decreases, and the applied head moves back only by a stored cutoff or an equivocation withdrawal |
-| **Validity-only rejection**: a record from a writer this verifier knows to be revoked or suspended beyond its cutoff; a restart before this device's clock passes the suspension's `until`; a Wrap for a key this verifier knows revoked or suspended to `none`; a record naming a suite this release does not implement; a record from a writer that is not chain-valid (its grants begin no valid chain of at most 16 grants, `keys.md` §5.5) and that no cutoff covers; a key record once the folder holds `MAX_KEY_RECORDS_PER_FOLDER`; a record from a further writer once `MAX_WRITERS_PER_FOLDER` are held, or from a further device ID once its key has `MAX_DEVICES_PER_KEY`; the later of two grants whose key IDs collide over different public keys | Reject, keep; push the explaining key records to the sender (after open), where there are any |
+| **Validity-only rejection**: (phase 7) a record from a writer this verifier knows to be revoked or suspended beyond its cutoff; (phase 7) a restart before this device's clock passes the suspension's `until`; (phase 7) a Wrap for a key this verifier knows revoked or suspended to `none`; a record naming a suite this release does not implement; a record from a writer that is not chain-valid (its grants begin no valid chain of at most 16 grants, `keys.md` §5.5) and that no cutoff covers; a key record signed by a key other than root that would take the folder past `MAX_KEY_RECORDS_PER_FOLDER` or `MAX_KEY_RECORD_BYTES_PER_FOLDER`, or its signer past `MAX_KEY_RECORDS_PER_SIGNER` (judged after the record's whole procedure; root's records are not counted; the issue names the record's signer for `MAX_KEY_RECORDS_PER_SIGNER`, and the folder and the quota for the two folder quotas); a key record that depends on one this peer refused and remembers (no `KeyRecordsRequest` follows); a check that fails only because a grant is not stored, in every phase and whatever was refused before (an issuer without `may_share` or with too low a tier under its governing grant, a Rotation signer with no stored grant of tier 1 or 2, an index record whose writer's governing grant is not tier 1 (fetched again after a key-record resync; a read key that writes is refused, not flagged), a Wrap for a key with no grant at its tier, a revocation, suspension, lift or wrap whose signer is not entitled as issuer or ancestor; `keys.md` §5.4 step 8: a key that issues beyond its authority is refused, not flagged); a second rival or stale Rotation by one signer other than root for one epoch; a record from a further writer once `MAX_WRITERS_PER_FOLDER` are held, or from a further device ID once its key has `MAX_DEVICES_PER_KEY`; the later of two grants whose key IDs collide over different public keys | Reject, keep; push the explaining key records to the sender (after open), where there are any |
 | **Equivocation**, each at the record's own `seq` (two records from one writer at one `seq`; a record whose `previous` is not the hash of the chain record at `seq - 1`; a second restart naming the same Suspension) | Flag the writer key; `fork = min(fork, seq)`, pushing the records at a new or lower fork on every open connection; keep the record on the chain at `cursor + 1`, or below the earlier fork as the one evidence record at its `seq` (one at or above that fork is refused as a duplicate of the fork); withdraw the writer's chain from the fork onward on every peer, a path it empties going through the archive and the deletion brake; with an unknown parent, re-request the writer from cursor 0 on the connection the record came by, at most once per writer per connection; keep |
-| **Writer fault**: a record signed by a read or sealed key; a restart whose `resumes` names a stored record that is not a Suspension cutting this writer off at `previous`; a seal that will not open, bad padding, malformed path, unknown kind or hash-count mismatch; a chunk with a correct ciphertext hash whose length, seal, padding, compression or plaintext hash fails, judged per record that names it | Flag the writer key; store the record opaque (not applied) or mark the chunk corrupt for that record; keep |
-| **Signer fault** on a key record: issuer without `may_share` or tier too low; a Rotation by a signer other than root that holds no stored grant of tier 1 or 2; a Rotation that omits a key its own `view` keeps, wraps a key outside `kept ∪ {root}`, has a `view` that is not closed under issuers or names a record of another type, or whose `confirm` does not match what a holder unwrapped; a ladder that does not confirm against the previous epoch (against the rotator); a `cause` naming a record of another type or signer, or an empty `cause` from a non-root signer; a Wrap for a key granted only sealed or at a tier no grant of it has; a revocation or suspension by an unentitled signer, or a lift by a signer that is not the Suspension's own signer, root or an ancestor of that signer; a second Folder record for the folder with a different body (against root); a wrap that will not open under the aad its record names, or that opens to a key failing its epoch's `confirm` (found by the key's holder, which rejects the record locally) | Flag the signer key; reject; keep |
+| **Writer fault**: a restart whose `resumes` names a stored record that is not a Suspension cutting this writer off at `previous`; a seal that will not open, bad padding, malformed path, unknown kind or hash-count mismatch; a chunk with a correct ciphertext hash whose length, seal, padding, compression or plaintext hash fails, judged per record that names it | Flag the writer key; store the record opaque (not applied) or mark the chunk corrupt for that record; keep |
+| **Signer fault** on a key record, for checks on its own declared inputs only (a check that rests on a grant not being stored is validity-only, above): a Rotation that omits a key its own `view` keeps, wraps a key outside `kept ∪ {root}`, has a `view` that is not closed under issuers or names a record of another type, or whose `confirm` does not match what a holder unwrapped; a ladder that does not confirm against the previous epoch (against the rotator); a `cause` naming a record of another type or signer, or an empty `cause` from a non-root signer; a second Folder record for the folder with a different body (against root); a wrap that will not open under the aad its record names, or that opens to a key failing its epoch's `confirm` (found by the key's holder, which rejects the record locally) | Flag the signer key; reject; keep |
 | Accepted with an issue: in phases 0 to 6, a grant beneath a key revoked by a Revocation this verifier holds (`keys.md` §5.4 step 9); a Rotation whose wrap reaches a key revoked by a record outside its view, or that leaves out a chain-valid key this verifier holds (`keys.md` §7.1, step 6); a key record whose signer this verifier knows revoked or suspended; a second grant for a key already granted; a cutoff naming a writer outside the revoked key's subtree (ignored); a cutoff whose head no peer has | Store and apply (the cutoff excepted); issue naming the revocation's signer and the rotator, the omitting signer (a Wrap is owed), the revoked signer, both issuers, or the revoker; keep |
 
 - **Time** comes from a clock trait (wall time for expiry and suspension ends, as the
@@ -1124,7 +1162,10 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 | `MAX_HELD_GRANTS_PER_CONNECTION` (future-epoch grants held from accepted proofs, all folders together, 3.5 step 6) | 64 |
 | `MAX_WRITERS_PER_FOLDER` (writers a peer holds per folder; a further one is refused validity-only, 4.4 step 6) | 16 384 |
 | `MAX_DEVICES_PER_KEY` (device IDs one write key may write under in a folder; a further one is refused validity-only, 4.4 step 6) | 256 |
-| `MAX_KEY_RECORDS_PER_FOLDER` (key records a peer stores per folder; a further one is a validity-only rejection with an issue naming the folder; an insider can fill it until phase 7, and at the cap the on-open set is 65 536 records per connection, `keys.md` §5) | 65 536 |
+| `MAX_KEY_RECORDS_PER_FOLDER` (key records signed by keys other than root that a peer stores per folder; judged last, after the duplicate check and the record's whole procedure; a record that would take the count past it is a validity-only rejection with an issue naming the folder and the quota, which may also list the signers holding the most records; root-signed key records are counted against no quota and always accepted, except that one naming a refused non-root record waits like any dependent; insiders with `may_share` keys can fill it until phase 7, and at the caps the on-open set is at most 65 536 non-root records and 512 MiB per connection, plus root's, `keys.md` §5) | 65 536 |
+| `MAX_KEY_RECORD_BYTES_PER_FOLDER` (encoded bytes of the non-root key records a peer stores per folder; a record that would take the non-root total past it is validity-only, with an issue naming the folder and the quota, which may also list the signers holding the most records; root's records are not counted) | 512 MiB |
+| `MAX_KEY_RECORDS_PER_SIGNER` (key records one non-root signer may have stored in a folder, a grant counting against its issuer; past it, validity-only with an issue naming the record's own signer, the only quota whose issue does). Which records fit once any of these quotas is reached depends on arrival order, narrowed by senders sending key records in the order they stored them (4.6); that residual stands until phase 7 | 4 096 |
+| `MAX_REFUSED_REMEMBERED` (key records a peer refused under a quota, or because they depend on such a record, or by a grant-not-stored check for want of a grant of a key with a remembered refusal, that it remembers per folder by hash and by the key ID or epoch they create, oldest forgotten first, not kept across a restart; listed in `have` and treated as refused, not absent, dependencies, 4.6) | 16 384 |
 | `MAX_SEND_QUEUE` (unsent bytes per connection; the runtime may end a connection past it, and senders pace below it, 3.1) | 128 MiB |
 | `MAX_PAGE_RECORDS` (records per `IndexRecords` page or push; the cap on `max_records` and the receiver's bound, 4.5) | 4096 |
 | `MAX_PROOFS_PER_CONNECTION` (4 attempts per folder × `MAX_OPEN_FOLDERS_PER_CONNECTION`; a verifier also checks at most 4 per hint-matched folder, 3.5 step 2) | 256 |
@@ -1226,18 +1267,19 @@ Generated by the reference implementation, checked in as data files, shared with
    `root_key_id`, a chunk of epoch 0, `suite` 0 and a `sealed` of 39 bytes; forged;
    missing dependency; gap; duplicate; validity-only, among them a writer past
    `MAX_WRITERS_PER_FOLDER`, the 257th device ID of one key (an issue against the key)
-   and one whose key's only chain is 17 grants long; malformed again, a record one byte
-   over `MAX_INDEX_RECORD_BYTES`;
-   equivocation at `seq ≤ cursor` and at `seq = cursor + 1` with `previous` not the
-   chain record at `seq - 1` (the fork at the record's own `seq`), a lower collision
-   that moves the fork down and the fork push it causes, a collision at or above the
-   fork refused as a duplicate, an unknown parent at `cursor + 1` and at a held `seq`,
-   each with the request from cursor 0 it triggers on the connection it came by; writer
-   fault in the seal; a forged record that would also be a writer fault, showing forged
-   wins); a record under a key with two grants, judged under the governing one. Phase 7:
-   a restart record with `resumes` (accepted), one at `seq = 1` after a cutoff that kept
-   nothing, one whose Suspension is absent (missing dependency), one whose `resumes` does
-   not continue the cutoff (writer fault) and a second restart for the same Suspension
+   one whose key's only chain is 17 grants long, and one whose writer holds only a read
+   grant, fetched again and applied once its write grant arrives (never a writer fault);
+   malformed again, a record one byte over `MAX_INDEX_RECORD_BYTES`; equivocation at
+   `seq ≤ cursor` and at `seq = cursor + 1` with `previous` not the chain record at
+   `seq - 1` (the fork at the record's own `seq`), a lower collision that moves the fork
+   down and the fork push it causes, a collision at or above the fork refused as a
+   duplicate, an unknown parent at `cursor + 1` and at a held `seq`, each with the
+   request from cursor 0 it triggers on the connection it came by; writer fault in the
+   seal; a forged record that would also be a writer fault, showing forged wins); a
+   record under a key with two grants, judged under the governing one. Phase 7: a restart
+   record with `resumes` (accepted), one at `seq = 1` after a cutoff that kept nothing,
+   one whose Suspension is absent (missing dependency), one whose `resumes` does not
+   continue the cutoff (writer fault) and a second restart for the same Suspension
    (equivocation); a cutoff that disagrees with the held chain and the one rewound
    `IndexRequest` it triggers; records applied provisionally below a cutoff and
    confirmed; two Revocation cutoffs that disagree and the common prefix that survives.
@@ -1264,10 +1306,18 @@ Generated by the reference implementation, checked in as data files, shared with
    queue never empties but keeps falling (kept open).
 8. **KeyRecords**: the on-open set in dependency order with `request_id = 0`, a
    `KeyRecordsRequest` with `have` and the incremental reply it earns, a batch that
-   violates the ordering rule, a request that arrives `KEY_RESYNC_INTERVAL / 2` after
-   the previous reply's last page was queued (served) and one that arrives while that
-   reply is going out (`Close(PROTOCOL_ERROR)`), a grant whose proof of possession
-   fails (forged), and a key record one byte over `MAX_KEY_RECORD_BYTES` (malformed).
+   violates the ordering rule, a request that arrives `KEY_RESYNC_INTERVAL / 2` after the
+   previous reply's last page was queued (served) and one that arrives while that reply
+   is going out (`Close(PROTOCOL_ERROR)`), a grant whose proof of possession fails
+   (forged), a key record one byte over `MAX_KEY_RECORD_BYTES` (malformed), a non-root
+   key record past its signer's `MAX_KEY_RECORDS_PER_SIGNER` (validity-only, an issue
+   naming the signer), a root-signed one accepted with every quota full, a record whose
+   dependency the receiver refused under a quota, matched by the key ID the refused grant
+   grants (validity-only, no `KeyRecordsRequest`, no sender violation, the refused hash
+   then listed in `have`), a `have` of 32 768 hashes (accepted), a Wrap refused while its
+   key is suspended and later accepted (not remembered), a grant from an issuer whose
+   `may_share` grant the receiver does not hold (validity-only, not flagged), and an
+   on-open set sent in the order its sender stored the records.
 9. **Chunks**: `ChunkRequest`, `ChunkReply` for the `keys.md` chunk vector, and the three
    statuses; a reply whose hash fails (forged), one whose length fails (writer fault), a
    chunk named by two records of which only one it satisfies (one writer fault), a

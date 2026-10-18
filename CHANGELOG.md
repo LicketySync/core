@@ -6,6 +6,86 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Specification follow-up from the keys crate's reviews (rulings 22 to 28), one small
+  commit on `spec/keys.md`, `spec/protocol.md`, `spec/suites.md` and
+  `spec/threat-model.md`. Key-record storage gets three quotas that count only records
+  signed by keys other than root, each against its signer (a grant against its issuer):
+  `MAX_KEY_RECORDS_PER_FOLDER` (65 536), `MAX_KEY_RECORD_BYTES_PER_FOLDER` (512 MiB) and
+  `MAX_KEY_RECORDS_PER_SIGNER` (4 096). They are judged last, after the duplicate check
+  and the record's whole procedure; a record that would take a count past one is
+  validity-only, with an issue naming the record's signer for the per-signer quota and
+  naming the folder and the quota (and perhaps the signers holding the most records) for
+  the two folder quotas. Root's key records count against no quota and are always
+  accepted, unless one names a refused non-root record, so a delegate flooding the store
+  can no longer block root's Revocation. A peer remembers, per folder and not across
+  restarts, only the records it refused under a quota and, transitively, those refused
+  because they depend on one, up to `MAX_REFUSED_REMEMBERED` (16 384, oldest forgotten
+  first), by hash and by the key ID or epoch each creates; it lists them in
+  `KeyRecordsRequest.have` (now up to 32 768 hashes), every dependency of the
+  missing-dependency list is matched against them by hash, by the key ID a refused grant
+  grants or by the epoch a refused Rotation creates, and a record depending on one is
+  validity-only, with no request and no sender violation; a record refused by a
+  grant-not-stored check whose curing grant belongs to a key with a remembered refusal
+  is remembered too; a remembered record that arrives again is judged again. A check
+  that fails only because a grant is not stored (an issuer's authority, a Rotation
+  signer's tier 1 or 2 grant, a Wrap's tier, a signer's entitlement as issuer or
+  ancestor, and an index record's writer grant of tier 1, so that a read key that writes
+  is refused, not flagged, and its record is fetched again after a key-record resync) is
+  always validity-only, never a signer or writer fault, since no peer can know it holds
+  all of a key's grants (TM-10); the cost, a key issuing beyond its authority refused
+  but not flagged, is stated, and checks on a record's own declared inputs, a Rotation's
+  view closure among them, keep their blame. Senders send key records in the order they
+  stored them in on-open sets and replies. The residuals are stated: insiders can fill
+  the quotas, one `may_share` key through its own children; a refused record is missing
+  for good on that peer and the members beneath it cannot sync with that peer; which
+  records fit depends on arrival order; a restart re-sends each refused record once; the
+  on-open set at the caps is at most 65 536 non-root records and 512 MiB plus root's. A
+  rival or stale Rotation is stored as evidence only after its entitlement step passes,
+  at most one per epoch for each signer other than root (root's are always stored), and
+  `new_epoch` is at least 2. An epoch with more than one stored rotation is ambiguous
+  until phase 7 settles it: no key for it is used, from a wrap or a ladder rung; the
+  holder still runs the key confirmation and the HPKE open, which keep their blame, and
+  only a check against a `confirm` chosen among the rivals is blameless. A Rotation is
+  sent after its signer's tier 1 or 2 grant (none for root) and after the rotation that
+  created `new_epoch - 1` (`protocol.md` §4.6). In `protocol.md` §5 the phase 7 items of
+  the validity-only row are marked one by one. `suites.md` §3.1 says `ml-kem` is a
+  direct dependency of `hpke` as well as of `x-wing` (the §2.4 label rows still match
+  `keys.md` §10 byte for byte), and `threat-model.md`'s vocabulary no longer says root
+  signs every key record. Vectors for phases 0 to 6 cover the quotas, the root
+  exemption, remembered refusals, the missing-grant rule, the rival-rotation rules and
+  the ambiguous epoch. Phase 7 follow-ups recorded: admitting a non-root record past the
+  quotas when a stored root record names it; delegated repair records in a full store;
+  order-independent admission; revoked flooders and quotas; step 7's convergence with
+  different rivals per (epoch, signer); settling ambiguity by the ladder or a
+  `previous_rotation` field; wrong-confirm blame against root for an epoch of 2 or more
+  when root's rotation waits on a refused dependency and an attacker's is the only one
+  stored; a seal failing under a rotation that may lose; a restart's writer fault while
+  peers disagree on the binding Suspension; aligning "unless the receiver refused it"
+  with "refused and remembers" once a second suite exists. A gap that follows records of
+  the same writer refused validity-only in the same reply is a gap, not a sender
+  violation. Decisions for the plan (also in the notes' decisions-pending): the quotas,
+  their placement and the root exemption; remembered refusals; the missing-grant rule;
+  send order; one stored rival per non-root signer and epoch after entitlement; the
+  ambiguous-epoch rule.
+  Reviewed (2026-10-17 to 2026-10-18) by two fresh-context agents (Claude Opus 5.5),
+  one of them the security-reviewer pass, since this change touches keys and the
+  protocol; the author was a592da16a093b3de4. The change implements rulings 22 and 23
+  (from the keys crate's security review) and rulings 24 to 28 (from these reviews).
+  The general reviewer a80d32ffd45706cfe: 93cf6bd blocked by 7, bdcf8c7 blocked by 8
+  (mostly the same items as ruling 25), and 32d6011, a confirm of the whole delta from
+  bdcf8c7, blocked by 3 (wording only: the Missing-dependency row's list, the issue a
+  quota refusal names, and the TM-10 clause), applied in the final commit as ruling 28
+  in the reviewer's words. The security reviewer aaae9c1b5f1114d87: 93cf6bd blocked by 1
+  (ruling 24), bdcf8c7 blocked by 2 (ruling 25), e749931 blocked by 1 (ruling 26) and
+  1d81d78 clean, with two wording should-fixes applied in 32d6011 as ruling 27. Every
+  finding was fixed as the coordinator ruled on it, or recorded as a phase 7 follow-up,
+  and each fix was confirmed by a reviewer on a later version (ruling 27's two by the
+  general reviewer's confirm of 32d6011), except the ruling 28 wording: the merge agent
+  checked that the delta from 32d6011 to the final commit changes only the ruling 28
+  sentences, that `suites.md` §2.4's 22 label rows are still byte-identical to
+  `keys.md` §10, and that main had not moved (no rebase), and it wrote this review
+  record, which was not re-reviewed.
+
 - The runtime contract, real-network edition (ruling 14, a fix forward on the
   merged simulator). Every promise in `licketysync_engine::runtime` is now about
   what one side sees: each side hears of its own connections' ends one at a

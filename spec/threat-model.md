@@ -13,9 +13,11 @@ changelog entries and review reports cite them (`// TM-4`,
 `fn tm_4_symlink_then_directory()`). Section 6 says how a reviewer uses them.
 
 Vocabulary, shared with `keys.md` and `protocol.md`: a **folder** is the unit of
-sharing; its **root key** signs every key record (grants, revocations,
-suspensions, lifts, rotations; never an index record) and derives from the
-owner's **recovery phrase** (the 24 words encode the 256-bit **master secret**)
+sharing; its **root key** signs the folder's genesis record and may sign every
+other key record (grants, wraps, revocations, suspensions, lifts, rotations),
+which `may_share` delegates also sign within their authority (`keys.md` §5.4 step
+8, §7); it never signs an index record, and it derives from the owner's
+**recovery phrase** (the 24 words encode the 256-bit **master secret**)
 and the **folder nonce**, 32 random bytes created with the folder and published in
 its first record, so that a root holder can re-derive the root of any folder it
 finds; every key is a **key pair set** (a signing keypair and a KEM keypair)
@@ -571,7 +573,9 @@ is rejected and the connection kept for differences in knowledge: the verifier
 holds a record the sender may not, or lacks one the sender assumed, and asks for
 it. The writer, issuer or signer is flagged under Issues, the item kept as
 evidence and applied by no one, and the connection kept, for anything a valid
-signature covers, because the body is what its signer made and the sender,
+signature covers, unless the failure rests only on a grant not being stored, which
+is a difference in knowledge (`keys.md` §5.4 step 8), because the body is what its
+signer made and the sender,
 perhaps an honest relay, merely carried it. One refusal is deliberately
 uninformative: a folder proof that fails for any reason gets the same uniform
 REJECTED and the connection is kept, so that a probe learns nothing about which
