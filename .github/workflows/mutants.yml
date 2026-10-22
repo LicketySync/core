@@ -1,0 +1,71 @@
+# Mutation testing, weekly as the plan's checks table says: cargo-mutants on
+# the key, protocol and engine crates finds the code the tests do not check
+# (a change to it that every test still passes). Also on demand. Until
+# 2026-10-22 it ran nightly in one job (nightly.yml), against the plan.
+name: Mutants
+
+on:
+  schedule:
+    - cron: "17 13 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time: a run started while another is going waits for it
+# instead of cancelling it.
+concurrency:
+  group: mutants
+  cancel-in-progress: false
+
+jobs:
+  # cargo-mutants in shards: one run of all the mutants (1,371 on 2026-10-22,
+  # about 50 s each on a runner) needs some 20 hours, and the single job was
+  # cancelled at GitHub's 6 h job limit (run 39755196041). The matrix below
+  # makes one job per shard; its length is the number of shards, and the shard
+  # each job runs is its index (strategy.job-index of strategy.job-total), so
+  # only the count matters. Mutants are dealt round-robin, which spreads the
+  # slow ones; each shard has about 86 mutants today, some 80 minutes. The
+  # shard stops after 180 minutes (ci/mutants.sh, which then fails and says
+  # so) and the job after 210, well inside the 6 h limit; when a shard nears
+  # its budget, add shards.
+  #
+  # Decision 2026-10-22 (phase 0): surviving mutants and mutants whose tests
+  # hang past 300 s are reported (each shard prints them, in the log and the
+  # job summary, and uploads its mutants.out), not failing, until the end of
+  # phase 0, while the keys crate is reworked to the shared-key model; then
+  # revisited. A shard fails when the unmutated tree does not build or its
+  # tests fail, when it runs past its budget, or on any cargo-mutants error.
+  mutants:
+    name: cargo-mutants (keys, protocol, engine), shard ${{ strategy.job-index }} of ${{ strategy.job-total }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      # 12 shards at a time, so that a run leaves runners for CI and the
+      # nightly; the other 4 start as the first finish (about 160 minutes in all).
+      max-parallel: 12
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      # The version gate.sh checks, with no fallback (see the note in ci.yml's
+      # deps job).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+          fallback: none
+      - run: ci/test-mutants.sh
+      - name: Mutants of this shard
+        env:
+          SHARD: ${{ strategy.job-index }}/${{ strategy.job-total }}
+        run: ci/mutants.sh "$SHARD" 180m
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-shard-${{ strategy.job-index }}
+          path: mutants.out
+          retention-days: 14

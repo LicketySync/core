@@ -1,0 +1,45 @@
+# OpenSSF Scorecard, weekly as the plan's checks table says (the score is shown
+# on the Contribute page); also on demand. Its results are published
+# (publish_results), which holds this whole file to Scorecard's rules, or the
+# action fails; hence a workflow of its own. No top-level env or defaults and
+# no write permission at the top; no job but this one with id-token: write (the
+# OIDC token that proves where the results come from); and this job on an
+# Ubuntu runner with no env, defaults, container or services, every step one of
+# the actions Scorecard approves (checkout, upload-artifact,
+# codeql-action/upload-sarif, scorecard-action, harden-runner), so never a
+# `run:` step. Scheduled runs are supported on the default branch only;
+# workflow_dispatch is, in Scorecard's words, experimental.
+name: Scorecard
+
+on:
+  schedule:
+    - cron: "47 13 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # v2.5.0 because v2.4.0 pulls its image from gcr.io, which now refuses it:
+  # the job failed in 18 s every night (runs 39576345810, 39755196041). v2.5.0
+  # pulls ghcr.io/ossf/scorecard-action. security-events: write is for the
+  # SARIF upload.
+  scorecard:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

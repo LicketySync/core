@@ -82,6 +82,8 @@ ci/test-no-hostnames.sh
 ci/no-hostnames.sh
 ci/test-no-test-vectors.sh
 ci/no-test-vectors.sh
+ci/test-mutants.sh
+ci/test-fuzz-targets.sh
 cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-<crate> --ignore-filename-regex 'crates/(<the others>)/'   # once each for keys, protocol, engine
 ```
 
@@ -99,14 +101,20 @@ cargo-geiger.
 The tools beyond cargo's: cargo-deny 0.20.2, cargo-audit 0.22.2,
 cargo-machete 0.9.2 and cargo-vet 0.10.2, the versions CI pins, are required
 (`cargo install --locked <tool> --version <version>`), and so is semgrep
-1.181.0, the version CI's image pins (`pipx install semgrep==1.181.0`).
-`gate.sh` checks all five before its first step, and stops when `ci.yml` or
-`nightly.yml` installs one of the four any other way. Dependabot cannot see
-these pins, so the agent at each weekly Dependabot review checks the four for
-new releases; a bump is one reviewed change to both workflows, `gate.sh` and
-`bootstrap.sh`. gitleaks is optional (`ci/gitleaks-install.sh ~/.local/bin`
-installs the release CI pins). CI adds the full-history gitleaks scan, the
-other operating systems, CodeQL and, once configured, ClusterFuzzLite.
+1.181.0, the version CI's image pins (`pipx install semgrep==1.181.0`). So are
+cargo-mutants 27.1.0 (the weekly `mutants.yml`), cargo-fuzz 0.13.2 and
+cargo-careful 0.4.10 (`nightly.yml`), so that a surviving mutant, a fuzz crash
+or a careful finding reproduces locally with the same tool
+(`ci/mutants.sh <k>/<n> <budget>` runs one shard of the mutants as the weekly
+job does). `gate.sh` checks all eight before its first step, and stops when
+the workflow that installs one of the seven cargo tools (`ci.yml`,
+`nightly.yml`, `mutants.yml`) installs it any other way. Dependabot cannot
+see these pins, so the agent at each weekly Dependabot review checks the
+seven for new releases; a bump is one reviewed change to the workflows that
+install the tool, `gate.sh` and `bootstrap.sh`. gitleaks is optional
+(`ci/gitleaks-install.sh ~/.local/bin` installs the release CI pins). CI
+adds the full-history gitleaks scan, the other operating systems, CodeQL and,
+once configured, ClusterFuzzLite.
 `bootstrap.sh` in the parent directory installs the tools the gate needs, the
 pinned versions included.
 

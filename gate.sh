@@ -21,9 +21,14 @@ step() { echo "== $*"; "$@"; }
 # versions CI installs, so that the gate and CI judge alike: CI once took the
 # newest cargo-vet it found, 0.10.0, whose formatter rejects the
 # supply-chain/imports.lock that 0.10.2 writes, and main went red (run
-# 39160240196). A bump is one reviewed change to these lines, ci.yml,
-# nightly.yml and bootstrap.sh; Dependabot cannot see the pins, so the weekly
-# Dependabot review checks them for new releases.
+# 39160240196). cargo-mutants (mutants.yml), cargo-fuzz and cargo-careful
+# (nightly.yml), which the gate does not run, at the versions those workflows
+# install, so that a survivor, a crash or a finding they report reproduces
+# here with the same tool (a cargo-mutants release can make other mutants).
+# cargo-careful has no --version; need_tool takes the version cargo install
+# recorded. A bump is one reviewed change to these lines, the workflow and
+# bootstrap.sh; Dependabot cannot see the pins, so the weekly Dependabot
+# review checks them for new releases.
 # installs <workflow> <crate>: print each place the workflow installs the
 # crate, one per line as written there: an item of an install-action `tool:`
 # list, an install-action step named after the crate (`uses:
@@ -72,6 +77,9 @@ need_tool() {
   local crate=$1 version=$2 spelled=$3 have file found
   shift 3
   have=$(cargo "${crate#cargo-}" --version 2> /dev/null | awk 'NR == 1 { print $NF }') || true
+  if [ -z "$have" ] && command -v "$crate" > /dev/null; then
+    have=$(cargo install --list | awk -v c="$crate" '$1 == c { v = $2; sub(/^v/, "", v); sub(/:$/, "", v); print v }') || true
+  fi
   if [ "$have" != "$version" ]; then
     echo "$crate $version is needed (found: ${have:-none}); install it for this user:" >&2
     echo "  cargo install --locked $crate --version $version" >&2
@@ -95,6 +103,9 @@ need_tool cargo-deny 0.20.2 cargo-deny@0.20.2 $wf/ci.yml
 need_tool cargo-audit 0.22.2 cargo-audit@0.22.2 $wf/ci.yml $wf/nightly.yml
 need_tool cargo-machete 0.9.2 cargo-machete@0.9.2 $wf/ci.yml
 need_tool cargo-vet 0.10.2 'cargo install cargo-vet --version 0.10.2 --locked' $wf/ci.yml
+need_tool cargo-mutants 27.1.0 cargo-mutants@27.1.0 $wf/mutants.yml
+need_tool cargo-fuzz 0.13.2 'cargo install cargo-fuzz --version 0.13.2 --locked' $wf/nightly.yml
+need_tool cargo-careful 0.4.10 cargo-careful@0.4.10 $wf/nightly.yml
 # Semgrep with CI's version (its image tag in ci.yml).
 semgrep_version=1.181.0
 if ! have=$(semgrep --version 2> /dev/null) || [ "$have" != "$semgrep_version" ]; then
@@ -131,6 +142,9 @@ step ci/test-no-hostnames.sh
 step ci/no-hostnames.sh
 step ci/test-no-test-vectors.sh
 step ci/no-test-vectors.sh
+# The scripts mutants.yml and nightly.yml's fuzz jobs run, on stand-ins for the tools.
+step ci/test-mutants.sh
+step ci/test-fuzz-targets.sh
 # 90% line coverage on each of the crates the plan names, measured per crate:
 # only that crate's own files count, so a well-tested neighbour cannot mask it.
 for c in keys protocol engine; do

@@ -1,7 +1,8 @@
-# The slow checks: fuzzing, mutation testing, Miri, cargo-careful, the long
-# simulator runs, and the daily advisory feed (cargo-audit against the lockfile,
-# TM-8 and TM-22: a vulnerability published after a crate was added is caught
-# without a code change). Nightly on main; also on demand.
+# The slow checks the plan's checks table runs nightly: fuzzing, Miri,
+# cargo-careful, the long simulator runs, and the daily advisory feed
+# (cargo-audit against the lockfile, TM-8 and TM-22: a vulnerability published
+# after a crate was added is caught without a code change). Nightly on main;
+# also on demand. The weekly ones are mutants.yml and scorecard.yml.
 name: Nightly
 
 on:
@@ -18,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       # The version ci.yml's deps job pins and gate.sh checks, with no fallback
       # (see the note there).
@@ -27,47 +30,83 @@ jobs:
           fallback: none
       - run: cargo audit
 
-  fuzz:
-    name: cargo-fuzz (every decoder, 30 minutes each)
+  # One job per fuzz target, so that 30 minutes each fits GitHub's 6 h job
+  # limit however many decoders there are. cargo-fuzz from crates.io:
+  # install-action has no cargo-fuzz (its `cargo-fuzz` ref is a branch whose
+  # action installs nothing), so until 2026-10-22 the job ran without it, and
+  # `for t in $(cargo fuzz list)` hid the error: it passed in 17 s and fuzzed
+  # nothing (runs 39576345810, 39755196041). gate.sh checks this version.
+  fuzz-targets:
+    name: cargo-fuzz targets
     runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - run: ci/test-fuzz-targets.sh
+      # Fails when cargo fuzz list fails; with no target, prints a notice, and
+      # the fuzz jobs below are skipped.
+      - id: list
+        run: ci/fuzz-targets.sh "$GITHUB_OUTPUT"
+
+  fuzz:
+    name: cargo-fuzz ${{ matrix.target }} (30 minutes)
+    needs: fuzz-targets
+    if: needs.fuzz-targets.outputs.targets != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@nightly
-      - uses: taiki-e/install-action@cargo-fuzz
-      - name: Run each target
-        # The first corpus directory takes what libFuzzer finds; the second,
-        # fuzz/seeds/<target>, holds the committed seeds made from the vectors.
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      # `+nightly`: the sanitizer flags need it, and rust-toolchain.toml would
+      # otherwise pick stable. The first corpus directory takes what libFuzzer
+      # finds; the second, fuzz/seeds/<target>, holds the committed seeds made
+      # from the vectors.
+      - name: Fuzz for 30 minutes
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           cd fuzz
-          for t in $(cargo fuzz list); do
-            mkdir -p "corpus/$t" "seeds/$t"
-            cargo fuzz run "$t" "$PWD/corpus/$t" "$PWD/seeds/$t" -- -max_total_time=1800
-          done
-
-  mutants:
-    name: cargo-mutants (keys, protocol, engine)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-mutants
-      - run: cargo mutants --package licketysync-keys --package licketysync-protocol --package licketysync-engine --timeout 300 --no-shuffle
+          mkdir -p "corpus/$TARGET" "seeds/$TARGET"
+          cargo +nightly fuzz run "$TARGET" "$PWD/corpus/$TARGET" "$PWD/seeds/$TARGET" -- -max_total_time=1800
+      # The input that crashed, to reproduce with `cargo +nightly fuzz run
+      # <target> <file>`.
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: failure()
         with:
-          name: mutants
-          path: mutants.out
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 30
 
   careful:
     name: cargo-careful (runtime UB checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
-      - run: cargo install cargo-careful --locked
+      # The version gate.sh checks, with no fallback (see the note in ci.yml's
+      # deps job).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-careful@0.4.10
+          fallback: none
       - run: cargo +nightly careful test --workspace
 
   miri:
@@ -75,6 +114,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
@@ -86,6 +127,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Every shipped scenario over 20,000 seeds (well under a second per
@@ -105,23 +148,3 @@ jobs:
           for s in $scenarios; do
             target/release/licketysync-sim "$s" 0 20000
           done
-
-  scorecard:
-    name: OpenSSF Scorecard
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: ossf/scorecard-action@v2.4.0
-        with:
-          results_file: results.sarif
-          results_format: sarif
-          publish_results: true
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: results.sarif

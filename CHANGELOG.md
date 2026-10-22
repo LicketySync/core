@@ -6,6 +6,71 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The Nightly workflow fixed forward after runs 39576345810 (2026-10-21) and
+  39755196041 (2026-10-22) on `main`, and cargo-mutants and OpenSSF Scorecard
+  moved to weekly workflows, as the plan's checks table has them (the
+  coordinator's ruling). OpenSSF Scorecard failed in 18 s each night:
+  scorecard-action v2.4.0 pulls its image from gcr.io, which now refuses it
+  ("requires billing to be enabled"); v2.5.0, Dependabot's pull request 5,
+  pulls it from ghcr.io. It now runs from `scorecard.yml`, weekly and on
+  demand, a workflow of its own because publishing the results holds the
+  whole file to Scorecard's rules (no top-level env or defaults or write
+  permission, id-token: write on its job only, only approved actions in that
+  job), which its header now spells out; the job's permissions were already
+  what publishing needs. cargo-mutants needs some 20 hours for the 1,371
+  mutants of the keys and engine crates (about 50 s each), so the single
+  nightly job was cancelled at GitHub's 6 h limit on 10-22, and on 10-21 it
+  stopped after 2 h 44 min when its runner was shut down, not because of
+  survivors. It now runs from `mutants.yml`, weekly and on demand, as 16
+  jobs, each one shard (`--shard k/16`, dealt round-robin, about 86 mutants
+  and 80 minutes today) through the new `ci/mutants.sh`, which stops the
+  shard after 180 minutes (the job after 210), prints the counts and every
+  surviving and timed-out mutant in the log and the job summary, and fails
+  when the unmutated tree does not build or its tests fail, when the shard
+  runs past its budget, or on any other cargo-mutants error; each shard
+  uploads its `mutants.out`. cargo-fuzz passed in 17 s without fuzzing
+  anything: install-action has no cargo-fuzz (its `cargo-fuzz` ref is a
+  branch whose action installs nothing, with a warning), and `for t in
+  $(cargo fuzz list)` ignored the "no such command" error. It would have
+  failed even installed: `cargo fuzz run` in `fuzz/` picks stable through
+  `rust-toolchain.toml`, which refuses the sanitizer flags. Now cargo-fuzz is
+  built from crates.io with `--locked`, the new `ci/fuzz-targets.sh` lists the
+  targets (it fails when the listing fails, and with no target it prints a
+  notice and the fuzz jobs are skipped), and each target, eight today, runs
+  as its own nightly job with `cargo +nightly fuzz run` for 30 minutes over
+  its corpus and committed seeds, uploading the crashing input when it
+  fails. This is the first nightly that fuzzes the seven keys decoders
+  (`frame_decode` is still the placeholder), so a crash now turns the run
+  red. The tools these workflows install are pinned like the supply-chain
+  tools: cargo-mutants 27.1.0 and cargo-careful 0.4.10 through install-action
+  with `fallback: none` (cargo-careful was `cargo install` of the newest),
+  cargo-fuzz 0.13.2 through `cargo install --version`; `gate.sh` checks that
+  each is installed at that version (cargo-careful has no `--version`, so for
+  it the version `cargo install` recorded) and that its workflow installs it
+  only as pinned, and `bootstrap.sh` (outside this repository) installs those
+  versions. `ci/test-mutants.sh` and `ci/test-fuzz-targets.sh` test both
+  scripts on stand-ins for the tools (exit codes, budget, listing failure,
+  empty list, unsafe or non-ASCII names, the signal the budget sends);
+  `gate.sh` runs them, a new `ci.yml` job runs them on every push, and the
+  scheduled workflows run them before the real tools. The scheduled jobs check out
+  without persisted credentials; mutants run 12 shards at a time (about 160
+  minutes in all) and one run at a time, keeping `mutants.out` for 14 days
+  and fuzz crash inputs for 30. `mutants.out` is ignored by git. Decisions
+  for the plan: surviving mutants, and mutants whose tests run past 300 s, are
+  reported, not failing, until the end of phase 0, while the keys crate is
+  reworked to the shared-key model, and are revisited then (2026-10-22);
+  mutation testing runs weekly (Saturdays) and on demand, in 16 round-robin
+  shards, each held to a budget well inside the job limit, and gains shards
+  when one nears it; Scorecard runs weekly (Saturdays) and on demand from a
+  workflow of its own; nightly fuzzing runs one job per target;
+  cargo-mutants, cargo-fuzz and cargo-careful are pinned like the
+  supply-chain tools; before 1.0, a fuzz crash in a decoder is handled
+  through a private security advisory. Reviewed (2026-10-22) on 1c3477d by
+  two fresh-context agents (Claude Opus 5.5): correctness a1cb318c13cfcad3b,
+  clean with 1 should-fix and nits, and security a64459b4eff497e1c, the
+  security-reviewer pass, clean with nits. The accepted items were applied in
+  this commit; confirmed clean 2026-10-22 by a1cb318c13cfcad3b for both
+  reviewers; the merge agent wrote this line.
 - CI's supply-chain tools pinned to exact versions, the ones `gate.sh` now
   requires: cargo-deny 0.20.2, cargo-audit 0.22.2, cargo-machete 0.9.2 and
   cargo-vet 0.10.2. Run 39160240196 on `main` (877bb14) failed at `cargo vet
