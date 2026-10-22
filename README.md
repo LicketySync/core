@@ -6,16 +6,20 @@ compiles for Windows, macOS, Linux (x86 and ARM), Android, iOS and WebAssembly.
 
 Lickety-Sync syncs folders between your own devices and the people you share
 with, and never contacts a server: no accounts, no tracker, no relay you did
-not turn on. Every connection is encrypted and every key is one you issued.
+not turn on. Every connection is encrypted, and only the people you give a
+folder's key can join it.
 Licensed under the Mozilla Public License 2.0.
 
 - Plan and design: "Lickety-Sync: Project Plan" (the living document).
 - Specification: [`spec/threat-model.md`](spec/threat-model.md) (adversaries and
-  the numbered requirements TM-1 to TM-40 every change is reviewed against),
+  the numbered requirements TM-1 to TM-42 every change is reviewed against, of
+  which TM-16, TM-19, TM-34, TM-36 and TM-38 are retired),
   [`spec/suites.md`](spec/suites.md) (algorithms, parameters and the approved
-  crates), [`spec/keys.md`](spec/keys.md) (derivations, grants, epochs, key
-  strings, rotation and revocation formats), [`spec/protocol.md`](spec/protocol.md)
-  (wire protocol, handshake, messages, index records) and
+  crates), [`spec/keys.md`](spec/keys.md) (a folder's three shared keys and
+  their derivations, key strings and words, signed records, encryption of
+  contents and names, the handshake's folder proof, and unlinking and sharing
+  again), [`spec/protocol.md`](spec/protocol.md) (wire protocol, handshake,
+  messages, index records and how peers exchange them) and
   [`spec/allowed-hosts.txt`](spec/allowed-hosts.txt) (the host allow-list).
 - How work is done: [`CONTRIBUTING.md`](CONTRIBUTING.md) and the CI in `.github/workflows/`.
 - Reporting a vulnerability: [`SECURITY.md`](SECURITY.md).
@@ -26,7 +30,7 @@ Licensed under the Mozilla Public License 2.0.
 | --- | --- |
 | `licketysync-keys` | Recovery phrase, seed-derived keypairs, X-Wing/HPKE wrapping, hybrid signatures, grants and revocations, chunk and record sealing, keyed BLAKE3 chunk hashes and Padmé padding (TM-12, TM-14, TM-15) |
 | `licketysync-protocol` | Suites, framing, Hello, Status, record and relay messages |
-| `licketysync-index` | SQLite index, version vectors, hash-chained records and equivocation withdrawal (TM-16), tombstones; a path a withdrawal empties goes to the engine's archive and deletion brake |
+| `licketysync-index` | SQLite index of signed records per device sequence, cached cursor digests, `supersedes` heads and conflicts, waiting records and tombstones (TM-17, TM-40, TM-41) |
 | `licketysync-engine` | FastCDC chunking (sealed, hashed and padded through `keys`), scanning and change journals, conflicts, versioning, selective sync, the archive and the deletion brake (TM-35) |
 | `licketysync-net` | rust-libp2p transports, discovery, relays, DHT, HTTPS listener |
 | `licketysync-daemon` | The service and its local API |

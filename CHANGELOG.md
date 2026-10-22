@@ -6,6 +6,290 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Specification rewritten for shared folder keys (the owner's decision of 2026-10-18, both sets of
+  the owner's answers of 2026-10-22, and the coordinator's rulings R-K1 to R-K6, S-1 to S-4 and the
+  round-1 review fixes of that day; the owner's direction: "simplify the tracking, simplify the
+  indexing, simplify the sharing whenever we can"). Each folder has three shared secret keys, as in
+  Resilio Sync, and holding a key is the access; every update is signed with the folder's write key.
+  `spec/keys.md` (1 552 lines in the drafts, now about 820): a 32-byte random write secret derives the
+  folder's Ed25519 signing key, its data key and its folder ID (the labelled hash of the
+  verification key); the read key is the verification key and the data key; the sealed key is the
+  verification key and an access key derived from the data key; the access key parents a hint key
+  and a payload key for the handshake, and the data key the chunk, chunk-nonce, chunk-hash and record
+  keys; every public key must be canonically encoded and not of small order; key strings are Bech32m
+  with one prefix per tier (`lsw` 65 characters, `lsr` and `lss` 116), each payload led by
+  `be16(suite)`; the write key also has a 24-word BIP39 form with exact entry and refusal rules; there
+  is no folder-wide record; chunk and sealed-metadata encryption lose their epochs, and the sealed
+  part is capped at 1 572 864 bytes; one handshake proof, possession of the access key, serves every
+  tier; making, unlinking (which keeps the files and the archive) and sharing an existing directory
+  replace any re-key protocol; showing, exporting or sending a write key needs the operating
+  system's own user authentication; device keys, the local key store (phase 1, with Argon2id),
+  linked devices, the vectors, a 25-label registry and an old-to-new section map follow.
+  `spec/protocol.md`: framing and the decoding rules are unchanged; Hello and the DeviceProof use
+  34-byte canonical Ed25519 device keys and suite entries of 1 to 65 535; the folder proof carries
+  only the tier the prover reports, shown and never relied on; the key-record messages and the
+  Folder record are gone (0x8006 and 0x800B reserved, `FEATURE_REQUIRED` gone from `CloseReason`
+  and `ProofStatus`); index records lose the key ID, epoch, `previous`, `resumes` and the version
+  vector, cap `seq` at 2^62, and name in `supersedes` (at most 16) the versions they replace, from
+  which every read and write holder computes a path's heads (two heads are a conflict; a record that
+  names a version not yet held waits); duplicates and gaps on a push are ignored before any
+  signature is verified; cursors carry cached digests; a round of range requests (16 384 writers
+  each) covers any number of writers; pushes start when a folder opens and a dropped push owes the
+  receiver a round; any peer may ask for any chunk it holds (the blob and a record naming it) and
+  `CHUNK_NOT_FOUND` never closes; `CHUNK_BUSY` is exact, a queued chunk request holds only its hash,
+  and a requester keeps one busy backoff timer per connection and no state per hash after
+  `CHUNK_NOT_FOUND`: it asks for chunks in passes by ascending hash and starts a pass to a peer that
+  lacked one only after Status's new `chunks_stored` counter grows or a round completes; heads have a
+  full display order; writer-fault issues name the record, never a device; section 4.6 is now chunks; the outcome table, constants and vectors (now with one scenario
+  shape for connection vectors) are rebuilt. `spec/threat-model.md` (version 2) states plainly that
+  any write-key holder can change or delete anything (deletions from peers are not braked, and the
+  archive limits how much is lost for good), can make peers track any number of writers and
+  recompute and resend a writer's history, and cannot be removed except by the people who stay
+  unlinking and sharing again by hand; read holders read but cannot write; sealed peers can neither;
+  outsiders get nothing without a key. TM-16, TM-19, TM-34, TM-36 and TM-38 are retired with their
+  numbers kept; TM-41 (concurrent versions kept, convergence) and TM-42 (removal is unlinking and
+  sharing again) are new; TM-5, TM-9, TM-10, TM-11, TM-12, TM-14, TM-17, TM-18, TM-22, TM-30,
+  TM-32, TM-33, TM-35, TM-37, TM-39 and TM-40 are rewritten, and TM-3, TM-6, TM-13 and TM-25
+  updated in a phrase; the transport, local API, path resolver, supply-chain and fuzzing entries
+  stand. `spec/suites.md` (version 2): Ed25519 alone for the two signatures left (index records and
+  the DeviceProof), no key encapsulation (X-Wing, HPKE, ML-DSA-65 and age leave the approved list;
+  `bip39` stays for the words), a folder's suite fixed by its keys, Padmé listed as the one padding
+  scheme written here, `bech32` 0.12 without its error-correction API, `base64` 0.23 for the link's
+  certificate hash, Argon2id from phase 1, and the label table copied from the new registry.
+  `README.md` and `SECURITY.md` describe the new specs (TM-1 to TM-42, five retired), and README's
+  index crate row drops version vectors, hash chains and equivocation withdrawal. The specs
+  describe `main` as it will be once this commit and the keys-crate rework land together: `deny.toml`
+  lists `licketysync-keys` as the only wrapper of `blake3` and `chacha20poly1305`, has no `hpke`,
+  `ml-dsa`, `x-wing`, `ml-kem` or `x25519-dalek` entries, and the keys crate has no `test-vectors`
+  feature. No code changes: the keys crate on main still implements the old model, so its
+  label-registry test (`crates/keys/tests/registry.rs`) fails against these specs until the
+  keys-crate rework lands, and the two must merge together as one series.
+  Decisions for the plan:
+  - Owner's answers of 2026-10-22, first set: Ed25519 alone; no re-key feature (unlink a folder
+    keeping its files, share an existing directory as a new folder, give the new keys outside the
+    client); the write key also as words; no cap on writers.
+  - Owner's answers of 2026-10-22, second set: no brake on incoming mass deletions (the archive, 30
+    days, keeps them); showing or exporting a write key, and sending one to a linked device, requires
+    the operating system's own user authentication; per-file tracking keeps only the most recent
+    revision (R-K6).
+  - R-K1: every signature is Ed25519 alone (index records and the DeviceProof); no ML-DSA and no
+    hybrid; post-quantum signatures, if added, come as a later suite.
+  - R-K2: suite 1 has no key encapsulation; X-Wing through HPKE is removed with nothing in its
+    place; linked devices pass folder keys as key strings over the authenticated device channel;
+    XChaCha20-Poly1305, BLAKE3's labelled modes, Argon2id and the transport are unchanged.
+  - R-K3, as specified: the write secret is 32 random bytes; `folder/signing-key` and
+    `folder/data-key` derive the signing seed and the data key from it; the folder ID is
+    `H("licketysync/v1/hash/id/folder", be16(suite) || folder_vk)`; the sealed key's secret is an
+    access key derived from the data key (`data/access-key`), so every tier derives the folder ID
+    and the access key; read key = verification key + data key, sealed key = verification key +
+    access key, write key = write secret; Bech32m prefixes `lsw`, `lsr`, `lss`; the words are BIP39
+    English over the write secret.
+  - R-K4: no writer cap; an `IndexRequest` lists at most `MAX_CURSORS_PER_REQUEST` (16 384) cursors
+    within a device-ID range (`after`, `through`), a round of range requests covers every writer, a
+    responder keeps no state between requests, and every per-connection table is bounded by a
+    constant; the residual (a write holder can make every peer store and compare any number of
+    writers) is stated (threat model §3.6, TM-22).
+  - R-K5: records of one device at one sequence number are concurrent versions in the canonical
+    order (ascending `seq`, then record hash), stored and applied, with no fork, withdrawal,
+    evidence or blame; three things make them, a write holder signing twice under its own ID, a
+    write holder signing under another's, and a device restored from a backup.
+  - R-K6: no version vectors and no per-device counters in records; each record names in
+    `supersedes` the record hashes of the heads of its path that its writer held (at most
+    `MAX_SUPERSEDES`, 16); heads are the versions no held record supersedes; two or more heads are a
+    conflict, all kept; a record naming a version not yet held waits and makes no false conflict; a
+    restored device's edit conflicts instead of overwriting; `seq` is capped at `MAX_SEQ` (2^62);
+    history compaction (later) must keep enough of each replaced version to tell it apart (open
+    item).
+  - S-1: one folder proof for every tier, possession of the access key bound to the transcript and
+    the role; the tier is reported for display only; the write proof, the read proof and
+    `data/read-proof-key` are gone.
+  - S-2: no Folder record for now (no revision, keep-the-greater rule, `required_features`,
+    `FEATURE_REQUIRED` or pause on a missing feature); readers decode every format code their release
+    implements and treat any other as a writer fault; features are negotiated in the Hello; a
+    folder-level requirement is a later phase's item if ever needed.
+  - S-3: any peer with the folder open may request any chunk hash; `CHUNK_NOT_FOUND` is an ordinary
+    answer; the chunk-request permission rule and the 64-entry unknown-hash set are gone; requests are
+    bounded only by `max_requests_in_flight`.
+  - S-4: no "written by" display; device IDs are sync keys only.
+  - PUSH-1: one "round owed" flag per folder per connection, set by an empty push and by a marks
+    overflow; the owed round starts once the current reply completes and no sooner than
+    `INDEX_RESYNC_INTERVAL` after the previous owed round began, and after any round under way has
+    finished (decision: never abandoning a round, so that every round finishes however often the
+    flag is set), going before a due listed request; one set during an owed round owes the next.
+  - PUSH-2: pushes start as soon as the folder is open on the connection.
+  - MARK: a range request clears only the marks in its range set before it was sent, and a listed
+    request the marks it lists; a later mark stays for a listed request.
+  - DUP: a record's hash is looked up before its signature is verified, and an exact duplicate is
+    ignored unverified.
+  - DIGEST: digests are cached per writer per `seq`, extended or recomputed from a low-landing
+    record's `seq` up, and read, never recomputed, when serving; the O(C·n) cost a write holder can
+    force is a stated residual (threat model §3.6, TM-22).
+  - UNLINK: unlinking keeps the archive as ordinary files outside the hidden directory; before
+    removing someone the app advises pausing the folder and restoring from the archive (`keys.md`
+    §7.3, §7.4; TM-35, TM-42).
+  - AK: the access key keys nothing itself: `handshake/hint-key` and `handshake/payload-key` derive
+    from it, and the hint and proof key are keyed hashes under them with no label in the input.
+  - WORDS: entry is whitespace-separated and case-insensitive, takes a word or a unique prefix of four
+    letters or more, and refuses in this order: a count other than 24 (naming the count), the first
+    token that is neither (naming its position), a bad checksum (naming no position); a later suite
+    defines its own word form; the threat model notes that the words look like a wallet phrase.
+  - POINTS: Hello's device key, and every verification key in a key string, must be canonical and
+    not of small order (`PROTOCOL_ERROR` in the Hello), so one key has one ID.
+  - NUMBERS: the drafts never shipped, so their numbers and labels carry no compatibility duty;
+    `reserved` is a reading aid, and the never-reuse rule applies from the first release.
+  - Decision: a rename is one record at the new path whose `supersedes` names the old path's heads
+    (and the new path's, if any), so the old path keeps no head and needs no separate tombstone.
+  - Decision: `supersedes` is a set: producers write it sorted and without repeats; verifiers do not
+    check the order and count a repeat once.
+  - Decision: a record also waits while a record it names waits, so a chain that arrives out of
+    order waits as a whole; heads count only applied records that are not waiting, both as versions
+    and as replacing one; an opaque record is held (a record naming it does not wait) but replaces
+    nothing; a path with more than 16 heads stays a conflict until a later write names the rest.
+  - Round 2 (R2 NIT1, NIT2): the display order of a path's heads is non-tombstones first, then
+    (decision) directories before files, since a directory's children need it at the path, then the
+    greater `mtime_ns`, then the smaller record hash; the first sits at the path, all tombstones
+    mean deleted, and every other non-tombstone head whose content differs becomes a conflict copy;
+    content differs when the kinds differ or two files' `plain_hashes` differ (two directories, or
+    two files with equal `plain_hashes` whatever their times and modes, do not); so a file beats a
+    tombstone with no copy, and a directory beats a file, which becomes a copy.
+  - Round 2 (R1 N4): a rename whose old and new paths have more than 16 heads together names the old
+    path's heads first, in display order, then the new path's, up to 16; the rest stay heads.
+  - Decision, with round 2 (security N4): a record that names a version no peer holds waits for good
+    (a stated write-holder residual); a waiting record writes a log line when it starts to wait and
+    raises an informational issue naming the record once at least one peer has the folder open and
+    a round with every peer that has it open has completed since it began to wait.
+  - Round 2 (security N5, R1 N2): the one exception to "same records, same heads" is release skew: a
+    `kind` an older release does not know is opaque there; so a `SealedMeta` kind, like a
+    compression code, joins the baseline if added before 1.0 and needs a folder-level requirement if
+    added after.
+  - Round 2 (security N3): an unverified gap on a push may still set a mark, bounded by
+    `MAX_MARKED_WRITERS` per folder per connection, whose overflow owes one round at most once per
+    `INDEX_RESYNC_INTERVAL`; stated in the no-blame rule.
+  - Round 2 (security N2): the tier a peer reports is shown marked "reported", like a device name.
+  - Decision: the gap check also runs before verification: a gap on a push is ignored unverified, and
+    a gap or an out-of-scope writer in a reply is a sender violation whatever the signature, so every
+    signature a peer verifies either stores a record it lacked or closes the connection (TM-22).
+  - Decision (with S-4): every writer-fault issue names the record (hash, and path where the seal
+    opened), never the device a record claims.
+  - Decision: a device whose next `seq` would pass `MAX_SEQ` draws a new device seed and so a new
+    device ID; unreachable in practice, since records are held contiguously from 1.
+  - Decision: a round's split rule is ascending device IDs, at most 16 384 per request, each
+    request's `through` the last writer it lists and the last request's empty.
+  - Decision: the owed empty push waits in order like a reply and is never dropped.
+  - Decision, with round 2 (R2 SF1, security SF-A, R1 N1): `CHUNK_BUSY` exactly when the holder's
+    unsent bytes are at least `MAX_SEND_QUEUE / 2` as it dispatches the request; a queued request
+    holds only its hash and the chunk is read from storage only as it is sent; after `CHUNK_BUSY` the
+    requester sends no chunk request on that connection for `CHUNK_BUSY_BACKOFF` (1 s, doubled up to
+    64 s only by a busy answer to a request sent after the current backoff ended, back to 1 s after a
+    `CHUNK_OK`), one timer per connection; after `CHUNK_NOT_FOUND` it keeps no state for the hash and
+    asks other peers; TM-22 states that a key holder of any tier, under any number of device
+    identities, can pin up to `MAX_SEND_QUEUE` per connection for as long as it keeps the connection
+    alive (a trickling reader is never closed by `IDLE_TIMEOUT`), so the phase 1 connection limit is
+    what bounds the total.
+  - Round 2 ruling on the stall the reviser raised, with the final confirms: `FolderStatus` gains
+    `chunks_stored` (field 6), the chunks the device has stored for the folder since the folder
+    opened on the connection (0 at first, never falling), and a change in it alone sends at most one
+    Status per second per folder per connection. A requester asks a peer for chunks in passes, in
+    ascending `cipher_hash` order, keeping only its position; a `CHUNK_NOT_FOUND` does not pause the
+    pass; after a pass that got any, the next pass to that peer for the folder starts only once the
+    peer's Status shows a greater `chunks_stored` or a round with it completes, and no sooner than
+    1 s after the latest `CHUNK_NOT_FOUND`; the trigger is evaluated at most once per
+    `STATUS_INTERVAL`; per folder per connection the state is one position, one number and one time,
+    nothing per hash.
+  - Spec touch before the pair lands (KEYS-SF3): a key-string payload of at least 2 bytes is judged
+    by its suite first (0 malformed, not implemented "this key needs a newer release"), then by its
+    length under that suite; a payload under 2 bytes is malformed.
+  - Spec touch (Q1): a directory record with chunks, and a file record that is not a tombstone with
+    `size > 0` and no chunks, are writer faults (step 6).
+  - Spec touch (Q2): NFC is the writer's duty only; readers check the rest of the path grammar and not
+    normalisation, so Unicode-table differences between releases cannot split peers; residual: a
+    write holder can write non-NFC names, which are then distinct paths.
+  - Spec touch (Q3): a chunk-pass trigger that comes inside the `STATUS_INTERVAL` window is deferred by
+    one pending bit per folder per connection and evaluated when the window ends, never dropped.
+  - Spec touch (Q4, Q5): `protocol.md` §8 says which crate checks each vector item (heads and cached
+    digests are the index crate's); every protocol constant, `MAX_SEND_QUEUE` included, is defined
+    once in the protocol crate and imported by the engine and the runtime.
+  - Round 2 (security N1): a device holds a chunk for the folder when it has the blob and holds a
+    record naming its `cipher_hash`; threat-model §5 lists that `CHUNK_OK` against `CHUNK_NOT_FOUND`
+    shows any peer with the folder open which chunks a device holds, and so, under selective sync or
+    "free up space", which files it keeps locally.
+  - Decision: the folder proof's suite check stays, folded into REJECTED; `ProofStatus` has
+    `ACCEPTED` and `REJECTED` only; the payload is the tier alone (2 bytes, 18 sealed).
+  - Decision: compression codes 0 to 3 stay named; phase 0 implements and writes 0 only; a writer
+    uses another code only once every supported release of major 1 reads it: a decoder added before
+    1.0 joins the baseline, and a code added after 1.0 needs a folder-level requirement first.
+  - Decision, with round 2 (R2 NIT6, security SF-B): on a device with no operating-system
+    authentication prompt (a headless box), the key store's passphrase stands in for it; the rule
+    fails closed: the prompt or passphrase is asked at that moment, every time (an unlocked store, a
+    running daemon or a process holding the API token does not count), and a device with neither
+    refuses to show, export or link a write key until the person sets one; a read or sealed key is
+    shown on explicit action alone, since neither can change anything.
+  - Decision: Padmé is listed in `suites.md` as the one padding scheme written in this workspace, and
+    TM-5 permits it by name.
+  - Decision: the folder ID grants no access but lets its holder confirm and track the folder; logs
+    redact it by default and error values may carry it.
+  - Decision: `base64` 0.23 (default features off, `alloc` only) is approved for the link's `c`
+    parameter only; `bech32` moves to 0.12 and its error-correction API is barred.
+  - Decision: Argon2id and the key store are phase 1's; the RFC 9106 vector lands with them.
+  - Decision: label vectors are for `derive_key` labels only; the other labels are covered by the
+    vectors of what they compute; handshake vectors use a fixed transcript hash and cover both roles.
+  - Decision: `keys.md` §2.2 (the Folder record) and `protocol.md` §4.6 (key records) are removed and
+    the sections after them renumbered (discovery is `keys.md` §2.2, chunks `protocol.md` §4.6); both
+    files say where each section went.
+  - Kept from the drafts' rewrite: the handshake hint and proof key keyed by (now through) the access
+    key, with the folder ID in their input, so relays and anyone who knows only a folder ID cannot
+    open a proof and a key made from two folders' halves fails at the hint; one FolderProof per folder
+    per connection, a repeated hint malformed, `MAX_PROOFS_PER_CONNECTION` 256, `sealed` 16 to
+    1 024 bytes; marks bounded by `MAX_MARKED_WRITERS` (1 024); `REPLY_PAGE_TIMEOUT` restarts on a
+    push that brings a stored record; pushes go to every connection where the folder is open except
+    the one the record came by; reply pages may end anywhere; `MIN_MESSAGE_SIZE` stays 8 MiB; a
+    folder's suite is fixed by its keys and a record under another suite is malformed; Hello's device
+    key is `be16(suite) || ed25519_pk`, 34 bytes; a device holding records under its own ID at or
+    above its next `seq` moves its counter past them; names have no key of their own; chunk
+    associated data is the folder ID and sealed metadata's `folder_id || device_id || be64(seq)`; the
+    local key store holds the device seed and one key per folder and nothing derived; linked devices
+    pass key strings at most at the sender's tier, only over QUIC or TCP with TLS 1.3; only the
+    write key has words; a device joining a re-shared directory adopts matching files and keeps a
+    differing one as a conflict copy, and a directory belongs to at most one folder on a device.
+  - Labels: added `folder/signing-key`, `folder/data-key`, `data/access-key`, `data/chunk-key`,
+    `data/chunk-nonce-key`, `data/chunk-hash-key`, `data/record-key`, `handshake/hint-key`,
+    `handshake/payload-key` and `hash/writer-digest`; `key/ed25519` now derives only the device key;
+    removed every `identity/`, `epoch/` and `wrap/` label, `folder/root-seed`,
+    `folder/chunk-hash-key`, `key/ml-dsa-65`, `key/x-wing`, `hash/id/identity`, `hash/id/key`, the
+    keyed `handshake/folder-hint` and `handshake/proof-key`, and the `sig/` labels `folder`,
+    `folder-proof`, `grant`, `grant-pop`, `rotation`, `wrap`, `revocation`, `suspension`, `lift` and
+    `root-rotation`; the registry has 25 labels.
+  - Plan passages this contradicts, for the plan scribe: "Writers cannot equivocate or roll back"
+    (.140303: equivocation is not flagged, R-K5, and records name the versions they replace, not
+    their predecessors; the rollback half stands); the index-sync decision (.173523) on forks, head
+    hashes and fork pushes; "Capabilities" (.46197) and step 3 (.45435) on key IDs in the folder proof
+    and on a folder's required features naming compressions (S-2); the protocol decision .164566
+    (required features; Hello key IDs); the device-name decision .175973 (a folder proof "which
+    anyone who knows the folder ID can open"); the crate list in "Security" (.99866: x25519-dalek,
+    ml-kem, ml-dsa, age) and the unaudited post-quantum crates (.163702); hybrid key wrapping and
+    X-Wing (.137539, .162513, .155116); hash-chained records against equivocation and authenticated
+    key wrapping (.146253); records naming predecessors and equivocation flagging the key (.166311);
+    the hardening table .147467 row .148967 (cell .149084, "Records name the hashes of their
+    predecessors"; cell .149067, "Version vectors"); "AI and agent access" (.172120) on recovery
+    words; "Linked devices" (.63931); version vectors in the Sync engine list (.48214 index, .49884
+    conflicts, .122706 ordering), "Index growth" (.55484: tombstones as path hash plus version
+    vector, vectors pruned when a device leaves), "Folder keys" (.63233: device IDs only in version
+    vectors), the feature table cell .116412, the comparison table cells .130154 and .131727, the
+    tests paragraph .98886 (property tests for version vectors) and the stable browser device ID
+    (.182215: version vectors small); the "Key model simplified" decision and key table
+    (.189713, .185935, .186396: the sealed key is the verification key and the access key, not the
+    folder ID, and device IDs are sync keys, not vector entries); "Which devices use which key"
+    (.106256: no device is shown as a record's author, S-4); the deletion brake (.121980, .126097)
+    covers a device's own scans, and deletions from peers are not braked.
+  Reviewed (2026-10-22) in rounds by fresh-context agents (Claude Opus 5.5), the security-reviewer
+  pass among them; authors a5628fc094247fa8f (first draft) and acf6575edad08cf51 (revisions). Round
+  1 on c5dcf1c: correctness a67a49385587fed85 blocked by 3 findings, clarity ae4109c83e24e3e8e
+  blocked by 1 and security aff4a9adfaf5151c8 blocked by 6; the rulings R-K6 and S-1 to S-4, with
+  the owner's answers, were applied. Round 2 on 4c83a57: correctness clean, clarity clean with 1
+  should-fix, security blocked by 2, fixed in 0d68aaf and bfb5518. Final confirms: clarity clean on
+  cd2ac95; security clean on bfb5518 and on the last touch, 5d78a87 (before the rebase). The merge
+  agent wrote this record; it was not re-reviewed; rebased onto 28bf4da.
+
 - The Nightly workflow fixed forward after runs 39576345810 (2026-10-21) and
   39755196041 (2026-10-22) on `main`, and cargo-mutants and OpenSSF Scorecard
   moved to weekly workflows, as the plan's checks table has them (the

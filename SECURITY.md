@@ -23,9 +23,13 @@ traffic any home connection would already fail under.
 
 ## What we promise about keys
 
-Keys are never sent to any server because there is none. The threat model in
-`spec/threat-model.md` lists the adversaries we design against, the ones we
-explicitly do not, what stays visible to whom, and the numbered requirements
-(TM-1 to TM-40) the code is reviewed against; `spec/suites.md` lists every
-algorithm, parameter and crate that may perform cryptography. A report that shows
-one of those requirements unmet is a vulnerability.
+Keys are never sent to any server because there is none. Holding a folder's
+key is the access, as in Resilio Sync: whoever holds a folder's write key can
+change or delete anything in it, and removing someone means sharing the folder
+again under new keys; the threat model states this as the design, not as a
+vulnerability. The threat model in `spec/threat-model.md` lists the adversaries
+we design against, the ones we explicitly do not, what stays visible to whom,
+and the numbered requirements (TM-1 to TM-42, of which TM-16, TM-19, TM-34,
+TM-36 and TM-38 are retired) the code is reviewed against; `spec/suites.md`
+lists every algorithm, parameter and crate that may perform cryptography. A
+report that shows one of those requirements unmet is a vulnerability.
