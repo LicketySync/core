@@ -28,7 +28,7 @@ Licensed under the Mozilla Public License 2.0.
 
 | Crate | Holds |
 | --- | --- |
-| `licketysync-keys` | Recovery phrase, seed-derived keypairs, X-Wing/HPKE wrapping, hybrid signatures, grants and revocations, chunk and record sealing, keyed BLAKE3 chunk hashes and Padmé padding (TM-12, TM-14, TM-15) |
+| `licketysync-keys` | Shared folder keys (write, read, sealed) and their derivations, Ed25519-signed index records, record hashes and writer digests, chunk and sealed-metadata encryption, keyed BLAKE3 chunk hashes and Padmé padding, the handshake's folder hint and proof key, device keys, key strings and the write key's words (TM-9, TM-11, TM-12, TM-14, TM-15, TM-32) |
 | `licketysync-protocol` | Suites, framing, Hello, Status, record and relay messages |
 | `licketysync-index` | SQLite index of signed records per device sequence, cached cursor digests, `supersedes` heads and conflicts, waiting records and tombstones (TM-17, TM-40, TM-41) |
 | `licketysync-engine` | FastCDC chunking (sealed, hashed and padded through `keys`), scanning and change journals, conflicts, versioning, selective sync, the archive and the deletion brake (TM-35) |

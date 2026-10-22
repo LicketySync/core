@@ -80,8 +80,6 @@ ci/test-geiger.sh
 ci/geiger.sh
 ci/test-no-hostnames.sh
 ci/no-hostnames.sh
-ci/test-no-test-vectors.sh
-ci/no-test-vectors.sh
 ci/test-mutants.sh
 ci/test-fuzz-targets.sh
 cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-<crate> --ignore-filename-regex 'crates/(<the others>)/'   # once each for keys, protocol, engine

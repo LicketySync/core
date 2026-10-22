@@ -8,8 +8,8 @@
 // rule in project.yml needs a ruleid case in this file. This file is not
 // compiled; it only has to parse as Rust. The scan excludes .semgrep/, so these
 // lines never count as findings there. The blake3 rules exempt
-// crates/keys/src/labels.rs and crates/protocol/src/hash.rs by path, which no
-// case here can show; the scan of those two files does.
+// crates/keys/src/labels.rs by path, which no case here can show; the scan of
+// that file does.
 
 // no-blake3-imports: every way of importing or aliasing the crate.
 

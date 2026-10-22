@@ -1,0 +1,10 @@
+{
+  "beacon_id": "8ddd45d9e7173866f5de549be36f3bc3",
+  "device_id": "5d21055a63342144bbcc98532f0a6a8cb4aa251eec1b49e2c04797eb782365d5",
+  "link_code": "lsl1t5ss2knrxss5fw7vnpfj7zn23j625fg7asd5nckqg7t7k7prvh2ap5wj602dt4khmrva4k7umh0dlc8put37fe0xul5wn6htank7amc3cqyay",
+  "link_code_upper": "LSL1T5SS2KNRXSS5FW7VNPFJ7ZN23J625FG7ASD5NCKQG7T7K7PRVH2AP5WJ602DT4KHMRVA4K7UMH0DLC8PUT37FE0XUL5WN6HTANK7AMC3CQYAY",
+  "link_proof_a": "5a985f0a7f0cfa6ba601cd735ade0d1309a6b68a6f866370e1f66865791d9384",
+  "link_proof_b": "c1a4392371fb9980d685d8834b1c6a46ffdf53a720011e0379192f6133799d40",
+  "link_secret": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+  "transcript_hash": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+}

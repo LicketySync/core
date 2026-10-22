@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Discovery hashes (`keys.md` section 2.3): the LAN beacon's peer tag and
+//! Discovery hashes (`keys.md` section 2.2): the LAN beacon's peer tag and
 //! beacon ID under a fresh salt and the current Unix minute, and the daily
 //! DHT ID. The caller supplies the time (`Clock::wall_time()`); nothing here
 //! reads a clock.
@@ -29,16 +29,16 @@ pub fn unix_day(unix_seconds: u64) -> u64 {
 /// where `peer` is the announcer's 32-byte libp2p identity key.
 #[must_use]
 pub fn peer_tag(salt: &[u8; 16], peer: &[u8; 32]) -> [u8; 16] {
-    crate::bytes::fill::<16>(&[&labelled_hash(labels::HASH_DISCOVERY_PEER, &[salt, peer])])
+    crate::bytes::first(&labelled_hash(labels::HASH_DISCOVERY_PEER, &[salt, peer]))
 }
 
 /// `lan_id = H("licketysync/v1/hash/discovery-lan", salt || folder_id || peer_tag || be64(minute))[0..16]`.
 #[must_use]
 pub fn lan_id(salt: &[u8; 16], folder_id: &FolderId, peer_tag: &[u8; 16], minute: u64) -> [u8; 16] {
-    crate::bytes::fill::<16>(&[&labelled_hash(
+    crate::bytes::first(&labelled_hash(
         labels::HASH_DISCOVERY_LAN,
         &[salt, folder_id.as_bytes(), peer_tag, &minute.to_be_bytes()],
-    )])
+    ))
 }
 
 /// Whether a beacon's `minute` is within ±5 minutes of the listener's own.
@@ -50,10 +50,10 @@ pub fn minute_in_window(ours: u64, theirs: u64) -> bool {
 /// `dht_id(day) = H("licketysync/v1/hash/discovery-dht", folder_id || be64(day))[0..20]`.
 #[must_use]
 pub fn dht_id(folder_id: &FolderId, day: u64) -> [u8; 20] {
-    crate::bytes::fill::<20>(&[&labelled_hash(
+    crate::bytes::first(&labelled_hash(
         labels::HASH_DISCOVERY_DHT,
         &[folder_id.as_bytes(), &day.to_be_bytes()],
-    )])
+    ))
 }
 
 /// The IDs a device looks up: yesterday, today and tomorrow, which covers

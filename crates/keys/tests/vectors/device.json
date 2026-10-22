@@ -1,11 +1,18 @@
 {
-  "device_id": "40da60a94a3dd825be945a0cd52f4eb72b1095f0b439be64c09475c59642ee80",
+  "device_id": "5d21055a63342144bbcc98532f0a6a8cb4aa251eec1b49e2c04797eb782365d5",
+  "device_key_seed": "a66453319a7c91618ddcc8356dd3e3af5cf0a2e633839a68a8fc95f539b2723d",
+  "device_pk": "375f09f1f51a14ed7903fe540cdf4a30b0d8093549b86bff80ab107d03b1760f",
+  "device_proof_role_a": "14a397eaff7f12fe1f419785054eed4ef1be94b088bee9b136de0ed475078d9bcfb83f03ac3c967a2c38dc50b2045ac98a2b7b09547a6fc7b497dbc4ed9fb20e",
+  "device_proof_role_b": "a437c25d8e96bc7fe3055ab8532974059b35d396a2dd70127299509eefe3a8913b886903b419b3baf6004b30529161729593b0be4569ebb90355c95b26fa1707",
   "device_seed": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+  "dht_key_seed": "2a1b2f17e4450c797ed8303a691f0db109db2a2db1a2526de1c2fcd9be2daa65",
   "dht_pk": "fc701004dc4112c9064c2012f5f2167a070280280db37b98b15131d34c7dba78",
   "dht_signature": "7c2a21e215dcab1be2418562abece36473b3217a0e83db3f48139f00195ed241f193cadfae78469a14fe0319777aeb1fb2e3ae018f32f19442a1684a5369230c",
   "dht_signed_item": "62657034342074657374206974656d",
+  "hello_device_public_key": "0001375f09f1f51a14ed7903fe540cdf4a30b0d8093549b86bff80ab107d03b1760f",
   "libp2p_identity_pk": "a041bdf0dc39697abeb554da4bb7bc26c0a8256e65e35c380f2dc23a383c49c8",
   "libp2p_identity_seed": "186ea9e745a3ee80e81d7b6848e9fc231a6b12ee361c149bcc797a6308e0a73a",
   "libp2p_peer_id": "002408011220a041bdf0dc39697abeb554da4bb7bc26c0a8256e65e35c380f2dc23a383c49c8",
-  "libp2p_peer_id_text": "12D3KooWLbwYSoxYfCSHg726dZA3cCSdzeMG18brSyhACQ2mo24f"
+  "libp2p_peer_id_text": "12D3KooWLbwYSoxYfCSHg726dZA3cCSdzeMG18brSyhACQ2mo24f",
+  "transcript_hash": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
 }

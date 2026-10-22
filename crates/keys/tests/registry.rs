@@ -5,8 +5,8 @@
 //! The crate's label registry against the specs' tables, read from the
 //! repository at test time so that drift on either side fails here: every
 //! label in `spec/keys.md` section 10 is in the crate with the same mode and
-//! the crate has no other, and every label `spec/suites.md` section 2.4
-//! copies from that registry is in the crate with the same mode.
+//! input and the crate has no other, and `spec/suites.md` section 2.4's copy
+//! of that registry is identical to it, row for row.
 
 #![allow(
     clippy::unwrap_used,
@@ -38,12 +38,8 @@ fn mode_of(cell: &str) -> Mode {
         Mode::DeriveKey
     } else if cell.starts_with("`H`") {
         Mode::Hash
-    } else if cell.starts_with("keyed") {
-        Mode::Keyed
     } else if cell.starts_with("prefix of `M`") {
         Mode::SigPrefix
-    } else if cell.starts_with("HPKE `info`") {
-        Mode::HpkeInfo
     } else {
         panic!("unknown mode cell {cell:?}")
     }
@@ -120,7 +116,7 @@ fn registry_matches_keys_md_section_10_exactly() {
             "the crate has {label} ({mode:?}), keys.md does not"
         );
     }
-    assert_eq!(spec.len(), 41);
+    assert_eq!(spec.len(), 25);
 }
 
 #[test]
@@ -147,5 +143,24 @@ fn registry_covers_suites_md_section_2_4() {
             "suites.md lists {label} as {mode:?}"
         );
     }
-    assert!(spec.len() >= 20);
+    assert_eq!(spec.len(), 25);
+}
+
+/// `suites.md` 2.4 says its table is `keys.md`'s registry "copied row for row
+/// and byte for byte so that the two can be compared mechanically".
+#[test]
+fn suites_md_section_2_4_copies_keys_md_section_10_row_for_row() {
+    let rows_of = |text: &str, heading: &str| -> Vec<String> {
+        let start = text.find(heading).unwrap();
+        text[start..]
+            .lines()
+            .skip_while(|l| !l.starts_with("| `licketysync/"))
+            .take_while(|l| l.starts_with('|'))
+            .map(str::to_string)
+            .collect()
+    };
+    let keys = rows_of(&spec("keys.md"), "## 10. Label registry");
+    let suites = rows_of(&spec("suites.md"), "### 2.4");
+    assert_eq!(keys.len(), 25, "one label per row");
+    assert_eq!(keys, suites);
 }

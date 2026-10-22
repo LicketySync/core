@@ -3,14 +3,15 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! XChaCha20-Poly1305 (`suites.md` section 2.3) under a key, nonce and
-//! associated data the caller names: the one AEAD of suite 1. The record key,
-//! the chunk key and the ladder seal through these functions, and so does the
-//! handshake's `FolderProof` payload (`protocol.md` 3.5), whose construction
-//! stays in the protocol crate: the key is the proof key
-//! ([`crate::secret::ProofKey`], whose `seal` and `open` call these), the
-//! associated data the hint ([`crate::labels::folder_hint`]), and the 24-byte
-//! nonce fresh from the caller's randomness for every seal. A nonce must never
-//! repeat under one key; these functions cannot check that.
+//! associated data the caller names: the one AEAD of suite 1, and private to
+//! this crate. Chunks ([`crate::chunk`]), sealed metadata
+//! ([`crate::sealed_meta`]) and the handshake's `FolderProof` payload
+//! ([`crate::handshake::HandshakeKeys::seal_proof`]) seal through these
+//! functions, each under its own derived key and with its nonce chosen inside
+//! this crate: convergent for chunks, fresh from the caller's randomness for
+//! metadata and proofs. A nonce must never repeat under one key; these
+//! functions cannot check that, which is why no caller outside the crate
+//! reaches them.
 
 use core::fmt;
 
@@ -19,17 +20,10 @@ use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use zeroize::Zeroizing;
 
 use crate::secret::SecretBytes;
+use crate::suite::sizes;
 
-/// The Poly1305 tag's length: a ciphertext is this much longer than its
-/// plaintext.
-pub const TAG_LEN: usize = crate::suite::sizes::TAG;
-
-/// The `XChaCha20` nonce's length.
-pub const NONCE_LEN: usize = crate::suite::sizes::NONCE;
-
-/// An XChaCha20-Poly1305 seal or open failed: on open, a wrong key, nonce or
-/// associated data or a damaged ciphertext, one error on purpose; on seal,
-/// only a plaintext beyond the cipher's limit of about 256 GiB.
+/// An XChaCha20-Poly1305 open failed: a wrong key, nonce or associated data
+/// or a damaged ciphertext, one error on purpose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AeadError;
 
@@ -41,18 +35,31 @@ impl fmt::Display for AeadError {
 
 impl std::error::Error for AeadError {}
 
+/// An XChaCha20-Poly1305 seal failed, which happens only for a plaintext
+/// beyond the cipher's limit of about 256 GiB.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SealError;
+
+impl fmt::Display for SealError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the plaintext is beyond the cipher's limit")
+    }
+}
+
+impl std::error::Error for SealError {}
+
 /// Seals `plaintext` under `key` and `nonce`, binding `aad`; returns
-/// `ciphertext || tag`, [`TAG_LEN`] bytes longer than the plaintext.
+/// `ciphertext || tag`, [`sizes::TAG`] bytes longer than the plaintext.
 ///
 /// # Errors
 ///
-/// [`AeadError`] only for a plaintext beyond the cipher's limit.
-pub fn xchacha_seal(
-    key: &[u8; 32],
-    nonce: &[u8; NONCE_LEN],
+/// [`SealError`] only for a plaintext beyond the cipher's limit.
+pub(crate) fn xchacha_seal(
+    key: &[u8; sizes::KEY],
+    nonce: &[u8; sizes::NONCE],
     aad: &[u8],
     plaintext: &[u8],
-) -> Result<Vec<u8>, AeadError> {
+) -> Result<Vec<u8>, SealError> {
     XChaCha20Poly1305::new(key.into())
         .encrypt(
             &XNonce::from(*nonce),
@@ -61,7 +68,7 @@ pub fn xchacha_seal(
                 aad,
             },
         )
-        .map_err(|_| AeadError)
+        .map_err(|_| SealError)
 }
 
 /// Opens `ciphertext || tag` sealed under `key`, `nonce` and `aad`. The
@@ -71,9 +78,9 @@ pub fn xchacha_seal(
 /// # Errors
 ///
 /// [`AeadError`] for any failure, a ciphertext shorter than the tag included.
-pub fn xchacha_open(
-    key: &[u8; 32],
-    nonce: &[u8; NONCE_LEN],
+pub(crate) fn xchacha_open(
+    key: &[u8; sizes::KEY],
+    nonce: &[u8; sizes::NONCE],
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<SecretBytes, AeadError> {
@@ -97,9 +104,9 @@ mod tests {
     #[test]
     fn seal_round_trips_and_binds_key_nonce_aad_and_every_byte() {
         let key = [7u8; 32];
-        let nonce = [9u8; NONCE_LEN];
+        let nonce = [9u8; sizes::NONCE];
         let sealed = xchacha_seal(&key, &nonce, b"hint", b"payload").unwrap();
-        assert_eq!(sealed.len(), b"payload".len() + TAG_LEN);
+        assert_eq!(sealed.len(), b"payload".len() + sizes::TAG);
         assert_eq!(
             xchacha_open(&key, &nonce, b"hint", &sealed)
                 .unwrap()
@@ -112,7 +119,7 @@ mod tests {
             sealed
         );
         assert_ne!(
-            xchacha_seal(&key, &[8; NONCE_LEN], b"hint", b"payload").unwrap(),
+            xchacha_seal(&key, &[8; sizes::NONCE], b"hint", b"payload").unwrap(),
             sealed
         );
         assert_eq!(
@@ -120,7 +127,7 @@ mod tests {
             Err(AeadError)
         );
         assert_eq!(
-            xchacha_open(&key, &[8; NONCE_LEN], b"hint", &sealed),
+            xchacha_open(&key, &[8; sizes::NONCE], b"hint", &sealed),
             Err(AeadError)
         );
         assert_eq!(xchacha_open(&key, &nonce, b"hinT", &sealed), Err(AeadError));
@@ -140,43 +147,32 @@ mod tests {
         assert_eq!(xchacha_open(&key, &nonce, b"hint", &[]), Err(AeadError));
         // An empty plaintext seals to the tag alone and opens to nothing.
         let empty = xchacha_seal(&key, &nonce, b"", b"").unwrap();
-        assert_eq!(empty.len(), TAG_LEN);
+        assert_eq!(empty.len(), sizes::TAG);
         assert!(xchacha_open(&key, &nonce, b"", &empty).unwrap().is_empty());
         assert_eq!(AeadError.to_string(), "authenticated decryption failed");
+        assert_eq!(
+            SealError.to_string(),
+            "the plaintext is beyond the cipher's limit"
+        );
     }
 
-    /// The `FolderProof` seal as `protocol.md` 3.5 builds it from these
-    /// primitives: the proof key and hint from the folder ID and the
-    /// transcript hash, the hint as associated data. Another transcript, role
-    /// or folder gives a seal that does not open.
+    /// The draft-irtf-cfrg-xchacha-03 Appendix A vector (`suites.md` 4.4),
+    /// through the crate's own seal and open, the functions every AEAD use of
+    /// the crate goes through.
     #[test]
-    fn the_folder_proof_construction_opens_only_for_the_same_folder_and_transcript() {
-        use crate::ids::FolderId;
-        use crate::labels::folder_hint;
-        use crate::secret::ProofKey;
-        let folder = FolderId([3u8; 32]);
-        let th = [4u8; 32];
-        let parts = |folder: &FolderId, th: &[u8; 32], role: u8| {
-            (folder_hint(folder, th, role), ProofKey::derive(folder, th))
-        };
-        let (hint, key) = parts(&folder, &th, 0);
-        let nonce = [5u8; NONCE_LEN];
-        let sealed = key.seal(&nonce, &hint, b"ProofPayload").unwrap();
-        assert_eq!(
-            sealed,
-            xchacha_seal(key.expose(), &nonce, &hint, b"ProofPayload").unwrap()
-        );
-        let (hint_b, key_b) = parts(&folder, &th, 0);
-        assert_eq!(
-            key_b.open(&nonce, &hint_b, &sealed).unwrap().as_slice(),
-            b"ProofPayload"
-        );
-        let (other_hint, _) = parts(&folder, &th, 1);
-        assert_ne!(other_hint, hint);
-        assert_eq!(key.open(&nonce, &other_hint, &sealed), Err(AeadError));
-        let (_, other_key) = parts(&folder, &[6; 32], 0);
-        assert_eq!(other_key.open(&nonce, &hint, &sealed), Err(AeadError));
-        let (_, other_folder) = parts(&FolderId([7; 32]), &th, 0);
-        assert_eq!(other_folder.open(&nonce, &hint, &sealed), Err(AeadError));
+    fn vector_xchacha20poly1305_draft() {
+        let v: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/vectors/xchacha20poly1305_draft03.json"
+        ))
+        .unwrap();
+        let bytes = |name: &str| hex::decode(v[name].as_str().unwrap()).unwrap();
+        let key: [u8; 32] = bytes("key").try_into().unwrap();
+        let nonce: [u8; 24] = bytes("nonce").try_into().unwrap();
+        let out = xchacha_seal(&key, &nonce, &bytes("aad"), &bytes("plaintext")).unwrap();
+        let mut expected = bytes("ciphertext");
+        expected.extend(bytes("tag"));
+        assert_eq!(out, expected);
+        let back = xchacha_open(&key, &nonce, &bytes("aad"), &out).unwrap();
+        assert_eq!(*back, bytes("plaintext"));
     }
 }

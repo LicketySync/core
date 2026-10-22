@@ -2,12 +2,20 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The key string, link and file (`keys.md` section 6): what one person hands
-//! another. The key string is Bech32m (BIP-350) with the prefix `lsk` over
-//! `folder_id (32) || seed (32)`, 113 characters; the link carries it after
-//! `#`, where browsers never send it (TM-18), optionally with the grant chain,
-//! addresses and a certificate hash; the `.lskey` file is the link on one line.
-//! Key strings carry only the folder ID, the seed and a checksum (TM-37).
+//! Key strings, links and files (`keys.md` section 6): what one person hands
+//! another. A key string is Bech32m (BIP-350) over one tier's payload, with
+//! one prefix per tier:
+//!
+//! ```text
+//! payload_write  = be16(suite) || ws                     # 34 bytes, "lsw", 65 characters
+//! payload_read   = be16(suite) || folder_vk || dk        # 66 bytes, "lsr", 116 characters
+//! payload_sealed = be16(suite) || folder_vk || ak        # 66 bytes, "lss", 116 characters
+//! ```
+//!
+//! The link carries a key string after `#`, where browsers never send it
+//! (TM-18), optionally with dialling addresses and a certificate hash; the
+//! `.lskey` file is the link on one line (phase 1). A key string carries only
+//! the suite, the tier's key material and a checksum (TM-37).
 
 use core::fmt;
 
@@ -16,33 +24,44 @@ use base64::Engine as _;
 use bech32::primitives::decode::{
     CharError, CheckedHrpstring, CheckedHrpstringError, UncheckedHrpstringError,
 };
-use bech32::{Bech32m, Fe32, Hrp};
-use prost::Message as _;
+use bech32::{Bech32m, ByteIterExt as _, Fe32IterExt as _, Hrp};
 use zeroize::Zeroizing;
 
-use crate::ids::FolderId;
-use crate::keyset::KeyPairSet;
-use crate::records::{
-    wire_key_bundle, FolderKeys, GrantBody, Malformed, RecordType, Rejected, SignedRecord,
-};
-use crate::secret::Seed;
+use crate::folder::{FolderKey, KeyError};
+use crate::secret::SecretBytes;
+use crate::suite::{sizes, Tier};
 
-/// The length of every key string and link code.
-pub const KEY_STRING_LEN: usize = 113;
-/// The link prefix: the browser client's join page, with the secret after `#`.
-pub const LINK_PREFIX: &str = "https://licketysync.dev/join#";
-/// The longest link or key file accepted.
-pub const MAX_LINK_LEN: usize = 262_144;
-/// The most records a link's bundle carries: the Folder record and 16 grants.
-pub const MAX_BUNDLE_RECORDS: usize = 17;
-/// The most addresses a link carries.
-pub const MAX_LINK_ADDRESSES: usize = 16;
-/// The longest address or certificate hash in a link, in bytes.
-pub const MAX_LINK_ITEM: usize = 256;
+/// The write key string's prefix.
+pub const HRP_WRITE: &str = "lsw";
+/// The read key string's prefix.
+pub const HRP_READ: &str = "lsr";
+/// The sealed key string's prefix.
+pub const HRP_SEALED: &str = "lss";
+/// The longest Bech32m string decoded: a read or sealed key string. The
+/// `bech32` crate's 90-character segwit limit does not apply (`keys.md` 6.1).
+pub const MAX_KEY_STRING_LEN: usize = sizes::READ_KEY_STRING;
 
-/// Why a Bech32m string was refused (section 6.1).
+const _: () = assert!(
+    MAX_KEY_STRING_LEN >= sizes::WRITE_KEY_STRING && MAX_KEY_STRING_LEN >= sizes::SEALED_KEY_STRING
+);
+
+/// The prefix of a tier's key string.
+fn hrp_of(tier: Tier) -> &'static Hrp {
+    const WRITE: Hrp = Hrp::parse_unchecked(HRP_WRITE);
+    const READ: Hrp = Hrp::parse_unchecked(HRP_READ);
+    const SEALED: Hrp = Hrp::parse_unchecked(HRP_SEALED);
+    match tier {
+        Tier::Write => &WRITE,
+        Tier::Read => &READ,
+        Tier::Sealed => &SEALED,
+    }
+}
+
+/// Why a Bech32m string was refused (`keys.md` 6.1). All are malformed but
+/// [`KeyError::UnimplementedSuite`] inside [`KeyStringError::Key`], which says
+/// the key needs a newer release of Lickety-Sync.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Bech32Error {
+pub enum KeyStringError {
     /// Longer than any key string.
     TooLong,
     /// Upper and lower case mixed.
@@ -51,167 +70,127 @@ pub enum Bech32Error {
     Character,
     /// The Bech32m checksum fails (a Bech32 checksum included).
     Checksum,
-    /// Another prefix.
+    /// A prefix this decoder does not take.
     Prefix,
-    /// The data does not decode to exactly 64 bytes.
-    Length,
-    /// A padding bit is not zero.
+    /// The bits after the last whole byte are five or more, or one of them
+    /// is not zero (BIP-173).
     Padding,
+    /// The payload is refused, in the order of `keys.md` 6.1: shorter than
+    /// its suite, suite 0, a suite this release does not implement, a length
+    /// that is not its prefix's under that suite, or a verification key that
+    /// is not canonical or is of small order.
+    Key(KeyError),
 }
 
-impl fmt::Display for Bech32Error {
+impl fmt::Display for KeyStringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::TooLong => "too long",
-            Self::MixedCase => "mixed case",
-            Self::Character => "invalid character",
-            Self::Checksum => "checksum does not match",
-            Self::Prefix => "wrong prefix",
-            Self::Length => "wrong length",
-            Self::Padding => "non-zero padding",
-        })
+        match self {
+            Self::TooLong => f.write_str("too long"),
+            Self::MixedCase => f.write_str("mixed case"),
+            Self::Character => f.write_str("invalid character"),
+            Self::Checksum => f.write_str("checksum does not match"),
+            Self::Prefix => f.write_str("wrong prefix"),
+            Self::Padding => f.write_str("invalid padding"),
+            Self::Key(e) => write!(f, "{e}"),
+        }
     }
 }
 
-impl std::error::Error for Bech32Error {}
+impl std::error::Error for KeyStringError {}
 
-/// Encodes 64 bytes as a 113-character Bech32m string under `hrp`, lower or
-/// upper case. The `bech32` crate's Bech32m code length is 1023, so its
-/// encoder carries no 90-character limit.
-pub(crate) fn bech32m_encode(
-    hrp: &'static str,
-    payload: &[u8; 64],
-    upper: bool,
-) -> Result<Zeroizing<String>, Bech32Error> {
-    let hrp = Hrp::parse_unchecked(hrp);
-    // Written into a buffer of the final length, so that no reallocation
-    // leaves a copy of the secret behind (security review, BLOCKER 3).
-    let len = bech32::encoded_length::<Bech32m>(hrp, payload).map_err(|_| Bech32Error::TooLong)?;
+/// Encodes `payload` as a Bech32m string under `hrp`, lower or upper case,
+/// into a buffer of the final length so that no reallocation leaves a copy
+/// of the secret behind.
+pub(crate) fn bech32m_encode(hrp: &Hrp, payload: &[u8], upper: bool) -> Zeroizing<String> {
+    let len = hrp.len() + 1 + (8 * payload.len()).div_ceil(5) + 6;
     let mut s = Zeroizing::new(String::with_capacity(len));
-    let written = if upper {
-        bech32::encode_upper_to_fmt::<Bech32m, String>(&mut s, hrp, payload)
-    } else {
-        bech32::encode_lower_to_fmt::<Bech32m, String>(&mut s, hrp, payload)
-    };
-    written.map_err(|_| Bech32Error::TooLong)?;
-    Ok(s)
+    for c in payload
+        .iter()
+        .copied()
+        .bytes_to_fes()
+        .with_checksum::<Bech32m>(hrp)
+        .chars()
+    {
+        s.push(if upper { c.to_ascii_uppercase() } else { c });
+    }
+    s
 }
 
-/// Decodes a 113-character Bech32m string under `hrp` to its 64 bytes,
-/// rejecting mixed case, a bad or Bech32 (non-m) checksum, another prefix,
-/// another length and a non-zero padding bit.
-pub(crate) fn bech32m_decode(
-    hrp: &'static str,
+/// Decodes a Bech32m string whose prefix is one of `prefixes` to the value
+/// paired with that prefix and the payload, of whatever length the string
+/// carries: the payload's length is judged by the caller, after the suite
+/// (`keys.md` 6.1). Refuses, in this order: a string over
+/// [`MAX_KEY_STRING_LEN`], mixed case, a character outside the alphabet, a
+/// bad or Bech32 (non-m) checksum, another prefix, and padding that is five
+/// bits or more or not zero.
+pub(crate) fn bech32m_decode<T: Copy>(
     s: &str,
-) -> Result<Zeroizing<[u8; 64]>, Bech32Error> {
-    if s.len() > 1023 {
-        return Err(Bech32Error::TooLong);
+    prefixes: &[(&Hrp, T)],
+) -> Result<(T, SecretBytes), KeyStringError> {
+    if s.len() > MAX_KEY_STRING_LEN {
+        return Err(KeyStringError::TooLong);
     }
     let checked = CheckedHrpstring::new::<Bech32m>(s).map_err(|e| match e {
         CheckedHrpstringError::Parse(UncheckedHrpstringError::Char(CharError::MixedCase)) => {
-            Bech32Error::MixedCase
+            KeyStringError::MixedCase
         }
-        CheckedHrpstringError::Checksum(_) => Bech32Error::Checksum,
-        _ => Bech32Error::Character,
+        CheckedHrpstringError::Checksum(_) => KeyStringError::Checksum,
+        _ => KeyStringError::Character,
     })?;
-    if checked.hrp() != Hrp::parse_unchecked(hrp) {
-        return Err(Bech32Error::Prefix);
+    let value = prefixes
+        .iter()
+        .find(|(hrp, _)| checked.hrp() == **hrp)
+        .map(|(_, value)| *value)
+        .ok_or(KeyStringError::Prefix)?;
+    // The bits after the last whole byte: fewer than five, and all zero.
+    let bits = 5 * checked.data_part_ascii_no_checksum().len();
+    let pad_bits = bits % 8;
+    let last = checked.fe32_iter().last().map_or(0, bech32::Fe32::to_u8);
+    if pad_bits >= 5 || last & ((1u8 << pad_bits) - 1) != 0 {
+        return Err(KeyStringError::Padding);
     }
-    let data = checked.data_part_ascii_no_checksum();
-    // 64 bytes are 512 bits: 103 characters of 5 bits, the last 3 bits padding.
-    if data.len() != 103 {
-        return Err(Bech32Error::Length);
-    }
-    let last = data
-        .last()
-        .and_then(|c| Fe32::from_char(char::from(*c)).ok())
-        .ok_or(Bech32Error::Character)?;
-    if last.to_u8() & 0b111 != 0 {
-        return Err(Bech32Error::Padding);
-    }
-    let mut out = Zeroizing::new([0u8; 64]);
-    let mut n = 0usize;
-    for (slot, byte) in out.iter_mut().zip(checked.byte_iter()) {
-        *slot = byte;
-        n += 1;
-    }
-    if n == 64 {
-        Ok(out)
-    } else {
-        Err(Bech32Error::Length)
-    }
+    // Sized once for the whole payload, so that no reallocation leaves a copy.
+    let mut out = Zeroizing::new(Vec::with_capacity(bits / 8));
+    out.extend(checked.byte_iter());
+    Ok((value, out))
 }
 
-/// A key string: a folder ID and an issued key's seed (section 6.1).
-pub struct KeyString {
-    folder_id: FolderId,
-    seed: Seed,
-}
-
-impl fmt::Debug for KeyString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "KeyString({}, [redacted])", self.folder_id)
-    }
-}
-
-impl KeyString {
-    /// A key string for `seed` in `folder_id`.
+impl FolderKey {
+    /// The key string in lower case, for text and links.
     #[must_use]
-    pub fn new(folder_id: FolderId, seed: Seed) -> Self {
-        KeyString { folder_id, seed }
+    pub fn to_key_string(&self) -> Zeroizing<String> {
+        bech32m_encode(hrp_of(self.tier()), &self.payload(), false)
     }
 
-    /// The folder.
+    /// The key string in upper case, for QR codes (alphanumeric mode).
     #[must_use]
-    pub fn folder_id(&self) -> FolderId {
-        self.folder_id
+    pub fn to_qr_string(&self) -> Zeroizing<String> {
+        bech32m_encode(hrp_of(self.tier()), &self.payload(), true)
     }
 
-    /// The seed. Derive the key pair set and drop this as soon as it is stored.
-    #[must_use]
-    pub fn seed(&self) -> &Seed {
-        &self.seed
-    }
-
-    fn payload(&self) -> Zeroizing<[u8; 64]> {
-        Zeroizing::new(crate::bytes::fill::<64>(&[
-            self.folder_id.as_bytes(),
-            self.seed.expose(),
-        ]))
-    }
-
-    /// The lower-case string for text and links.
+    /// Parses a key string, all lower or all upper case, of any tier, in the
+    /// order of `keys.md` 6.1: the Bech32m string, then the payload
+    /// ([`FolderKey::from_payload`]: its suite before its length). The
+    /// decoded payload is zeroized as soon as the key is built.
     ///
     /// # Errors
     ///
-    /// Only if the encoder refuses 64 bytes, which it does not.
-    pub fn to_text(&self) -> Result<Zeroizing<String>, Bech32Error> {
-        bech32m_encode("lsk", &self.payload(), false)
-    }
-
-    /// The upper-case string for QR codes (alphanumeric mode).
-    ///
-    /// # Errors
-    ///
-    /// Only if the encoder refuses 64 bytes, which it does not.
-    pub fn to_qr_text(&self) -> Result<Zeroizing<String>, Bech32Error> {
-        bech32m_encode("lsk", &self.payload(), true)
-    }
-
-    /// Parses a key string, all lower or all upper case.
-    ///
-    /// # Errors
-    ///
-    /// [`Bech32Error`].
-    pub fn parse(s: &str) -> Result<KeyString, Bech32Error> {
-        let p = bech32m_decode("lsk", s)?;
-        let (folder, seed) = crate::bytes::halves(&p);
-        Ok(KeyString {
-            folder_id: FolderId(folder),
-            seed: Seed::from_bytes(seed),
-        })
+    /// [`KeyStringError`]; a suite this release does not implement is
+    /// [`KeyStringError::Key`] with [`KeyError::UnimplementedSuite`].
+    pub fn from_key_string(s: &str) -> Result<FolderKey, KeyStringError> {
+        let (tier, payload) = bech32m_decode(s, &Tier::ALL.map(|t| (hrp_of(t), t)))?;
+        FolderKey::from_payload(tier, &payload).map_err(KeyStringError::Key)
     }
 }
+
+/// The link prefix: the browser client's join page, with the secret after `#`.
+pub const LINK_PREFIX: &str = "https://licketysync.dev/join#";
+/// The longest link or key file accepted.
+pub const MAX_LINK_LEN: usize = 8_192;
+/// The most addresses a link carries.
+pub const MAX_LINK_ADDRESSES: usize = 16;
+/// The longest address or certificate hash in a link, in bytes.
+pub const MAX_LINK_ITEM: usize = 256;
 
 /// Why a link or key file was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,13 +199,13 @@ pub enum LinkError {
     TooLong,
     /// Not `https://licketysync.dev/join#...`: the secret must sit after `#`.
     Prefix,
-    /// A parameter that is not `k`, `g`, `a` or `c`, or one without `=`.
+    /// A parameter that is not `k`, `a` or `c`, or one without `=`.
     Parameter,
-    /// `k` missing or repeated, `g` or `c` repeated, or more than 16 `a`.
+    /// `k` missing or repeated, `c` repeated, or more than 16 `a`.
     Count,
     /// The key string is invalid.
-    Key(Bech32Error),
-    /// `g` or `c` is not base64url, or the bundle does not parse or is too big.
+    Key(KeyStringError),
+    /// `c` is not base64url.
     Encoding,
     /// An address or certificate hash is empty, too long, or holds a
     /// character a link cannot carry.
@@ -252,17 +231,14 @@ impl fmt::Display for LinkError {
 
 impl std::error::Error for LinkError {}
 
-/// A join link (section 6.2): the key string after `#`, and optionally the
-/// Folder record and grant chain (`g`), dialling hints (`a`) and a
-/// certificate hash (`c`). Nothing in a link is trusted until the Folder
-/// record's ID matches the key string's and the chain verifies
-/// ([`Link::verify_bundle`]); an address is a hint, never an identity.
+/// A join link (`keys.md` 6.3, phase 1): the key string after `#`, and,
+/// only by the sender's choice, dialling hints (`a`) and a certificate hash
+/// (`c`). The folder is the one the key names; an address is a hint for
+/// dialling, never an identity.
 #[derive(Debug)]
 pub struct Link {
-    /// The key string.
-    pub key: KeyString,
-    /// The Folder record, then the grant chain parent-first.
-    pub bundle: Vec<SignedRecord>,
+    /// The key.
+    pub key: FolderKey,
     /// Multiaddresses to dial, as text.
     pub addresses: Vec<String>,
     /// A certificate hash for browser transports.
@@ -278,12 +254,12 @@ fn item_ok(s: &str) -> bool {
 }
 
 impl Link {
-    /// A bare link: the key string and nothing else, as invites are by default (TM-37).
+    /// A bare link: the key string and nothing else, as invites are by
+    /// default (TM-37).
     #[must_use]
-    pub fn bare(key: KeyString) -> Self {
+    pub fn bare(key: FolderKey) -> Self {
         Link {
             key,
-            bundle: Vec::new(),
             addresses: Vec::new(),
             cert_hash: None,
         }
@@ -293,19 +269,18 @@ impl Link {
     ///
     /// # Errors
     ///
-    /// [`LinkError::Item`] for an address a link cannot carry or a certificate
-    /// hash of the wrong size; [`LinkError::Count`] for too many addresses or
-    /// bundle records.
+    /// [`LinkError::Item`] for an address a link cannot carry or a
+    /// certificate hash of the wrong size; [`LinkError::Count`] for too many
+    /// addresses.
     pub fn to_text(&self) -> Result<Zeroizing<String>, LinkError> {
         self.text_with_room(0)
     }
 
     /// The link text in a buffer sized up front for the whole link and
     /// `extra` more bytes, so that no reallocation leaves a copy of the key
-    /// behind (security review, BLOCKER 3). The public parts are encoded
-    /// first, the key last.
+    /// behind. The public parts are encoded first, the key last.
     fn text_with_room(&self, extra: usize) -> Result<Zeroizing<String>, LinkError> {
-        if self.addresses.len() > MAX_LINK_ADDRESSES || self.bundle.len() > MAX_BUNDLE_RECORDS {
+        if self.addresses.len() > MAX_LINK_ADDRESSES {
             return Err(LinkError::Count);
         }
         if !self.addresses.iter().all(|a| item_ok(a)) {
@@ -318,24 +293,18 @@ impl Link {
         {
             return Err(LinkError::Item);
         }
-        let bundle = (!self.bundle.is_empty())
-            .then(|| URL_SAFE_NO_PAD.encode(wire_key_bundle(&self.bundle).encode_to_vec()));
         let cert = self.cert_hash.as_ref().map(|c| URL_SAFE_NO_PAD.encode(c));
+        let key = self.key.to_key_string();
         let len = LINK_PREFIX.len()
             + 2
-            + KEY_STRING_LEN
-            + bundle.as_ref().map_or(0, |b| 3 + b.len())
+            + key.len()
             + self.addresses.iter().map(|a| 3 + a.len()).sum::<usize>()
             + cert.as_ref().map_or(0, |c| 3 + c.len())
             + extra;
         let mut s = Zeroizing::new(String::with_capacity(len));
         s.push_str(LINK_PREFIX);
         s.push_str("k=");
-        s.push_str(&self.key.to_text().map_err(LinkError::Key)?);
-        if let Some(b) = &bundle {
-            s.push_str("&g=");
-            s.push_str(b);
-        }
+        s.push_str(&key);
         for a in &self.addresses {
             s.push_str("&a=");
             s.push_str(a);
@@ -358,14 +327,13 @@ impl Link {
             return Err(LinkError::TooLong);
         }
         let fragment = text.strip_prefix(LINK_PREFIX).ok_or(LinkError::Prefix)?;
-        let (mut key, mut bundle, mut addresses, mut cert_hash) = (None, None, Vec::new(), None);
+        let (mut key, mut addresses, mut cert_hash) = (None, Vec::new(), None);
         for param in fragment.split('&') {
             let (name, value) = param.split_once('=').ok_or(LinkError::Parameter)?;
             match name {
                 "k" if key.is_none() => {
-                    key = Some(KeyString::parse(value).map_err(LinkError::Key)?);
+                    key = Some(FolderKey::from_key_string(value).map_err(LinkError::Key)?);
                 }
-                "g" if bundle.is_none() => bundle = Some(decode_bundle(value)?),
                 "a" if addresses.len() < MAX_LINK_ADDRESSES => {
                     if !item_ok(value) {
                         return Err(LinkError::Item);
@@ -381,19 +349,18 @@ impl Link {
                     }
                     cert_hash = Some(c);
                 }
-                "k" | "g" | "a" | "c" => return Err(LinkError::Count),
+                "k" | "a" | "c" => return Err(LinkError::Count),
                 _ => return Err(LinkError::Parameter),
             }
         }
         Ok(Link {
             key: key.ok_or(LinkError::Count)?,
-            bundle: bundle.unwrap_or_default(),
             addresses,
             cert_hash,
         })
     }
 
-    /// The `.lskey` file form (section 6.3): the link text on one line.
+    /// The `.lskey` file form (`keys.md` 6.4): the link text on one line.
     ///
     /// # Errors
     ///
@@ -419,161 +386,237 @@ impl Link {
         }
         Link::parse(line)
     }
-
-    /// Verifies the bundle: its first record must be the Folder record of the
-    /// key string's folder, each later one a grant that verifies against the
-    /// records before it, and the last grant, when there is one, a grant of
-    /// the key string's own key (its key ID derived from the seed), so that a
-    /// link cannot hand its holder another key's chain. `None` when the link
-    /// carries no bundle.
-    #[must_use]
-    pub fn verify_bundle(&self, now_unix: u64) -> Option<Result<FolderKeys, Rejected>> {
-        let (first, rest) = self.bundle.split_first()?;
-        Some(
-            FolderKeys::new(&self.key.folder_id(), first.clone()).and_then(|mut keys| {
-                for record in rest {
-                    if record.prefix()?.record_type != RecordType::Grant {
-                        return Err(Malformed::NotAKeyRecord.into());
-                    }
-                    keys.insert(record, now_unix)?;
-                }
-                if let Some(leaf) = rest.last() {
-                    let leaf = GrantBody::parse(&leaf.body)?;
-                    let own = KeyPairSet::from_seed(self.key.seed())
-                        .map_err(|_| Rejected::Malformed(Malformed::ForeignLeaf))?
-                        .public()
-                        .key_id(leaf.suite);
-                    if leaf.key_id != own {
-                        return Err(Malformed::ForeignLeaf.into());
-                    }
-                }
-                Ok(keys)
-            }),
-        )
-    }
-}
-
-fn decode_bundle(value: &str) -> Result<Vec<SignedRecord>, LinkError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(value)
-        .map_err(|_| LinkError::Encoding)?;
-    crate::records::decode_key_bundle(&bytes, MAX_BUNDLE_RECORDS).map_err(|_| LinkError::Encoding)
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
+    use crate::folder::tests::write_key;
+    use crate::suite::SuiteError;
+    use bech32::Fe32;
 
-    fn sample() -> KeyString {
-        KeyString::new(FolderId([0x11; 32]), Seed::from_bytes([0x22; 32]))
+    fn tiers(byte: u8) -> [FolderKey; 3] {
+        let w = write_key(byte);
+        let r = w.read_key();
+        let s = w.sealed_key();
+        [w.into(), r.into(), s.into()]
     }
 
     #[test]
-    fn key_string_round_trips_in_both_cases() {
-        let k = sample();
-        let lower = k.to_text().unwrap();
-        let upper = k.to_qr_text().unwrap();
-        assert_eq!(lower.len(), KEY_STRING_LEN);
-        // Written into a buffer of exactly the final length.
-        assert_eq!(lower.capacity(), KEY_STRING_LEN);
-        assert_eq!(upper.capacity(), KEY_STRING_LEN);
-        assert!(lower.starts_with("lsk1"));
-        assert_eq!(*upper, lower.to_ascii_uppercase());
-        for s in [&*lower, &*upper] {
-            let back = KeyString::parse(s).unwrap();
-            assert_eq!(back.folder_id(), k.folder_id());
-            assert!(bool::from(back.seed().ct_eq(k.seed())));
+    fn key_strings_round_trip_in_both_cases() {
+        for (key, (hrp, len)) in tiers(1)
+            .iter()
+            .zip([("lsw1", 65), ("lsr1", 116), ("lss1", 116)])
+        {
+            let lower = key.to_key_string();
+            let upper = key.to_qr_string();
+            assert_eq!(lower.len(), len);
+            assert_eq!(lower.capacity(), len, "written into a buffer of its length");
+            assert_eq!(upper.capacity(), len);
+            assert!(lower.starts_with(hrp));
+            assert_eq!(*upper, lower.to_ascii_uppercase());
+            // The iterator encoder agrees with the crate's own.
+            let reference = bech32::encode::<Bech32m>(*hrp_of(key.tier()), &key.payload()).unwrap();
+            assert_eq!(*lower, reference);
+            for s in [&*lower, &*upper] {
+                let back = FolderKey::from_key_string(s).unwrap();
+                assert_eq!(back.tier(), key.tier());
+                assert_eq!(*back.payload(), *key.payload());
+            }
         }
-        assert_eq!(
-            format!("{k:?}"),
-            format!("KeyString({}, [redacted])", k.folder_id())
-        );
     }
 
     #[test]
     fn key_string_rejections() {
-        let s = sample().to_text().unwrap().to_string();
+        let [w, r, _] = tiers(2);
+        let s = r.to_key_string().to_string();
         // Mixed case.
         let mut mixed = s.clone();
         mixed.replace_range(5..6, &mixed[5..6].to_ascii_uppercase());
         assert_eq!(
-            KeyString::parse(&mixed).unwrap_err(),
-            Bech32Error::MixedCase
+            FolderKey::from_key_string(&mixed).unwrap_err(),
+            KeyStringError::MixedCase
         );
-        // Every single flipped character in the data is caught.
+        // Every single changed character in the data is caught.
         let alphabet = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
         for i in 4..s.len() {
             let c = s.as_bytes()[i] as char;
             let other = alphabet.chars().find(|&x| x != c).unwrap();
             let mut flipped = s.clone();
             flipped.replace_range(i..=i, &other.to_string());
-            assert!(KeyString::parse(&flipped).is_err(), "flip at {i}");
+            assert!(FolderKey::from_key_string(&flipped).is_err(), "flip at {i}");
         }
-        // Another prefix with a valid checksum.
-        let mut payload = [0u8; 64];
-        payload[..32].copy_from_slice(&[0x11; 32]);
-        let lsl = bech32m_encode("lsl", &payload, false).unwrap();
-        assert_eq!(KeyString::parse(&lsl).unwrap_err(), Bech32Error::Prefix);
-        // A Bech32 (non-m) checksum.
-        let bech32 =
-            bech32::encode::<bech32::Bech32>(Hrp::parse_unchecked("lsk"), &payload).unwrap();
+        let payload = r.payload();
+        let lsl = bech32m_encode(&Hrp::parse_unchecked("lsl"), &payload, false);
         assert_eq!(
-            KeyString::parse(&bech32).unwrap_err(),
-            Bech32Error::Checksum
+            FolderKey::from_key_string(&lsl).unwrap_err(),
+            KeyStringError::Prefix
         );
-        // 63- and 65-byte payloads with valid checksums.
-        for n in [63usize, 65] {
-            let e = bech32::encode::<Bech32m>(Hrp::parse_unchecked("lsk"), &vec![1u8; n]).unwrap();
-            assert_eq!(KeyString::parse(&e).unwrap_err(), Bech32Error::Length);
+        let bech32 = bech32::encode::<bech32::Bech32>(*hrp_of(Tier::Read), &payload).unwrap();
+        assert_eq!(
+            FolderKey::from_key_string(&bech32).unwrap_err(),
+            KeyStringError::Checksum
+        );
+        // A read payload under lsw and a write payload under lsr: suite 1,
+        // then the wrong length for the prefix.
+        let length = |tier: Tier, found: usize| {
+            KeyStringError::Key(KeyError::Length {
+                expected: crate::folder::payload_len(tier),
+                found,
+            })
+        };
+        let read_as_write = bech32m_encode(hrp_of(Tier::Write), &payload, false);
+        assert_eq!(
+            FolderKey::from_key_string(&read_as_write).unwrap_err(),
+            length(Tier::Write, 66)
+        );
+        let write_as_read = bech32m_encode(hrp_of(Tier::Read), &w.payload(), false);
+        assert_eq!(
+            FolderKey::from_key_string(&write_as_read).unwrap_err(),
+            length(Tier::Read, 34)
+        );
+        // One byte short and one long; one byte and none at all.
+        let short = bech32m_encode(hrp_of(Tier::Read), &payload[..65], false);
+        assert_eq!(
+            FolderKey::from_key_string(&short).unwrap_err(),
+            length(Tier::Read, 65)
+        );
+        let long = bech32m_encode(
+            hrp_of(Tier::Write),
+            &[&w.payload()[..], &[0]].concat(),
+            false,
+        );
+        assert_eq!(
+            FolderKey::from_key_string(&long).unwrap_err(),
+            length(Tier::Write, 35)
+        );
+        for (tier, p) in [(Tier::Sealed, &[1u8][..]), (Tier::Write, &[][..])] {
+            assert_eq!(
+                FolderKey::from_key_string(&bech32m_encode(hrp_of(tier), p, false)).unwrap_err(),
+                length(tier, p.len())
+            );
         }
-        assert_eq!(KeyString::parse("lsk1").unwrap_err(), Bech32Error::Checksum);
+        // Suite 0 and an unimplemented suite, at suite 1's length and at
+        // another: the suite is judged first.
+        let mut zero = payload.to_vec();
+        zero[1] = 0;
         assert_eq!(
-            KeyString::parse("lsk1\u{e9}").unwrap_err(),
-            Bech32Error::Character
+            FolderKey::from_key_string(&bech32m_encode(hrp_of(Tier::Read), &zero, false))
+                .unwrap_err(),
+            KeyStringError::Key(KeyError::Suite(SuiteError::Zero))
+        );
+        let mut newer = w.payload().to_vec();
+        newer[1] = 2;
+        for p in [&newer[..], &newer[..2], &[&newer[..], &[9; 20]].concat()] {
+            let e = FolderKey::from_key_string(&bech32m_encode(hrp_of(Tier::Write), p, false))
+                .unwrap_err();
+            assert_eq!(e, KeyStringError::Key(KeyError::UnimplementedSuite(2)));
+            assert_eq!(
+                e.to_string(),
+                "this key needs a newer release of Lickety-Sync"
+            );
+        }
+        // A verification key of small order.
+        let mut small = payload.to_vec();
+        small[2..34].fill(0);
+        small[2] = 1;
+        assert_eq!(
+            FolderKey::from_key_string(&bech32m_encode(hrp_of(Tier::Sealed), &small, false))
+                .unwrap_err(),
+            KeyStringError::Key(KeyError::VerifyingKey)
         );
         assert_eq!(
-            KeyString::parse("no separator").unwrap_err(),
-            Bech32Error::Character
+            FolderKey::from_key_string("lsw1").unwrap_err(),
+            KeyStringError::Checksum
         );
         assert_eq!(
-            KeyString::parse(&"q".repeat(1024)).unwrap_err(),
-            Bech32Error::TooLong
+            FolderKey::from_key_string("lsw1\u{e9}").unwrap_err(),
+            KeyStringError::Character
+        );
+        assert_eq!(
+            FolderKey::from_key_string("no separator").unwrap_err(),
+            KeyStringError::Character
+        );
+        assert_eq!(
+            FolderKey::from_key_string(&"q".repeat(117)).unwrap_err(),
+            KeyStringError::TooLong
+        );
+        // Exactly at the cap is decoded: a 116-character string is no TooLong.
+        assert_eq!(
+            FolderKey::from_key_string(&"q".repeat(MAX_KEY_STRING_LEN)).unwrap_err(),
+            KeyStringError::Character
         );
         for e in [
-            Bech32Error::TooLong,
-            Bech32Error::MixedCase,
-            Bech32Error::Character,
-            Bech32Error::Checksum,
-            Bech32Error::Prefix,
-            Bech32Error::Length,
-            Bech32Error::Padding,
+            KeyStringError::TooLong,
+            KeyStringError::MixedCase,
+            KeyStringError::Character,
+            KeyStringError::Checksum,
+            KeyStringError::Prefix,
+            KeyStringError::Padding,
+            KeyStringError::Key(KeyError::VerifyingKey),
         ] {
             assert_ne!(e.to_string(), "");
         }
     }
 
+    /// The field elements of `payload` with the last one replaced by `last`,
+    /// as a Bech32m string under `tier`'s prefix.
+    fn with_last_fe(tier: Tier, payload: &[u8], last: u8) -> String {
+        let mut fes: Vec<Fe32> = payload.iter().copied().bytes_to_fes().collect();
+        *fes.last_mut().unwrap() = Fe32::try_from(last).unwrap();
+        fes.iter()
+            .copied()
+            .with_checksum::<Bech32m>(hrp_of(tier))
+            .chars()
+            .collect()
+    }
+
     #[test]
     fn non_zero_padding_is_rejected() {
-        // Build 103 data characters whose last one has a padding bit set, with a valid checksum.
-        use bech32::{ByteIterExt as _, Fe32IterExt as _};
-        let hrp = Hrp::parse_unchecked("lsk");
-        let mut fes: Vec<Fe32> = [0u8; 64].iter().copied().bytes_to_fes().collect();
-        assert_eq!(fes.len(), 103);
-        *fes.last_mut().unwrap() = Fe32::try_from(1u8).unwrap();
-        let s: String = fes
-            .into_iter()
-            .with_checksum::<Bech32m>(&hrp)
-            .chars()
-            .collect();
-        assert_eq!(KeyString::parse(&s).unwrap_err(), Bech32Error::Padding);
+        // 34 bytes are 272 bits: 55 characters, the last 3 bits padding; 66
+        // bytes are 106 characters with 2 padding bits.
+        for (tier, chars, pad) in [(Tier::Write, 55, 3u8), (Tier::Read, 106, 2)] {
+            let mut payload = vec![0u8; crate::folder::payload_len(tier)];
+            payload[1] = 1;
+            assert_eq!(payload.iter().copied().bytes_to_fes().count(), chars);
+            for bit in 0..pad {
+                assert_eq!(
+                    FolderKey::from_key_string(&with_last_fe(tier, &payload, 1 << bit))
+                        .unwrap_err(),
+                    KeyStringError::Padding,
+                    "{tier:?} bit {bit}"
+                );
+            }
+        }
+        // A data part that ends in five padding bits or more is not the
+        // encoding of whole bytes: 1, 3 or 6 characters past a multiple of 8.
+        for chars in [1usize, 3, 6, 9, 11] {
+            let fes = vec![Fe32::Q; chars];
+            let s: String = fes
+                .iter()
+                .copied()
+                .with_checksum::<Bech32m>(hrp_of(Tier::Write))
+                .chars()
+                .collect();
+            assert_eq!(
+                FolderKey::from_key_string(&s).unwrap_err(),
+                KeyStringError::Padding,
+                "{chars} characters"
+            );
+        }
     }
 
     #[test]
     fn tm_18_link_and_file_forms() {
+        let [_, r, _] = tiers(3);
         let link = Link {
-            key: sample(),
-            bundle: vec![],
+            key: r,
             addresses: vec![
                 "/ip4/192.0.2.1/udp/4001/quic-v1".into(),
                 "/dns/peer.example/tcp/4001".into(),
@@ -581,17 +624,18 @@ mod tests {
             cert_hash: Some(vec![1, 2, 3]),
         };
         let text = link.to_text().unwrap();
-        assert!(text.starts_with("https://licketysync.dev/join#k=lsk1"));
+        assert_eq!(text.capacity(), text.len(), "sized once");
+        assert!(text.starts_with("https://licketysync.dev/join#k=lsr1"));
         let (before, after) = text.split_once('#').unwrap();
-        assert!(!before.contains("lsk1"), "the secret is only after #");
+        assert!(!before.contains("lsr1"), "the secret is only after #");
         assert!(after.contains("&a=/ip4/192.0.2.1"));
         let back = Link::parse(&text).unwrap();
         assert_eq!(back.addresses, link.addresses);
         assert_eq!(back.cert_hash, link.cert_hash);
-        assert_eq!(back.bundle.len(), 0);
-        assert!(back.verify_bundle(0).is_none());
+        assert_eq!(*back.key.payload(), *link.key.payload());
         let file = link.to_file().unwrap();
         assert!(file.ends_with('\n'));
+        assert_eq!(file.capacity(), file.len());
         assert_eq!(Link::parse_file(&file).unwrap().addresses.len(), 2);
         assert_eq!(
             Link::parse_file(&format!("{}\r\n", text.as_str()))
@@ -600,17 +644,20 @@ mod tests {
                 .len(),
             2
         );
+        assert_eq!(Link::parse_file(&text).unwrap().addresses.len(), 2);
         assert_eq!(
             Link::parse_file(&format!("{}\n\n", text.as_str())).unwrap_err(),
             LinkError::NotOneLine
         );
-        let bare = Link::bare(sample()).to_text().unwrap();
-        assert_eq!(bare.len(), LINK_PREFIX.len() + 2 + KEY_STRING_LEN);
+        let [w, _, _] = tiers(3);
+        let bare = Link::bare(w).to_text().unwrap();
+        assert_eq!(bare.len(), LINK_PREFIX.len() + 2 + 65);
     }
 
     #[test]
     fn link_rejections() {
-        let k = sample().to_text().unwrap().to_string();
+        let [w, _, _] = tiers(4);
+        let k = w.to_key_string().to_string();
         let p = LINK_PREFIX;
         assert_eq!(
             Link::parse(&format!("https://licketysync.dev/join?k={k}")).unwrap_err(),
@@ -633,16 +680,13 @@ mod tests {
             LinkError::Parameter
         );
         assert_eq!(
+            Link::parse(&format!("{p}k={k}&g=AQID")).unwrap_err(),
+            LinkError::Parameter,
+            "the drafts' grant chain is gone"
+        );
+        assert_eq!(
             Link::parse(&format!("{p}k={k}&a")).unwrap_err(),
             LinkError::Parameter
-        );
-        assert_eq!(
-            Link::parse(&format!("{p}k={k}&g=!!")).unwrap_err(),
-            LinkError::Encoding
-        );
-        assert_eq!(
-            Link::parse(&format!("{p}k={k}&g=AQID")).unwrap_err(),
-            LinkError::Encoding
         );
         assert_eq!(
             Link::parse(&format!("{p}k={k}&c=!!")).unwrap_err(),
@@ -673,14 +717,19 @@ mod tests {
             LinkError::Count
         );
         assert_eq!(
-            Link::parse(&format!("{p}k=lsk1bad")).unwrap_err(),
-            LinkError::Key(Bech32Error::Character)
+            Link::parse(&format!("{p}k=lsw1bad")).unwrap_err(),
+            LinkError::Key(KeyStringError::Character)
         );
         assert_eq!(
             Link::parse(&"x".repeat(MAX_LINK_LEN + 1)).unwrap_err(),
             LinkError::TooLong
         );
-        let mut l = Link::bare(sample());
+        // Exactly at the cap the text is read, and refused for what it says.
+        assert_eq!(
+            Link::parse(&"x".repeat(MAX_LINK_LEN)).unwrap_err(),
+            LinkError::Prefix
+        );
+        let mut l = Link::bare(w);
         l.addresses = vec!["a&b".into()];
         assert_eq!(l.to_text().unwrap_err(), LinkError::Item);
         l.addresses = vec!["/x".into(); 17];
@@ -688,17 +737,114 @@ mod tests {
         l.addresses.clear();
         l.cert_hash = Some(vec![]);
         assert_eq!(l.to_text().unwrap_err(), LinkError::Item);
+        l.cert_hash = Some(vec![0; MAX_LINK_ITEM + 1]);
+        assert_eq!(l.to_file().unwrap_err(), LinkError::Item);
+        // The longest link a sender can make parses.
+        l.cert_hash = Some(vec![0; MAX_LINK_ITEM]);
+        l.addresses = vec!["/".repeat(MAX_LINK_ITEM); MAX_LINK_ADDRESSES];
+        let longest = l.to_text().unwrap();
+        assert!(longest.len() <= MAX_LINK_LEN, "{}", longest.len());
+        assert!(Link::parse(&longest).is_ok());
         for e in [
             LinkError::TooLong,
             LinkError::Prefix,
             LinkError::Parameter,
             LinkError::Count,
-            LinkError::Key(Bech32Error::Padding),
+            LinkError::Key(KeyStringError::Padding),
             LinkError::Encoding,
             LinkError::Item,
             LinkError::NotOneLine,
         ] {
             assert_ne!(e.to_string(), "");
+        }
+    }
+
+    use proptest::prelude::*;
+
+    fn key_strategy() -> impl Strategy<Value = FolderKey> {
+        (any::<[u8; 32]>(), prop::sample::select(Tier::ALL.to_vec())).prop_map(|(ws, tier)| {
+            FolderKey::from(
+                crate::WriteKey::from_secret(crate::Suite::ONE, crate::WriteSecret::from_bytes(ws))
+                    .unwrap(),
+            )
+            .lowered(tier)
+            .unwrap()
+        })
+    }
+
+    /// An address a link can carry: printable ASCII but `&`, `#` and `=`.
+    fn address() -> impl Strategy<Value = String> {
+        "[!-~&&[^&#=]]{1,40}"
+    }
+
+    proptest! {
+        /// Every key string, in either case, reads back to the same key.
+        #[test]
+        fn key_strings_round_trip(key in key_strategy(), upper in any::<bool>()) {
+            let text = if upper { key.to_qr_string() } else { key.to_key_string() };
+            let back = FolderKey::from_key_string(&text).unwrap();
+            prop_assert_eq!(back.tier(), key.tier());
+            prop_assert_eq!(&*back.payload(), &*key.payload());
+            prop_assert_eq!(&*back.to_key_string(), &*key.to_key_string());
+        }
+
+        /// Any text into the key-string parser: no panic, and what it accepts
+        /// is its own key string, in one case.
+        #[test]
+        fn any_text_into_the_key_string_parser(text in "\\PC{0,120}") {
+            if let Ok(key) = FolderKey::from_key_string(&text) {
+                prop_assert_eq!(key.to_key_string().to_string(), text.to_ascii_lowercase());
+            }
+        }
+
+        /// A valid key string with one character changed, inserted or removed
+        /// is refused or, when the change is only of case throughout, the
+        /// same key.
+        #[test]
+        fn edited_key_strings(key in key_strategy(), at in 0usize..116, c in "[a-z0-9]", edit in 0u8..3) {
+            let mut text = key.to_key_string().to_string();
+            let at = at % text.len();
+            match edit {
+                0 => text.replace_range(at..=at, &c),
+                1 => text.insert_str(at, &c),
+                _ => { text.remove(at); }
+            }
+            if let Ok(back) = FolderKey::from_key_string(&text) {
+                prop_assert_eq!(&*back.to_key_string(), text.as_str());
+                prop_assert_eq!(&*back.payload(), &*key.payload());
+            }
+        }
+
+        /// A link with any addresses and certificate hash a sender may give
+        /// reads back the same, as text and as a file.
+        #[test]
+        fn links_round_trip(
+            key in key_strategy(),
+            addresses in proptest::collection::vec(address(), 0..=MAX_LINK_ADDRESSES),
+            cert_hash in proptest::option::of(proptest::collection::vec(any::<u8>(), 1..=64)),
+        ) {
+            let link = Link { key, addresses, cert_hash };
+            for back in [Link::parse(&link.to_text().unwrap()), Link::parse_file(&link.to_file().unwrap())] {
+                let back = back.unwrap();
+                prop_assert_eq!(&back.addresses, &link.addresses);
+                prop_assert_eq!(&back.cert_hash, &link.cert_hash);
+                prop_assert_eq!(&*back.key.payload(), &*link.key.payload());
+            }
+        }
+
+        /// Any text into the link parsers: no panic, and what they accept
+        /// writes back to a link that reads as the same.
+        #[test]
+        fn any_text_into_the_link_parsers(text in "\\PC{0,200}", tail in "\\PC{0,40}") {
+            let k = FolderKey::from(crate::folder::tests::write_key(1)).to_key_string();
+            for input in [text.clone(), format!("{LINK_PREFIX}k={}{tail}", k.as_str())] {
+                for link in [Link::parse(&input), Link::parse_file(&input)].into_iter().flatten() {
+                    let again = Link::parse(&link.to_text().unwrap()).unwrap();
+                    prop_assert_eq!(&again.addresses, &link.addresses);
+                    prop_assert_eq!(&again.cert_hash, &link.cert_hash);
+                    prop_assert_eq!(&*again.key.payload(), &*link.key.payload());
+                }
+            }
         }
     }
 }

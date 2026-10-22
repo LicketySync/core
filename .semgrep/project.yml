@@ -7,28 +7,27 @@
 # fails when a rule the file names has no finding in it, so every rule needs at
 # least one `ruleid` case there.
 rules:
-  # A tripwire, not the control: deny.toml will let only licketysync-keys and
-  # licketysync-protocol depend on blake3, an entry that lands with the first of
-  # those crates to merge (suites.md, hashing). Inside them, only keys's labels
-  # module and protocol's hash module call it; those two files are excluded by
-  # path, as are the crates' integration tests and out-of-line test modules.
+  # A tripwire, not the control: deny.toml lets only licketysync-keys depend on
+  # blake3 (suites.md, hashing). Inside it, only the labels module calls it; that
+  # file is excluded by path, as are the crates' integration tests and
+  # out-of-line test modules. The protocol crate is scanned too, where no call
+  # may appear at all.
   # `.semgrep/tests/**` is included so that the cases apply whether or not
   # `semgrep --test` honours `paths`.
   - id: blake3-only-in-hash-modules
     languages: [rust]
     severity: ERROR
     message: >-
-      BLAKE3 is called only from crates/keys/src/labels.rs and
-      crates/protocol/src/hash.rs (suites.md, hashing; TM-14). A hash, keyed hash,
+      BLAKE3 is called only from crates/keys/src/labels.rs (suites.md, hashing;
+      TM-14). A hash, keyed hash,
       key derivation or Hasher built anywhere else is one no label or key
       registry governs, which can equal a hash of another kind and, over plaintext
       chunks, is a fingerprint anyone can test (hardening review:
-      confirmation-of-a-file). Call the helpers in those two modules.
+      confirmation-of-a-file). Call the helpers in that module.
     paths:
       include: ["crates/keys/**", "crates/protocol/**", ".semgrep/tests/**"]
       exclude:
         - "crates/keys/src/labels.rs"
-        - "crates/protocol/src/hash.rs"
         - "crates/keys/tests/**"
         - "crates/protocol/tests/**"
         - "tests.rs"
@@ -56,7 +55,6 @@ rules:
       include: ["crates/keys/**", "crates/protocol/**", ".semgrep/tests/**"]
       exclude:
         - "crates/keys/src/labels.rs"
-        - "crates/protocol/src/hash.rs"
         - "crates/keys/tests/**"
         - "crates/protocol/tests/**"
         - "tests.rs"

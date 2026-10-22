@@ -22,7 +22,7 @@ url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/
 [[exemptions.aead]]
 version = "0.6.1"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): AEAD traits beneath chacha20poly1305 and hpke (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): AEAD traits beneath chacha20poly1305 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.anyhow]]
 version = "1.0.104"
@@ -36,23 +36,23 @@ notes = "Phase 0 exemption (licketysync-keys): stack vectors beneath blake3 and 
 
 [[exemptions.autocfg]]
 version = "1.5.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): build-time only, num-traits' build script beneath module-lattice; cuviper. Not covered by the imported audits at this version."
+criteria = "safe-to-run"
+notes = "Phase 0 exemption (licketysync-keys): build-time only, num-traits' build script beneath proptest (dev-only since the keys-crate rework removed module-lattice); cuviper. Not covered by the imported audits at this version."
 
-[[exemptions.base64ct]]
-version = "1.8.3"
+[[exemptions.base64]]
+version = "0.23.1"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): in Cargo.lock only, through the weak optional dependency (pkcs8?/alloc) that ml-dsa's alloc feature names; no build of this workspace enables pkcs8, so this code is never compiled. RustCrypto."
+notes = "Phase 0 exemption (licketysync-keys): base64url of the certificate hash in join links (keys.md 6.3), built with default features off and alloc only, so the simd-unsafe feature's code is not compiled; marshallpierce; 0.22.1 was covered by the Google import (Dependabot review of 2026-10-18). Not covered by the imported audits at this version."
 
 [[exemptions.bech32]]
-version = "0.11.1"
+version = "0.12.0"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): the approved key-string encoding (suites.md 3.2), Bech32m only; rust-bitcoin. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): the approved key-string encoding (suites.md 3.2), Bech32m only and never its error-correction API; rust-bitcoin; 0.12.0 reviewed in the Dependabot review of 2026-10-18 (the key-string vectors are byte-identical to 0.11.1's). Not covered by the imported audits at this version."
 
 [[exemptions.bip39]]
 version = "3.0.0"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): the approved phrase encoding (suites.md 3.2), English only, zeroize feature, no seed function; rust-bitcoin; the Trezor vectors pass here. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): the approved encoding of the write key's words (suites.md 3.2), English only, zeroize feature, no seed function; rust-bitcoin; the Trezor vectors pass here. Not covered by the imported audits at this version."
 
 [[exemptions.bitcoin_hashes]]
 version = "0.14.101"
@@ -89,11 +89,6 @@ version = "1.0.5"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): build configuration helper; rust-lang (alexcrichton). Not covered by the imported audits at this version."
 
-[[exemptions.chacha20]]
-version = "0.10.2"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): ChaCha20 beneath chacha20poly1305 (deny.toml wrapper; also proptest's test generator); RustCrypto. Not covered by the imported audits at this version."
-
 [[exemptions.chacha20poly1305]]
 version = "0.11.0"
 criteria = "safe-to-deploy"
@@ -109,20 +104,10 @@ version = "0.5.4"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): constant-time conditional moves beneath ctutils; RustCrypto. Not covered by the imported audits at this version."
 
-[[exemptions.const-oid]]
-version = "0.10.2"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): in Cargo.lock only, through the weak optional dependency (pkcs8?/alloc) that ml-dsa's alloc feature names; no build of this workspace enables pkcs8, so this code is never compiled. RustCrypto."
-
 [[exemptions.constant_time_eq]]
 version = "0.4.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): constant-time comparison beneath blake3; cesarb. Not covered by the imported audits at this version."
-
-[[exemptions.cpufeatures]]
-version = "0.3.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): CPU feature detection beneath blake3, chacha20, curve25519-dalek, poly1305 and sha2; RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.crypto-common]]
 version = "0.2.2"
@@ -137,17 +122,12 @@ notes = "Phase 0 exemption (licketysync-keys): constant-time helpers beneath the
 [[exemptions.curve25519-dalek]]
 version = "5.0.0"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): curve arithmetic beneath ed25519-dalek and x25519-dalek (deny.toml wrapper); dalek-cryptography. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): curve arithmetic beneath ed25519-dalek (deny.toml wrapper); dalek-cryptography. Not covered by the imported audits at this version."
 
 [[exemptions.curve25519-dalek-derive]]
 version = "0.1.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): proc macro of curve25519-dalek; dalek-cryptography. Not covered by the imported audits at this version."
-
-[[exemptions.der]]
-version = "0.8.2"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): in Cargo.lock only, through the weak optional dependency (pkcs8?/alloc) that ml-dsa's alloc feature names; no build of this workspace enables pkcs8, so this code is never compiled. RustCrypto."
 
 [[exemptions.digest]]
 version = "0.11.3"
@@ -174,30 +154,10 @@ version = "0.1.14"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): build-time only, beneath cc; rust-lang. Not covered by the imported audits at this version."
 
-[[exemptions.getrandom]]
-version = "0.4.3"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): dev-only via rand beneath proptest; rust-random (the shipped graph has no getrandom). Not covered by the imported audits at this version."
-
 [[exemptions.hex-conservative]]
 version = "0.2.3"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): hex helper beneath bitcoin_hashes; rust-bitcoin. Not covered by the imported audits at this version."
-
-[[exemptions.hkdf]]
-version = "0.13.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): HPKE's KDF beneath hpke (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.hmac]]
-version = "0.13.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): HMAC beneath hkdf (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.hpke]]
-version = "0.14.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): the approved HPKE (suites.md 3.1): X-Wing, HKDF-SHA256, ChaCha20-Poly1305, base mode; rozbb, Cloudflare reviewed 0.8; its X-Wing KEM passes the draft's vectors here. Not covered by the imported audits at this version."
 
 [[exemptions.hybrid-array]]
 version = "0.4.15"
@@ -219,16 +179,6 @@ version = "1.0.18"
 criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): dev-only via serde_json; dtolnay. Not covered by the imported audits at this version."
 
-[[exemptions.keccak]]
-version = "0.2.2"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): Keccak permutation beneath sha3, shake and turboshake (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.kem]]
-version = "0.3.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): KEM traits beneath ml-kem and x-wing (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
 [[exemptions.libc]]
 version = "0.2.190"
 criteria = "safe-to-deploy"
@@ -238,26 +188,6 @@ notes = "Phase 0 exemption (licketysync-keys): platform bindings beneath cpufeat
 version = "2.8.3"
 criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): dev-only via serde_json; BurntSushi. Not covered by the imported audits at this version."
-
-[[exemptions.ml-dsa]]
-version = "0.1.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): the approved ML-DSA-65 (suites.md 3.1), default features off with zeroize and rand_core; RustCrypto, active upstream; seed key generation checked against the IETF LAMPS example here. Not covered by the imported audits at this version."
-
-[[exemptions.ml-kem]]
-version = "0.3.2"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): ML-KEM-768 beneath x-wing and hpke (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.module-lattice]]
-version = "0.2.3"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): lattice arithmetic beneath ml-dsa and ml-kem (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.pkcs8]]
-version = "0.11.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): in Cargo.lock only, through the weak optional dependency (pkcs8?/alloc) that ml-dsa's alloc feature names; no build of this workspace enables pkcs8, so this code is never compiled. RustCrypto."
 
 [[exemptions.poly1305]]
 version = "0.9.1"
@@ -288,16 +218,6 @@ notes = "Phase 0 exemption (licketysync-keys): derive macro of prost; tokio-rs. 
 version = "6.0.0"
 criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): dev-only via getrandom beneath proptest; UEFI targets only. Not covered by the imported audits at this version."
-
-[[exemptions.rand]]
-version = "0.10.3"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): dev-only via proptest; rust-random. Not covered by the imported audits at this version."
-
-[[exemptions.rand_core]]
-version = "0.10.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): the approved generator traits (suites.md 3.2), backed only by the caller's randomness; rust-random. Not covered by the imported audits at this version."
 
 [[exemptions.rand_xorshift]]
 version = "0.5.0"
@@ -332,37 +252,12 @@ notes = "Phase 0 exemption (licketysync-keys): dev-only: reading and writing the
 [[exemptions.sha2]]
 version = "0.11.1"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): SHA-2 beneath ed25519-dalek and hpke (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.sha3]]
-version = "0.11.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): SHA-3 beneath hpke, ml-kem and x-wing (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.sha3]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): SHA-3 beneath hpke, ml-kem and x-wing (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.shake]]
-version = "0.1.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): SHAKE beneath hpke, ml-dsa and x-wing (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): SHA-2 beneath ed25519-dalek (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.signature]]
 version = "3.0.0"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): signature traits beneath ed25519 and ml-dsa (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.spki]]
-version = "0.8.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): in Cargo.lock only, through the weak optional dependency (pkcs8?/alloc) that ml-dsa's alloc feature names; no build of this workspace enables pkcs8, so this code is never compiled. RustCrypto."
-
-[[exemptions.sponge-cursor]]
-version = "0.1.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): sponge helper beneath sha3, shake and turboshake; RustCrypto. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): signature traits beneath ed25519 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.syn]]
 version = "2.0.119"
@@ -373,11 +268,6 @@ notes = "Phase 0 exemption (licketysync-keys): build-time only, proc-macro parsi
 version = "3.0.9"
 criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): build-time only, proc-macro parsing; dtolnay. Not covered by the imported audits at this version."
-
-[[exemptions.turboshake]]
-version = "0.7.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): TurboSHAKE beneath hpke (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.typenum]]
 version = "1.20.1"
@@ -393,21 +283,6 @@ notes = "Phase 0 exemption (licketysync-keys): build-time only, beneath proc-mac
 version = "0.6.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): universal hash traits beneath poly1305 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
-
-[[exemptions.x-wing]]
-version = "0.1.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): X-Wing KEM, reached only through hpke (deny.toml wrapper); RustCrypto; the draft's vectors pass through hpke here. Not covered by the imported audits at this version."
-
-[[exemptions.x25519-dalek]]
-version = "3.0.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): X25519 beneath x-wing and hpke (deny.toml wrapper); dalek-cryptography. Not covered by the imported audits at this version."
-
-[[exemptions.zeroize]]
-version = "1.9.1"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): the approved secret wiping (suites.md 3.1); RustCrypto, widely reviewed. Not covered by the imported audits at this version."
 
 [[exemptions.zeroize_derive]]
 version = "1.5.0"

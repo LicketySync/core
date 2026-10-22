@@ -140,8 +140,6 @@ step ci/test-geiger.sh
 step ci/geiger.sh
 step ci/test-no-hostnames.sh
 step ci/no-hostnames.sh
-step ci/test-no-test-vectors.sh
-step ci/no-test-vectors.sh
 # The scripts mutants.yml and nightly.yml's fuzz jobs run, on stand-ins for the tools.
 step ci/test-mutants.sh
 step ci/test-fuzz-targets.sh

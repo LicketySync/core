@@ -1,0 +1,9 @@
+{
+  "key_string": "lsr1qqqu4nu5ym7tam7dy8uspqje0j9837udyrvsehtwgrmrxsjgk2dpykqqnh8zp3s3yk2sqmm6ccvxdca7hm8sfahm3g4g34r93rrvarep2cg74vh3",
+  "key_string_in_the_query": {
+    "error": "Some(Prefix)",
+    "link": "https://licketysync.dev/join?k=lsr1qqqu4nu5ym7tam7dy8uspqje0j9837udyrvsehtwgrmrxsjgk2dpykqqnh8zp3s3yk2sqmm6ccvxdca7hm8sfahm3g4g34r93rrvarep2cg74vh3"
+  },
+  "link": "https://licketysync.dev/join#k=lsr1qqqu4nu5ym7tam7dy8uspqje0j9837udyrvsehtwgrmrxsjgk2dpykqqnh8zp3s3yk2sqmm6ccvxdca7hm8sfahm3g4g34r93rrvarep2cg74vh3&a=/ip4/192.0.2.7/udp/4001/quic-v1&a=/ip4/192.0.2.7/tcp/4001&c=EiCquw",
+  "lskey_file": "https://licketysync.dev/join#k=lsr1qqqu4nu5ym7tam7dy8uspqje0j9837udyrvsehtwgrmrxsjgk2dpykqqnh8zp3s3yk2sqmm6ccvxdca7hm8sfahm3g4g34r93rrvarep2cg74vh3&a=/ip4/192.0.2.7/udp/4001/quic-v1&a=/ip4/192.0.2.7/tcp/4001&c=EiCquw\n"
+}

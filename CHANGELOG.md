@@ -6,6 +6,114 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Keys crate reworked for shared folder keys, to `spec/keys.md` and `spec/suites.md` as rewritten in
+  the entry below. Removed, with their tests, vectors, fuzz targets and seeds: the recovery phrase
+  and the master secret, the identity seed and catalogue key, root seeds and folder nonces, key pair
+  sets (Ed25519 + ML-DSA-65 + X-Wing from one seed), hybrid signatures and their hedged and
+  deterministic forms, key IDs, X-Wing wrapping through HPKE, the epoch ladder, data keys per epoch
+  and their confirmation values, the Folder record (genesis and every later form), grants and
+  chains, `may_share`, expiry, Rotation, Wrap, Revocation, Suspension and Lift records, the
+  key-record store with its quotas, refusal memory and held grants, the link's grant bundle (`g=`),
+  the `test-vectors` feature, and `ci/no-test-vectors.sh` with its test, its `gate.sh` steps and its
+  CI job (Ed25519 signing is deterministic, so vectors reproduce through the production signing path
+  and no test-only signing mode is left to keep out of a shipped build). Kept and adjusted: the
+  label registry (now the 25 labels of `keys.md` §10, with the registry test exact against both
+  specs and a new test that `suites.md` §2.4 copies `keys.md` §10 row for row), XChaCha20-Poly1305
+  helpers, Padmé and chunk encryption (associated data now the folder ID alone; only implemented
+  compression codes decode, which in phase 0 is `0`), discovery hashes, the device's libp2p identity
+  and DHT key, the link code and link proof, links and `.lskey` files (`k`, `a`, `c`), the strict
+  protobuf scan (each singular field once, `uint32` range, no groups) and the BIP39 English word
+  handling. New: `folder` (the write secret and its derivation tree, `WriteKey`, `ReadKey`,
+  `SealedKey`, `FolderKey`, the folder verification key, the `FolderVerifier` that every tier
+  carries, lowering to a lower tier, and the stored form `u8(tier) || payload` of `keys.md` §8.2; a
+  read or sealed key is made only from a write key or a payload, never from loose halves), `sig`
+  (Ed25519 over `label || 0x00 || body`, `verify_strict` only, and the check that every public key
+  received from anywhere is the canonical encoding of a point not of small order, which
+  `ed25519-dalek`'s ZIP-215 decoding does not make), `records` (the two-field `SignedRecord` of
+  index records with its 4 000 000-byte cap and strict prefix, signing and verification under the
+  folder key, the record hash and the writer digest; `SignedRecord::from_bytes` is the only way from
+  bytes to a record, since the type has private fields and no Protocol Buffers decoder of its own,
+  and the module documents which `protocol.md` §4.4 step-1 checks it makes and which stay the
+  protocol crate's), `sealed_meta` (seal and open of index records' metadata under `rk` with
+  `folder_id || device_id || be64(seq)`, 40 to 1 572 864 bytes on both sides), `handshake` (roles,
+  the hint key and payload key derived from the access key, the hint, and
+  `HandshakeKeys::seal_proof` and `open_proof`, which draw the proof's nonce inside the crate and
+  seal and open the `FolderProof` payload under the proof key: one proof for every tier), `chunk`'s
+  keys built only from a write or read key (`chunk_keys`), with `seal_chunk` returning the plaintext
+  hash, `device` (the device key, the Hello form of its public key checked canonical, the device ID
+  and the device proof), key strings with the `lsw`, `lsr` and `lss` prefixes (65 and 116
+  characters, decoders capped at 116) decoded in the order of `keys.md` §6.1 as amended (the Bech32m
+  string, a payload of under 2 bytes, the suite whatever the length, then the length under that
+  suite, then the verification key), and the write key's 24 words with `keys.md` §6.2's refusal
+  order (the count, then the first token that is no word or unique four-letter prefix, then the
+  checksum), entry text over 4 096 bytes refused before it is split. The public surface is narrowed
+  to what callers need: the AEAD module, `derive_key`, the signed-message prefix, the proof key and
+  every key below a folder key but the record key are private to the crate; only the write secret,
+  the device seed and the link secret can be made from bytes or randomness outside it; no secret
+  type is `Clone`, every secret is built in place (the `blake3::Hash` temporaries are wiped too),
+  and error values carry no length read from inside a ciphertext. Test vectors regenerated for all
+  twelve items of `keys.md` §9 (folder, key strings, words, device, discovery, chunk, Padmé, index
+  record, handshake on a fixed transcript hash in both roles through the production sealing path,
+  the 14 `derive_key` labels, link, linking) and checked byte for byte against the committed files,
+  with the items the review and the amended §9 add: key strings with a 1-byte payload and with suite
+  2 at another length than suite 1's, and a chunk whose compression-0 payload is one byte over
+  `MAX_CHUNK_PLAINTEXT` (given by its header, padded length, nonce and ciphertext hash rather than
+  its 4 325 416 bytes); the RFC 8032, XChaCha draft (now in the AEAD module's own tests), BLAKE3 and
+  BIP39 Trezor vectors stay, the Trezor set now all eight of its 256-bit entries. Property tests for
+  key strings, words (random case, whitespace runs and four-letter prefixes), the stored form,
+  links, link codes and signed records, each also feeding arbitrary input to its parser; tests of
+  every length cap exactly at the cap. Fuzz targets: `chunk_open` (now under the vectors' folder),
+  `key_string_parse`, `link_parse`, `link_code_parse`, and new `index_envelope_parse`,
+  `words_parse`, `sealed_meta_open`, `device_proof_verify` and `stored_key_parse`, with seeds from
+  the new vectors, each asserting that what it accepts round-trips; the old targets' seeds are gone.
+  Dependencies removed: `ml-dsa`, `hpke` (and with it `x-wing`, `ml-kem`, `x25519-dalek`, `hkdf`,
+  `hmac`, `kem`, `module-lattice`, `sha3`, `shake`, `turboshake`, `keccak`, `sponge-cursor`, and the
+  never-built `pkcs8`, `der`, `spki`, `const-oid`, `base64ct`) and `rand_core` as a direct
+  dependency. The reviewed Dependabot pull requests 1 and 2 are folded in: `bech32` moves from 0.11
+  to 0.12 (the key-string vectors are byte-identical; its error-correction API is not used) and
+  `base64` from 0.22 to 0.23 with default features off and `alloc` only, so its `simd-unsafe` code
+  is not built. `deny.toml` loses the entries of the removed crates and their wrappers, and `blake3`
+  and `chacha20poly1305` now have `licketysync-keys` as their only wrapper (the
+  `licketysync-protocol` wrappers are gone); `ed25519-dalek`, `bip39` and the primitives beneath the
+  remaining crates keep their confinement to `licketysync-keys`. `.semgrep/project.yml` no longer
+  excludes `crates/protocol/src/hash.rs`, which does not exist. `supply-chain/`: exemptions for
+  `bech32` 0.12.0 (replacing 0.11.1) and `base64` 0.23.1 (0.22.1 was covered by the Google import);
+  `cargo vet prune` dropped the exemptions of the removed crates and replaced those of `chacha20`,
+  `cpufeatures`, `getrandom`, `rand`, `rand_core` and `zeroize` with imported audits; stale notes
+  updated. `ci/geiger-baseline.txt`: keys 94 4333 23 2 63 (was 95 4352 23 2 63). README's keys-crate
+  row follows the new model. Coverage of the keys crate: 99.6 % of lines.
+  Decisions for the plan:
+  - The `test-vectors` feature and `ci/no-test-vectors.sh` are removed: Ed25519 signing is
+    deterministic and every vector reproduces through the production path.
+  - The crate's share of `keys.md` §8.2 in phase 0 is the stored form of one folder key; Argon2id
+    and its RFC 9106 vectors arrive with the phase 1 key store, as both specs now say.
+  - The handshake role is a type (`Role::A`, `Role::B`) rather than a byte everywhere the crate
+    takes one, and a folder's hint key and payload key are derived once into `HandshakeKeys`, which
+    a device caches per folder.
+  - Join links are capped at 8 192 characters (was 262 144 with the grant bundle).
+  - `SignedRecord::from_bytes` judges the envelope and the body's `record_type`; the rest of an
+    index record's parse (its suite and folder, which need the open folder, and every other field)
+    is the protocol crate's, whose schema the keys crate's vectors mirror in test code only.
+    Protocol messages carry each embedded record as raw `bytes` and the protocol crate reads it
+    only through `SignedRecord::from_bytes` (ruling SF6), keeping its own strict decoder for its
+    messages; `verify_index_record` reports a forged record as `SignatureError`.
+  - Word entry refuses a text over 4 096 bytes before splitting it (security N-4); `keys.md` §6.2
+    does not state the cap yet.
+  - `HandshakeKeys::seal_proof` returns its `(nonce, sealed)` inside a `Result`, since the AEAD's
+    seal is fallible (a payload over about 256 GiB); every other seal in the crate has its own
+    error variant for it.
+  - A payload of the wrong length inside a key string or link code is `KeyStringError::Key` with
+    `KeyError::Length`, and a data part ending in five padding bits or more is
+    `KeyStringError::Padding`; there is no separate key-string length error.
+  Reviewed (2026-10-22) on 5a9aef1 by three fresh-context agents (Claude Opus 5.5): correctness
+  ac8209b50d5184499, blocked by 3 should-fixes, quality a5a901889bbd6cfa8, blocked by 6
+  should-fixes, and security a61e36c37a15c499a, the security-reviewer pass, clean with 2
+  should-fixes. Every accepted finding was applied in this commit (author ab1d7070b7eae97eb; first
+  version by acfae6f32398cf668); confirmed clean 2026-10-22 on c7e1ac4 (before the rebase) by
+  quality and by security, security also for correctness's items. One trivial test,
+  `Suite::to_wire` for suite 2, is left as a follow-up. The merge agent wrote this record; it was
+  not re-reviewed; rebased onto 28bf4da.
+
 - Specification rewritten for shared folder keys (the owner's decision of 2026-10-18, both sets of
   the owner's answers of 2026-10-22, and the coordinator's rulings R-K1 to R-K6, S-1 to S-4 and the
   round-1 review fixes of that day; the owner's direction: "simplify the tracking, simplify the

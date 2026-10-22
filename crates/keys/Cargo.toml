@@ -1,6 +1,6 @@
 [package]
 name = "licketysync-keys"
-description = "Key material: recovery phrase, seed-derived keypairs, hybrid wrapping (X-Wing through HPKE), hybrid signatures (Ed25519 + ML-DSA-65), grants, suspensions, revocations and epoch rotation."
+description = "Shared folder keys: the write secret and its derivations, read and sealed keys, Ed25519-signed records, chunk and metadata encryption, handshake proofs, key strings and words."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,26 +11,18 @@ publish = false
 [dependencies]
 blake3 = { version = "1.8", features = ["zeroize"] }
 ed25519-dalek = "3"
-ml-dsa = { version = "0.1", default-features = false, features = ["alloc", "zeroize", "rand_core"] }
-hpke = { version = "0.14", default-features = false, features = ["alloc", "x25519", "mlkem", "chacha", "hkdfsha2"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
 bip39 = { version = "3", default-features = false, features = ["zeroize"] }
-bech32 = "0.11"
+bech32 = "0.12"
 zeroize = { version = "1", features = ["derive"] }
 subtle = "2"
 prost = "0.14"
-rand_core = "0.10"
-base64 = "0.22"
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
 serde_json = "1"
 hex = "0.4"
-
-[features]
-# Deterministic signing for test vectors (this crate's and the protocol
-# crate's). Never enabled in a build that ships.
-test-vectors = []
 
 [lints]
 workspace = true

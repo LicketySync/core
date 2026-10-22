@@ -1,5 +1,5 @@
 {
-  "_source": "Trezor python-mnemonic vectors.json (English), the seven with 256-bit entropy, as rust-bip39 3.0.0 carries them",
+  "_source": "Trezor python-mnemonic vectors.json (English), the eight with 256-bit entropy, as rust-bip39 3.0.0 carries them",
   "vectors": [
     {
       "entropy": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -28,6 +28,10 @@
     {
       "entropy": "066dca1a2bb7e8a1db2832148ce9933eea0f3ac9548d793112d9a95c9407efad",
       "mnemonic": "all hour make first leader extend hole alien behind guard gospel lava path output census museum junior mass reopen famous sing advance salt reform"
+    },
+    {
+      "entropy": "f585c11aec520db57dd353c69554b21a89b20fb0650966fa0a9d6f74fd989d8f",
+      "mnemonic": "void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold"
     }
   ]
 }

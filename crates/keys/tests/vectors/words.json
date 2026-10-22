@@ -1,0 +1,54 @@
+{
+  "accepted": [
+    {
+      "name": "upper case",
+      "words": "AVOID MASS LUGGAGE CHOICE FABRIC ARGUE GATHER CASH BRAND THOUGHT ELEGANT DINNER ACOUSTIC MUCH MILK LUCKY CHANGE DEER APART FEBRUARY READY BIRD REWARD VAN"
+    },
+    {
+      "name": "mixed case",
+      "words": "Avoid MASS luggage Choice FABRIC argue Gather CASH brand Thought ELEGANT dinner Acoustic MUCH milk Lucky CHANGE deer Apart FEBRUARY ready Bird REWARD van"
+    },
+    {
+      "name": "tabs, line breaks and repeated spaces",
+      "words": "  avoid mass luggage choice fabric\targue\tgather\tcash\tbrand\tthought\nelegant  dinner  acoustic  much  milk   lucky\nchange\ndeer\napart\nfebruary\r\nready \t bird \t reward \t van "
+    },
+    {
+      "name": "four-letter prefixes",
+      "words": "avoi mass lugg choi fabr argu gath cash bran thou eleg dinn acou much milk luck chan deer apar febr read bird rewa van"
+    }
+  ],
+  "refused": [
+    {
+      "error": "WordCount(23)",
+      "message": "23 words; a write key has 24",
+      "name": "23 tokens",
+      "words": "avoid mass luggage choice fabric argue gather cash brand thought elegant dinner acoustic much milk lucky change deer apart february ready bird reward"
+    },
+    {
+      "error": "WordCount(25)",
+      "message": "25 words; a write key has 24",
+      "name": "25 tokens",
+      "words": "avoid mass luggage choice fabric argue gather cash brand thought elegant dinner acoustic much milk lucky change deer apart february ready bird reward van avoid"
+    },
+    {
+      "error": "UnknownWord { position: 6 }",
+      "message": "word 6 is not in the word list",
+      "name": "a token in the alphabet that is no word",
+      "words": "avoid mass luggage choice fabric notaword gather cash brand thought elegant dinner acoustic much milk lucky change deer apart february ready bird reward van"
+    },
+    {
+      "error": "UnknownWord { position: 1 }",
+      "message": "word 1 is not in the word list",
+      "name": "a three-letter prefix of a longer word",
+      "words": "avo mass luggage choice fabric argue gather cash brand thought elegant dinner acoustic much milk lucky change deer apart february ready bird reward van"
+    },
+    {
+      "error": "Checksum",
+      "message": "the words' checksum does not match; one of them is wrong",
+      "name": "24 valid words with a bad checksum",
+      "words": "avoid mass luggage choice fabric argue gather cash brand thought elegant dinner acoustic much milk lucky change deer apart february ready bird reward vanish"
+    }
+  ],
+  "words": "avoid mass luggage choice fabric argue gather cash brand thought elegant dinner acoustic much milk lucky change deer apart february ready bird reward van",
+  "write_secret": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
+}

@@ -2,55 +2,82 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Fixed-size joins and splits without indexing, so that no slice operation
-//! in this crate can panic (TM-23).
+//! Fixed-size joins and truncations without indexing, so that no slice
+//! operation in this crate can panic (TM-23). Every length is a const generic
+//! and is checked when the crate is built: a call whose parts do not add up to
+//! its output, or that takes more bytes than its input holds, does not compile
+//! (an inline `const` assertion, evaluated for each instantiation).
 
-/// Fills an `N`-byte array from `parts` in order. Callers pass parts whose
-/// lengths add up to `N`, which the tests of each call site check; a shorter
-/// input leaves trailing zeros and a longer one is cut, never a panic.
-pub(crate) fn fill<const N: usize>(parts: &[&[u8]]) -> [u8; N] {
+/// Writes `a || b` into `out`.
+pub(crate) fn join_into<const A: usize, const B: usize, const N: usize>(
+    out: &mut [u8; N],
+    a: &[u8; A],
+    b: &[u8; B],
+) {
+    const { assert!(A + B == N, "the parts must fill the output exactly") };
+    for (o, i) in out.iter_mut().zip(a.iter().chain(b)) {
+        *o = *i;
+    }
+}
+
+/// `a || b`.
+pub(crate) fn join<const A: usize, const B: usize, const N: usize>(
+    a: &[u8; A],
+    b: &[u8; B],
+) -> [u8; N] {
     let mut out = [0u8; N];
-    for (o, i) in out.iter_mut().zip(parts.iter().flat_map(|p| p.iter())) {
+    join_into(&mut out, a, b);
+    out
+}
+
+/// `a || b || c`.
+pub(crate) fn join3<const A: usize, const B: usize, const C: usize, const N: usize>(
+    a: &[u8; A],
+    b: &[u8; B],
+    c: &[u8; C],
+) -> [u8; N] {
+    const { assert!(A + B + C == N, "the parts must fill the output exactly") };
+    let mut out = [0u8; N];
+    for (o, i) in out.iter_mut().zip(a.iter().chain(b).chain(c)) {
         *o = *i;
     }
     out
 }
 
-/// The first `N` bytes of `bytes`, or `None` if it is shorter.
-pub(crate) fn prefix<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
-    bytes.first_chunk::<N>().copied()
-}
-
-/// Splits 64 bytes into two halves.
-pub(crate) fn halves(bytes: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
-    let mut a = [0u8; 32];
-    let mut b = [0u8; 32];
-    for (o, i) in a.iter_mut().chain(b.iter_mut()).zip(bytes.iter()) {
+/// Writes the first `N` bytes of `a` into `out`.
+pub(crate) fn first_into<const M: usize, const N: usize>(out: &mut [u8; N], a: &[u8; M]) {
+    const { assert!(N <= M, "cannot take more bytes than the input holds") };
+    for (o, i) in out.iter_mut().zip(a) {
         *o = *i;
     }
-    (a, b)
+}
+
+/// The first `N` bytes of `a`.
+pub(crate) fn first<const M: usize, const N: usize>(a: &[u8; M]) -> [u8; N] {
+    let mut out = [0u8; N];
+    first_into(&mut out, a);
+    out
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
 
     #[test]
-    fn fill_prefix_and_halves() {
-        assert_eq!(fill::<4>(&[&[1, 2], &[3], &[4, 5]]), [1, 2, 3, 4]);
-        assert_eq!(fill::<4>(&[&[1]]), [1, 0, 0, 0]);
-        assert_eq!(prefix::<2>(&[1, 2, 3]), Some([1, 2]));
-        assert_eq!(prefix::<4>(&[1, 2, 3]), None);
-        let mut x = [0u8; 64];
-        x[0] = 1;
-        x[63] = 2;
-        let (a, b) = halves(&x);
-        assert_eq!((a[0], b[31]), (1, 2));
+    fn joins_and_truncations() {
+        assert_eq!(join::<2, 2, 4>(&[1, 2], &[3, 4]), [1, 2, 3, 4]);
+        assert_eq!(join::<0, 3, 3>(&[], &[5, 6, 7]), [5, 6, 7]);
+        assert_eq!(join3::<1, 2, 1, 4>(&[1], &[2, 3], &[4]), [1, 2, 3, 4]);
+        let mut out = [9u8; 3];
+        join_into(&mut out, &[1u8], &[2u8, 3]);
+        assert_eq!(out, [1, 2, 3]);
+        assert_eq!(first::<4, 2>(&[1, 2, 3, 4]), [1, 2]);
+        assert_eq!(first::<2, 2>(&[1, 2]), [1, 2]);
+        let mut out = [9u8; 1];
+        first_into(&mut out, &[7u8, 8]);
+        assert_eq!(out, [7]);
+        let wide: [u8; 64] = core::array::from_fn(|i| u8::try_from(i).unwrap_or(0));
+        assert_eq!(first::<64, 32>(&wide)[31], 31);
     }
 }
