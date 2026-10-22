@@ -92,6 +92,7 @@ Limits:
 | `DEFAULT_MESSAGE_SIZE` | 16 777 216 (16 MiB) | What a device advertises unless configured otherwise |
 | `MAX_MESSAGE_SIZE` | 67 108 864 (64 MiB) | The largest value a Hello may advertise; larger is treated as this value |
 | `MAX_INDEX_RECORD_BYTES` | 4 000 000 | The largest encoded `SignedRecord`; a larger one is malformed at parse, before any duplicate check |
+| `MAX_REQUESTS_IN_FLIGHT` | 1 024 | The largest `max_requests_in_flight` a Hello may advertise; larger is treated as this value, so that a requester never keeps more chunk requests outstanding on a connection, whatever the holder advertises (4.6) |
 
 - The limit for **incoming** frames is the receiver's own advertised `max_message_size` (what it
   told the peer it accepts), except that every frame received before the peer's DeviceProof has
@@ -360,7 +361,7 @@ message Hello {
   repeated string hashes        = 5;  // "blake3" required in major 1; <= 32, each [a-z0-9-]{1,20}
   repeated string features      = 6;  // optional feature names this device supports; <= 32; the feature set (section 5) is this list plus compression:<c> and hash:<h> for every entry above
   uint32 max_message_size       = 7;  // frames this device accepts, bytes; MIN_MESSAGE_SIZE ..= MAX_MESSAGE_SIZE
-  uint32 max_requests_in_flight = 8;  // chunk requests this device will hold open per connection; >= 1; default 64
+  uint32 max_requests_in_flight = 8;  // chunk requests this device will hold open per connection; >= 1; default 64; a value above MAX_REQUESTS_IN_FLIGHT (1 024) is treated as that
   bytes  nonce                  = 9;  // 32 random bytes; makes the transcript unique to this connection
   bytes  libp2p_identity        = 10; // 32: Ed25519 public key of the libp2p identity (keys.md §8.1); from phase 1 must equal the transport-authenticated key
 }
@@ -445,7 +446,7 @@ message IndexRecord {
   bytes  device_id    = 5;   // 32: the writer's device ID, as the signer claims it; a sync key only, never shown as an author (keys.md §5.3)
   uint64 seq          = 6;   // per device_id: 1, 2, 3 … ..= MAX_SEQ (2^62); one device may have several records at one seq (concurrent versions, below)
   reserved 7;                // was previous: the cursor digest (below) finds every difference a per-writer hash chain would
-  repeated bytes supersedes = 8;   // a set: the record_hash of each version this record replaces (below); each 32 bytes; <= MAX_SUPERSEDES (16)
+  repeated bytes supersedes = 8;   // a set: the record_hash of each version this record replaces (below); each 32 bytes; <= MAX_SUPERSEDES (16) entries as encoded, a repeated entry counting once: producers sort the entries and drop repeats, verifiers accept repeats within the 16
   reserved 9;                // was the version vector (ruling R-K6)
   reserved 10;               // was epoch
   bool   deleted      = 11;  // tombstone: chunks is empty
@@ -576,7 +577,8 @@ failure is the one section 5's table gives for its cause; the causes are named h
 1. **Parse** the body; the encoded `SignedRecord` is at most `MAX_INDEX_RECORD_BYTES` (4 000 000)
    bytes; `suite` is the folder's suite; `record_type = 16`; sizes and bounds above, every fixed-size
    field present at its exact size; `folder_id` is the open folder; `1 ≤ seq ≤ MAX_SEQ`; `deleted`
-   implies `chunks` empty; at most 16 `supersedes` entries, each 32 bytes; `sealed` 40 to
+   implies `chunks` empty; at most 16 `supersedes` entries as encoded, repeats included (a repeated
+   entry counts once), each 32 bytes; `sealed` 40 to
    1 572 864 bytes; each chunk's `cipher_hash` 32 bytes and `stored_len` in range and a Padmé length
    plus 40; the `SignedRecord`'s `signature` 64 bytes. Failure: **malformed**.
 2. **Duplicate**: compute `record_hash`. A record with this hash is already held for the folder: a
@@ -652,7 +654,7 @@ message IndexRequest {
 message IndexRecords {
   bytes folder_id                = 1;
   repeated SignedRecord records  = 2;   // <= MAX_PAGE_RECORDS (4096), more is malformed; per writer, in canonical order (section 4.4)
-  bool more                      = 3;   // another page follows for the same request; never true when request_id = 0 (malformed)
+  bool more                      = 3;   // another page follows for the same request; never true when request_id = 0, nor on a page without records (both malformed)
   uint32 request_id              = 4;   // the request this page answers; 0 = a push
 }
 
@@ -752,7 +754,10 @@ message FolderStatus {
   requester already holds, cannot hold the one outstanding request slot, and with it the marks of
   that connection, past the deadline; the next connection asks again. The stated residual: a
   responder that keeps delivering new records or chunks can delay its page on that one connection;
-  other connections recover.
+  other connections recover. Every page of the reply restarts the count, whatever its records, and a
+  page with `more = true` holds at least one (Pages, below), so the residual includes a responder
+  that keeps sending pages of records the requester already holds: it holds the request slot on
+  that connection for as long as it keeps sending such pages, and pays for each of them.
 - **Pages.** The page limit is the request's `max_records` held between 64 and `MAX_PAGE_RECORDS`
   (4096): 0 or a value above 4096 means 4096, and a value below 64 means 64, so that no requester can
   pin a responder's processor with one-record pages. The responder fills each page record by record
@@ -762,7 +767,9 @@ message FolderStatus {
   `MAX_PAGE_RECORDS`, the receiver's bound; every record fits a page on its own (section 2). A page
   may end anywhere: two records of one writer at one `seq` may lie on two pages, since the second is
   a concurrent version once the first is held. A reply with nothing to send is one empty page with
-  `more = false`; `more` is set on every page but the last.
+  `more = false`; `more` is set on every page but the last. Since a page ends before a record only
+  when it already holds one, a page with `more = true` holds at least one record: one without any is
+  malformed.
 - **Replies and pushes.** A **reply** is what a sender produces for a request it received on this
   connection: the `IndexRecords` pages carrying that request's `request_id`, up to and including the
   one with `more = false`. The sender paged it, so inside a reply it answers for contiguity and for
@@ -773,7 +780,8 @@ message FolderStatus {
   newly accepted, may arrive between two pages of a reply, and a receiver that finds a gap in it marks
   the writer rather than blaming the pusher. An **empty push** says that the sender dropped pushes
   for the folder (3.1): the receiver owes a round (above). An `IndexRecords` push with `more = true`,
-  and a page whose `request_id` names no request outstanding on the connection, are malformed.
+  a reply page with `more = true` and no records, and a page whose `request_id` names no request
+  outstanding on the connection, are malformed.
 - **Pushes** (ruling PUSH-2). From the moment a folder opens on a connection, a peer pushes every
   index record it newly accepts to every connection where the folder is open except the one the
   record arrived on, so that a record accepted while the first round runs is not missed: each
@@ -794,7 +802,9 @@ message FolderStatus {
   device comes near it.
 - Status is sent every `STATUS_INTERVAL` (30 s, through the clock trait) and on change, for open
   folders only; a change in `chunks_stored` alone sends at most one Status per second per folder per
-  connection. It is advisory and never changes what a peer will accept.
+  connection. It is advisory and never changes what a peer will accept. A Status that the send queue
+  cannot take (3.1) is skipped rather than queued behind other frames; the next is due within
+  `STATUS_INTERVAL`.
 - **Device name.** A device's self-chosen name travels only in Status, so only after a folder has
   opened on the connection (both ProofResults ACCEPTED): the first Status a side sends after its
   first open carries `device_name`, later ones carry it only when it changes, and the receiver shows
@@ -838,10 +848,12 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
   `cipher_hash`. The holder sends the chunk when it holds it for the folder and answers
   `CHUNK_NOT_FOUND` otherwise; `CHUNK_NOT_FOUND` is an ordinary answer and never closes the
   connection. Requests are bounded only by the in-flight limit: the requester keeps at most the
-  holder's `max_requests_in_flight` requests outstanding on a connection, and a holder that receives
-  more closes with `PROTOCOL_ERROR`.
-- **Busy.** A holder answers `CHUNK_BUSY` exactly when its unsent bytes on the connection (3.1) are at
-  least `MAX_SEND_QUEUE / 2` (64 MiB) as it dispatches the request; otherwise it queues the request,
+  holder's `max_requests_in_flight` requests outstanding on a connection, a value above
+  `MAX_REQUESTS_IN_FLIGHT` (1 024, section 2) taken as that, and a holder that receives more than it
+  advertised closes with `PROTOCOL_ERROR`.
+- **Busy.** A holder answers `CHUNK_BUSY` exactly when its unsent bytes on the connection (3.1),
+  counting the frames it holds back until the transport has room for them, are at least
+  `MAX_SEND_QUEUE / 2` (64 MiB) as it dispatches the request; otherwise it queues the request,
   which holds only the hash until the chunk is read from storage, as it is sent, and then waits for
   room like any frame. (The fair share of upload, a phase 1 engine item, may add a second condition,
   stated with it.) After a `CHUNK_BUSY` the requester sends no chunk request on that connection
@@ -897,7 +909,8 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 - **Limits are per connection**, and none grows with the number of writers (ruling R-K4): every
   per-peer table (open folders, the hints of proofs received (at most `MAX_PROOFS_PER_CONNECTION`),
   the one outstanding `IndexRequest` per folder and its reply in progress, outstanding chunk
-  requests (at most `max_requests_in_flight`), each holding only its hash, the one `CHUNK_BUSY`
+  requests (at most `max_requests_in_flight`, itself at most `MAX_REQUESTS_IN_FLIGHT`), each holding
+  only its hash, the one `CHUNK_BUSY`
   backoff timer, per folder the chunk pass's position, the peer's `chunks_stored` at the latest
   `CHUNK_NOT_FOUND`, that answer's time and the pending trigger bit, pending pages, the unknown
   types already answered with `Unsupported` (at most 32 768, a 4 KiB set), marks (at most
@@ -931,7 +944,7 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 
 | Cause | Outcome |
 | --- | --- |
-| **Malformed**: frame length below 2, body that does not parse, a field number above 2^29 − 1 or a group wire type, a size or bound or grammar violated, a fixed-size field absent or of another size, a `bool` other than 0 or 1, a `uint32` of 2^32 or more, a field that is not repeated occurring twice in a body, a Hello that fails a check of 3.2 (a device key that is not canonical or is of small order included) other than the two rows below, a FolderProof envelope with a wrong `hint` or `nonce` size or a `sealed` outside 16 to 1 024 bytes, a FolderProof whose `hint` repeats one already received on the connection, more than `MAX_PROOFS_PER_CONNECTION` FolderProofs, a message for a folder not open here, a message before Hello or DeviceProof, a known type where only Hello or Close may come, any frame but DeviceProof or Close before the peer's DeviceProof verified, a second Hello or DeviceProof, a list past its bound, more chunk requests than allowed, a stray or second `ProofResult` or one whose `status` is not 1 or 2, a record whose `suite` is not its folder's or whose `record_type` is not 16, a `seq` of 0 or above `MAX_SEQ`, more than `MAX_SUPERSEDES` `supersedes` entries, a `sealed` part outside 40 to 1 572 864 bytes, a signature that is not 64 bytes, an encoded `SignedRecord` over `MAX_INDEX_RECORD_BYTES`, a `Cursor` whose `digest` length does not match its `seq` or whose `seq` is above `MAX_SEQ`, an `IndexRequest` whose `have` is not ascending and unique, holds a writer outside its range, or holds more than `MAX_CURSORS_PER_REQUEST` entries, whose `after` and `through` are both set and `after ≥ through`, or that is `listed` with `after` or `through` set or with `have` empty, an `IndexRecords` page of more than `MAX_PAGE_RECORDS` records, an `IndexRecords` push with `more` set, a second `IndexRequest` for a folder before the reply to the first has queued its last page, a reply page whose `request_id` names no outstanding request, a `ChunkReply` for no outstanding request or with `data` over 4 325 416 bytes, a Status whose `device_name` breaks its grammar | `Close(PROTOCOL_ERROR)` |
+| **Malformed**: frame length below 2, body that does not parse, a field number above 2^29 − 1 or a group wire type, a size or bound or grammar violated, a fixed-size field absent or of another size, a `bool` other than 0 or 1, a `uint32` of 2^32 or more, a field that is not repeated occurring twice in a body, a Hello that fails a check of 3.2 (a device key that is not canonical or is of small order included) other than the two rows below, a FolderProof envelope with a wrong `hint` or `nonce` size or a `sealed` outside 16 to 1 024 bytes, a FolderProof whose `hint` repeats one already received on the connection, more than `MAX_PROOFS_PER_CONNECTION` FolderProofs, a message for a folder not open here, a message before Hello or DeviceProof, a known type where only Hello or Close may come, any frame but DeviceProof or Close before the peer's DeviceProof verified, a second Hello or DeviceProof, a list past its bound, more chunk requests than allowed, a stray or second `ProofResult` or one whose `status` is not 1 or 2, a record whose `suite` is not its folder's or whose `record_type` is not 16, a `seq` of 0 or above `MAX_SEQ`, more than `MAX_SUPERSEDES` `supersedes` entries, a `sealed` part outside 40 to 1 572 864 bytes, a signature that is not 64 bytes, an encoded `SignedRecord` over `MAX_INDEX_RECORD_BYTES`, a `Cursor` whose `digest` length does not match its `seq` or whose `seq` is above `MAX_SEQ`, an `IndexRequest` whose `have` is not ascending and unique, holds a writer outside its range, or holds more than `MAX_CURSORS_PER_REQUEST` entries, whose `after` and `through` are both set and `after ≥ through`, or that is `listed` with `after` or `through` set or with `have` empty, an `IndexRecords` page of more than `MAX_PAGE_RECORDS` records, an `IndexRecords` push with `more` set, an `IndexRecords` page with `more` set and no records, a second `IndexRequest` for a folder before the reply to the first has queued its last page, a reply page whose `request_id` names no outstanding request, a `ChunkReply` for no outstanding request or with `data` over 4 325 416 bytes, a Status whose `device_name` breaks its grammar | `Close(PROTOCOL_ERROR)` |
 | Frame over the limit | `Close(MESSAGE_TOO_LARGE)`, nothing allocated |
 | Unknown critical type | `Close(UNSUPPORTED_CRITICAL_TYPE)` |
 | Unknown non-critical type | `Unsupported`, at most once per type per connection (later frames of that type ignored with a log line); continue |
@@ -979,6 +992,7 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 | `MAX_PROOFS_PER_CONNECTION` (FolderProofs a verifier accepts on one connection, four times `MAX_OPEN_FOLDERS_PER_CONNECTION`, since a prover may hold folders the peer no longer holds; one more is malformed, 3.5 step 1) | 256 |
 | `MAX_OPEN_FOLDERS_PER_CONNECTION` (a proof past it is REJECTED, 3.5 step 6) | 64 |
 | Default `max_requests_in_flight` | 64 |
+| `MAX_REQUESTS_IN_FLIGHT` (the largest `max_requests_in_flight` a Hello may advertise; larger is treated as this, 2, 4.6) | 1 024 |
 | `MAX_CHUNK_PLAINTEXT` | 4 MiB |
 
 The drafts' `KEY_RESYNC_INTERVAL`, `MAX_HELD_GRANTS_PER_CONNECTION`, `MAX_WRITERS_PER_FOLDER`,

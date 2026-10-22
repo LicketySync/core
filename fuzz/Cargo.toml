@@ -14,6 +14,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 licketysync-keys = { path = "../crates/keys" }
 licketysync-protocol = { path = "../crates/protocol" }
+prost = "0.14"
 
 [[bin]]
 name = "frame_decode"
@@ -81,6 +82,55 @@ bench = false
 [[bin]]
 name = "stored_key_parse"
 path = "fuzz_targets/stored_key_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "message_parse"
+path = "fuzz_targets/message_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hello_check"
+path = "fuzz_targets/hello_check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "folder_proof"
+path = "fuzz_targets/folder_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "index_record"
+path = "fuzz_targets/index_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "index_records"
+path = "fuzz_targets/index_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sealed_meta"
+path = "fuzz_targets/sealed_meta.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handshake"
+path = "fuzz_targets/handshake.rs"
 test = false
 doc = false
 bench = false

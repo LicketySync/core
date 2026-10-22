@@ -385,6 +385,13 @@ version = "0.0.1"
 [[package]]
 name = "licketysync-protocol"
 version = "0.0.1"
+dependencies = [
+ "hex",
+ "licketysync-keys",
+ "proptest",
+ "prost",
+ "serde_json",
+]
 
 [[package]]
 name = "licketysync-sim"

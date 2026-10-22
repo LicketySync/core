@@ -6,6 +6,124 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Protocol crate rebuilt for shared folder keys (`licketysync-protocol`), to `spec/protocol.md` as
+  rewritten for that model (and amended here, below), over the reworked keys crate (every key,
+  hash, label, signature and cipher is the keys crate's; the protocol crate depends on no
+  cryptography crate). Ported from the twice-reviewed old crate (`wip/protocol` 519bd9b) and
+  adjusted: the frame decoder (length checked before any allocation, the body grown as it arrives),
+  the strict proto3 reader (field numbers 1 to 2^29 - 1, no group wire types, each singular field
+  once, `bool` 0 or 1, `uint32` below 2^32, repeated scalars packed, unpacked or mixed), the bounded
+  parser of every message, the Close that keeps its reason when its detail breaks the grammar,
+  `Unsupported` once per type, the pager and its byte accounting, the feature grammar and the shape
+  of the connection state machine. New: `hello` (the 3.2 checks with the canonical device key,
+  roles, the transcript hash), `proof` (one folder proof for every tier, over the keys crate's
+  `seal_proof` and `open_proof`, the hint table built once per connection, the uniform REJECTED for
+  every failure of 3.5), `record` (an index record's step 1 against the open folder, steps 2 to 5
+  in the spec's order as `judge` over a small `Held` trait the index implements, step 6 with the
+  path grammar, the kind and the chunk count, a directory with chunks and a non-empty file without
+  chunks writer faults, NFC left to writers, the writer's `Draft::sign`, and the reference writer
+  digests), `exchange` (typed cursors, the `Cursors` trait the index implements, range and listed
+  scopes, the round split at `MAX_CURSORS_PER_REQUEST`, the serving cases (a) to (d), the page
+  limit 64 to 4 096), `rules` (the section 5 table: 25 causes, their outcome and what each leaves
+  behind), `limits` (every constant of sections 2 to 5, `MAX_SEND_QUEUE` and
+  `MAX_REQUESTS_IN_FLIGHT` defined here once), and `connection`: per connection the handshake, the
+  open folders, one `IndexRequest` per folder each way with fresh request IDs, built by the
+  connection itself from the index's cursors (the next range read from above its start), the round
+  on open and the next ranges, marks (gap or resend, 1 024 at most, overflow owes a round), the
+  round owed by an empty push with its `INDEX_RESYNC_INTERVAL`, the gap-triggered listed request's
+  interval, the peer's request held until `INDEX_REQUEST_MIN_INTERVAL` after serving the previous
+  one began (its first page), every record of a page decoded once and past step 1, judged in or out
+  of the request's scope, a reply page with `more` and no records malformed, pushes dropped when the
+  send queue cannot take them with one never-dropped empty push owed, `REPLY_PAGE_TIMEOUT` counted
+  from the request's departure from the send queue and restarted by pages, `CHUNK_OK` and stored
+  pushes, chunk requests within the peer's `max_requests_in_flight` taken as at most
+  `MAX_REQUESTS_IN_FLIGHT` (1 024) and one per (folder, hash), `CHUNK_BUSY` at dispatch at half of
+  `MAX_SEND_QUEUE` counting the backlog, the backoff of 1 s doubling to 64 s and back on `CHUNK_OK`,
+  chunk passes in ascending hash order waiting after a `CHUNK_NOT_FOUND` for a greater
+  `chunks_stored` or a completed round (either remembered while the pass still asks, and judged when
+  it ends) with one pending bit, the ciphertext hash of every chunk received and of every chunk sent
+  (a blob corrupt in storage is never sent, TM-10), Status with `chunks_stored` and the device name
+  once, `HELLO_TIMEOUT`, `PROOF_TIMEOUT`, `IDLE_TIMEOUT` and the delivery stall, and the close
+  flush. Time, the transport's unsent bytes and randomness come from the caller (a `Tick` per call;
+  the keys crate's `RandomFill`); one wake-up deadline per connection, which also hands over a held
+  request when it may be served.
+  - The engine's side of a connection: `receive`, `wake`, `prove` and `close`; `send_request(tick,
+    folder, &cursors)` when `Event::RequestDue` says one is due; `Event::Serve` hands over a peer's
+    request when it may be served, and `send_page(tick, &page, resent)` sends its pages, marking the
+    writers resent in full (case (c)); `push(tick, &page)`; `judged(tick, folder, page, results)`
+    takes the index's judgement of each record of an `Event::Records` page and itself marks gaps on
+    a push, restarts the deadline for a push that stored a record and closes on a forged record or
+    a sender violation; `chunk_position`, `request_chunk` and `pass_done`; `reply_chunk(tick,
+    folder, hash, ChunkAnswer::Ok(blob) | ChunkAnswer::NotFound)`; `chunk_stored`; `send_status(tick,
+    folders)`; and `want_room(tick, len)`, after which `Event::Room` comes once a frame of that
+    length would be handed over. Every send that fails returns its `SendError` and changes nothing.
+  - Decisions (for the plan): the connection keeps a small backlog of frames it may not hand to the
+    transport yet, since three rules need the unsent bytes (a frame goes only while unsent plus the
+    frame stay below `MAX_SEND_QUEUE`; a Close is never held back); the backlog holds only the
+    connection's own small frames and this side's requests, each bounded by a constant, while what a
+    peer can make this side send in volume (reply pages, `CHUNK_OK`) and Status are refused with
+    `SendError::WouldBlock { len }` and stay with the engine until `Event::Room` (a Status is
+    skipped instead; the next is due within `STATUS_INTERVAL`); `has_room` counts the larger of the
+    tick's unsent bytes and what this side has handed over since, plus the backlog; while it waits
+    on the transport, or the engine waits for room, the connection asks to be woken every
+    `SEND_POLL_INTERVAL` (1 s), an implementation constant the spec does not fix, because the
+    transport drains between calls without telling anyone; one timer per connection; an
+    `IndexRequest` goes only when the connection says one is due, and the connection builds it;
+    within a round the next range goes before a listed request for marks; a Hello with several
+    faults is refused for the first found, the parse first, then the 3.2 order; every peer chunk
+    request counts against this side's `max_requests_in_flight` until its reply, `CHUNK_BUSY`
+    included, has left the backlog, so a peer that never reads cannot make replies pile up
+    (security check of the WIP commit); a requester refuses to ask twice for a hash it has asked for
+    on the connection (SEC-B1); the open-folder bound of 3.5 step 6 counts the proofs this side
+    accepted, so a folder the peer rejected takes no slot (R1 N1); a tombstone's kind and size name
+    what was deleted, so the two step-6 rules on a directory with chunks and a non-empty file
+    without chunks do not apply to a tombstone; §3.5 step 5 (the folder's suite missing from the
+    peer's Hello) cannot be reached while suite 1 is the only suite, since a Hello without it has no
+    suite in common and is closed `NO_COMMON_SUITE`, so it has no vector; and the largest Hello this
+    release sends is a frame of 2 583 bytes for suite 1 alone (2 587 with the length field), below
+    the 2 664 that `protocol.md` section 2 states for any release of major 1.
+  - Spec changes in this commit (`spec/protocol.md`; the review rulings of 2026-10-22):
+    `MAX_REQUESTS_IN_FLIGHT` (1 024; a Hello advertising more is taken as that) in section 2's
+    table, the Hello field of 4.2, 4.6 ("Who may ask") and section 5's limits sentence and constants
+    table (SEC-B1); a reply page with `more = true` and no records is malformed, in 4.5 (the
+    `IndexRecords` field, "Pages", "Replies and pushes") and section 5's malformed row, with the
+    residual that a responder sending pages of records the requester already holds restarts the
+    reply deadline with each, in 4.5 ("Reply deadline") (SEC-SF3); `CHUNK_BUSY` counts the frames a
+    holder holds back for room, in 4.6 (SEC N8); `supersedes` holds at most 16 entries as encoded,
+    a repeated entry counting once (producers sort and drop repeats, verifiers accept repeats within
+    the 16), in 4.4's field and step 1 (R1 N4); and a Status the send queue cannot take is skipped
+    rather than queued, in 4.5 (which SEC-SF2 implies for the wire).
+  - Vectors (`crates/protocol/tests/vectors/*.json`, regenerated with
+    `LICKETYSYNC_REGENERATE_VECTORS=1 cargo test -p licketysync-protocol vector_`, which also writes
+    the fuzz seeds): items 1 to 5 and 10 whole (item 5 without §3.5 step 5, unreachable as above),
+    the decoder vectors of items 6, 8, 9 and 11, item 6's outcomes of steps 2 to 5 through `judge`
+    for a holder of a fixed record, and connection scenarios between two real connections for items
+    5, 8, 9 and 11 (every frame both ways with its time, the rows, the end states): among them PUSH-2
+    served by hand (page 1, the push of a record accepted meanwhile for a writer the reply is past,
+    page 2), and the reply deadline with every chunk request answered `CHUNK_BUSY` (closed) and with
+    `CHUNK_OK` replies arriving (kept open); item 8 also records pages of 4 096 records (accepted)
+    and 4 097 (refused), a push with `more`, a reply page with `more` and no records, and a page
+    with an unknown `request_id`. The folder-proof payloads equal the keys crate's `handshake.json`.
+    Item 7 and the cached digests are the index crate's. Inputs over 4 KiB are recorded by length
+    and prefix.
+  - Fuzz targets: `frame_decode` (replacing the placeholder), `message_parse` (every bounded decoder
+    behind a selector byte, with a canonical round-trip check), `hello_check`, `folder_proof`,
+    `index_record` (steps 1 to 6), `index_records` (the page decoder and the keys crate's envelope
+    decoder agree on every embedded record, both ways), `sealed_meta` and `handshake` (a fresh
+    connection fed a peer's whole stream, and one with the folder open between two real
+    connections), with seeds from the vectors.
+  - `ci/geiger-baseline.txt`: the protocol crate now builds on the keys crate's unsafe counts.
+  - Dependencies: none new; `prost` and `licketysync-keys` (normal), `proptest`, `serde_json` and
+    `hex` (dev), all already in the tree and vetted; the fuzz crate adds `prost`.
+  - Reviewed (2026-10-22) on e008cb5 by three fresh-context agents (Claude Opus 5.5): correctness
+    a51271a428222e6f6, quality aa10ee3925cfd6e22 and security abf73e7d30fd47189 (the
+    security-reviewer pass); the accepted findings were applied in this commit
+    (the chunk-pass trigger of a round or Status that comes while a pass still asks, the requester's
+    in-flight cap and one request per hash, the send-backlog bound and the room event, the typed
+    sends and `judged`, the held request in the one wake-up, the chunk check before sending, the
+    empty `more` page, and the tests, vectors and spec edits they named); confirmed clean
+    2026-10-22 by aa10ee3925cfd6e22 and abf73e7d30fd47189 (the latter also for
+    a51271a428222e6f6's items); the merge agent wrote this line.
 - CI fixed forward after run 39869811485 on `main` (ab8b0f8), where two jobs
   failed. On Windows the keys crate's 12 vector tests failed with "<name>.json
   is not byte for byte": Git for Windows checks files out with

@@ -1,0 +1,157 @@
+{
+  "bodies": [
+    {
+      "body": "808080801000",
+      "name": "field-number-2^29",
+      "outcome": "malformed: field number 536870912 is out of range",
+      "type": "Close"
+    },
+    {
+      "body": "f8ffffff0f00",
+      "name": "field-number-2^29-1-skipped",
+      "outcome": "accepted ",
+      "type": "Close"
+    },
+    {
+      "body": "0b0c",
+      "name": "group-wire-type",
+      "outcome": "malformed: wire type 3 is not proto3",
+      "type": "Close"
+    },
+    {
+      "body": "",
+      "name": "fixed-size-field-absent",
+      "outcome": "malformed: signature: 0 bytes, must be 64",
+      "type": "DeviceProof"
+    },
+    {
+      "body": "0a2001010101010101010101010101010101010101010101010101010101010101012001",
+      "name": "empty-able-fields-absent",
+      "outcome": "accepted 0a2001010101010101010101010101010101010101010101010101010101010101012001",
+      "type": "IndexRequest"
+    },
+    {
+      "body": "08010802",
+      "name": "singular-field-twice",
+      "outcome": "malformed: field 1 occurs more than once",
+      "type": "Close"
+    },
+    {
+      "body": "1a03010203",
+      "name": "repeated-scalar-packed",
+      "outcome": "accepted 1a03010203",
+      "type": "Hello"
+    },
+    {
+      "body": "180118021803",
+      "name": "repeated-scalar-unpacked",
+      "outcome": "accepted 1a03010203",
+      "type": "Hello"
+    },
+    {
+      "body": "18011a020203",
+      "name": "repeated-scalar-mixed",
+      "outcome": "accepted 1a03010203",
+      "type": "Hello"
+    },
+    {
+      "body": "0a20010101010101010101010101010101010101010101010101010101010101010120013802",
+      "name": "bool-2",
+      "outcome": "malformed: listed: value out of range",
+      "type": "IndexRequest"
+    },
+    {
+      "body": "088080808010",
+      "name": "uint32-2^32",
+      "outcome": "malformed: reason: value out of range",
+      "type": "Close"
+    },
+    {
+      "body": "12046e616d65",
+      "name": "reserved-field-skipped",
+      "outcome": "accepted ",
+      "type": "Hello"
+    }
+  ],
+  "description": "protocol.md 8 item 1: frames fed to a connection in the named state (first frame; after the peer's Hello, before its DeviceProof; established with the folder open), and bodies fed to their type's decoder. The outcome is the close and its section 5 row, Unsupported, or accepted.",
+  "stream": [
+    {
+      "input": "0000000480020801",
+      "name": "valid-close",
+      "outcome": "closed by the peer: SHUTDOWN",
+      "state": "first"
+    },
+    {
+      "input": "00000000",
+      "name": "length-0",
+      "outcome": "close PROTOCOL_ERROR (Malformed)",
+      "state": "first"
+    },
+    {
+      "input": "00000001",
+      "name": "length-1",
+      "outcome": "close PROTOCOL_ERROR (Malformed)",
+      "state": "first"
+    },
+    {
+      "input": "00010001",
+      "name": "over-pre-hello-limit",
+      "outcome": "close MESSAGE_TOO_LARGE (FrameOverLimit)",
+      "state": "first"
+    },
+    {
+      "input": "00010001",
+      "name": "over-pre-hello-limit-between-hello-and-device-proof",
+      "outcome": "close MESSAGE_TOO_LARGE (FrameOverLimit)",
+      "state": "before-device-proof"
+    },
+    {
+      "input": "01000001",
+      "name": "over-max-message-size",
+      "outcome": "close MESSAGE_TOO_LARGE (FrameOverLimit)",
+      "state": "established"
+    },
+    {
+      "input": "01000000",
+      "name": "at-max-message-size-not-yet-whole",
+      "outcome": "accepted",
+      "state": "established"
+    },
+    {
+      "input": "00000002800c",
+      "name": "unknown-critical",
+      "outcome": "close UNSUPPORTED_CRITICAL_TYPE (UnknownCriticalType)",
+      "state": "established"
+    },
+    {
+      "input": "000000028006",
+      "name": "reserved-key-records-type",
+      "outcome": "close UNSUPPORTED_CRITICAL_TYPE (UnknownCriticalType)",
+      "state": "established"
+    },
+    {
+      "input": "000000020003",
+      "name": "unknown-non-critical",
+      "outcome": "unsupported x1",
+      "state": "established"
+    },
+    {
+      "input": "0000000300036100000003000362",
+      "name": "two-frames-of-one-unknown-non-critical-type",
+      "outcome": "unsupported x1",
+      "state": "established"
+    },
+    {
+      "input": "0000000480030a00",
+      "name": "first-frame-not-hello",
+      "outcome": "close PROTOCOL_ERROR (Malformed)",
+      "state": "first"
+    },
+    {
+      "input": "000000020003",
+      "name": "unknown-non-critical-before-device-proof",
+      "outcome": "close PROTOCOL_ERROR (Malformed)",
+      "state": "before-device-proof"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 [package]
 name = "licketysync-protocol"
-description = "Wire protocol: suite numbers, length-prefixed messages, Hello and capability negotiation, Status, relay messages; the versioned /licketysync/sync/N protocol."
+description = "The wire protocol /licketysync/sync/1: framing, every message with a bounded decoder, the handshake with the device proof and the folder proof, index records and sealed metadata, the index exchange and chunk rules, and the sans-IO state machine of one connection."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,21 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# Every key, hash, label, identifier, signature and cipher (protocol.md 3,
+# keys.md 4 and 5): this crate computes none of them itself and depends on no
+# cryptography crate (deny.toml confines those to licketysync-keys).
+licketysync-keys = { path = "../keys" }
+# Protocol Buffers: the message structs mirror the spec's .proto text and
+# encode canonically (keys.md 5.2). Peer bytes are decoded by this crate's own
+# bounded reader, never by prost's decoder.
+prost = "0.14"
+
+[dev-dependencies]
+# Property tests over the framing and every codec (plan: Tests).
+proptest = { version = "1", default-features = false, features = ["std"] }
+# The test vectors of protocol.md 8 are JSON data files, as the keys crate's.
+serde_json = "1"
+hex = "0.4"
 
 [lints]
 workspace = true

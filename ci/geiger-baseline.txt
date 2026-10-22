@@ -38,7 +38,7 @@ engine 0 0 0 0 0
 index 0 0 0 0 0
 keys 94 4333 23 2 63
 net 0 0 0 0 0
-protocol 0 0 0 0 0
+protocol 94 4333 23 2 63
 sim 0 0 0 0 0
 generated serde private.rs
 generated serde_core private.rs
