@@ -103,9 +103,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Each tool at the exact version gate.sh requires (bootstrap.sh installs
+      # them; gate.sh stops when this file or nightly.yml installs one any other
+      # way), so that no new release changes what passes without a commit. A
+      # bump is one reviewed change to ci.yml, nightly.yml, gate.sh and
+      # bootstrap.sh. Dependabot cannot see these pins: each weekly Dependabot
+      # review checks the four for new releases. `fallback: none` makes a
+      # version missing from install-action's manifest fail here instead of
+      # going to cargo-binstall, which can fetch an unverified binary and is
+      # handed github.token.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny,cargo-audit,cargo-machete,cargo-vet
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-machete@0.9.2
+          fallback: none
+      # cargo-vet from crates.io: 0.10.1 and 0.10.2 have no release binaries, so
+      # install-action's "latest" was 0.10.0, whose formatter rejects the
+      # supply-chain/imports.lock that 0.10.2 writes (run 39160240196).
+      - run: cargo install cargo-vet --version 0.10.2 --locked
       - run: cargo deny check
       - run: cargo deny --config deny-production.toml check bans
       - run: cargo audit

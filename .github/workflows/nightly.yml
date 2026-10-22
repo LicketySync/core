@@ -19,9 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # The version ci.yml's deps job pins and gate.sh checks, with no fallback
+      # (see the note there).
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit
+          tool: cargo-audit@0.22.2
+          fallback: none
       - run: cargo audit
 
   fuzz:

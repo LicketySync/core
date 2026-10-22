@@ -6,6 +6,44 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- CI's supply-chain tools pinned to exact versions, the ones `gate.sh` now
+  requires: cargo-deny 0.20.2, cargo-audit 0.22.2, cargo-machete 0.9.2 and
+  cargo-vet 0.10.2. Run 39160240196 on `main` (877bb14) failed at `cargo vet
+  --locked`: install-action's "latest" cargo-vet was 0.10.0, because 0.10.1
+  and 0.10.2 are on crates.io without release binaries, and 0.10.0's formatter
+  wants the double quotes inside one multi-line `notes` string in
+  `supply-chain/imports.lock` (an imported Google audit of `quote`) escaped,
+  which 0.10.2, the dev machine's, neither writes nor asks for; the two forms
+  are the same TOML. cargo-vet stays at 0.10.2, so `supply-chain/` does not
+  change: it is the newest release, it wrote the store, and it is the only
+  release that knows the trusted-publishing form of wildcard audits and
+  trusted entries, which imported audit sets may start to carry. CI builds it
+  from crates.io with `cargo install cargo-vet --version 0.10.2 --locked`, as
+  it does cargo-geiger, rather than through install-action's fallback. The
+  other three, which CI happened to get at the dev machine's versions, are
+  pinned in install-action (which checks each download's SHA-256) so that no
+  new release changes what passes without a commit; nightly's cargo-audit
+  too. Both install-action steps set `fallback: none`, so a pinned version
+  missing from install-action's manifest fails the job instead of going to
+  cargo-binstall, which can fetch an unverified binary and is handed the
+  job's `github.token`. `gate.sh` now checks these four and semgrep before
+  its first step. When an installed version differs it stops and prints the
+  `cargo install` command; when `ci.yml` or `nightly.yml` installs one of the
+  four any other way than its one pinned line (an install-action `tool:` item
+  without `@version` or with another, an install-action step named after the
+  tool, or another `cargo install` line; comments do not count), it stops and
+  prints what the workflow has. `bootstrap.sh` (outside this repository)
+  installs those versions, and `CONTRIBUTING.md` lists them. Dependabot
+  cannot see the pins, so each weekly Dependabot review checks the four for
+  new releases; a bump is one reviewed change to both workflows, `gate.sh`
+  and `bootstrap.sh`. Decisions for the plan: CI supply-chain tools pinned to
+  exact versions, bumped by hand at the weekly review; cargo-vet installed in
+  CI from crates.io, not as a prebuilt binary. Reviewed (2026-10-22) on
+  72e921b by two fresh-context agents (Claude Opus 5.5): correctness
+  a6f7c6ef812de9c87, clean with 3 nits, and security a025f3b6e57384ba1, the
+  security-reviewer pass, blocked by 2 should-fixes. Every accepted finding
+  was applied in this commit; confirmed clean 2026-10-22 by a025f3b6e57384ba1
+  for both reviewers; the merge agent wrote this line.
 - CI fixed forward after run 39148844992 on `main` (b94dd0d), where four jobs
   failed, with the rulings on its three reviews. cargo-audit: `deny.toml`
   pointed cargo-deny's `db-path` at `~/.cargo/advisory-db`, which is
