@@ -189,8 +189,8 @@ jobs:
   # registration at gitleaks.io and kept as a repository secret, and from v2 on
   # the action itself is no longer MIT-licensed. ci/gitleaks-install.sh pins
   # the release by version and SHA-256 and says how to move it (Dependabot
-  # cannot see it); ci/gitleaks.sh holds the flags, .gitleaks.toml the one
-  # allowlist.
+  # cannot see it); ci/gitleaks.sh holds the flags, .gitleaks.toml the
+  # allowlists, .gitleaksignore the one ignored finding.
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
@@ -204,6 +204,10 @@ jobs:
       - run: ci/gitleaks-install.sh "$RUNNER_TEMP/bin"
       # Prints rule, file, line and commit of each finding, never the value.
       - run: ci/gitleaks.sh history "$RUNNER_TEMP/bin/gitleaks"
+      # The files as they are now, as gate.sh scans them: this also reads the
+      # files git takes for binary (fuzz seeds among them), which the history
+      # scan, reading `git log -p`, never sees.
+      - run: ci/gitleaks.sh tree "$RUNNER_TEMP/bin/gitleaks"
 
   no-hostnames:
     name: no hostnames outside the allow-list
@@ -217,11 +221,15 @@ jobs:
   # The scripts the scheduled workflows run (ci/mutants.sh in mutants.yml,
   # ci/fuzz-targets.sh in nightly.yml), tested on stand-ins for the tools on
   # every push, so that a change that breaks one fails here rather than at the
-  # next scheduled run; gate.sh runs the same two.
+  # next scheduled run; and the line-ending attributes of the test vectors and
+  # fuzz seeds, checked on Linux with Windows' core.autocrlf=true (the Windows
+  # runner would check this script itself out with CRLF, which bash rejects).
+  # gate.sh runs the same three.
   ci-scripts:
-    name: tests of the mutants and fuzz-target scripts
+    name: tests of the mutants and fuzz-target scripts, and of .gitattributes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: ci/test-mutants.sh
       - run: ci/test-fuzz-targets.sh
+      - run: ci/test-vector-line-endings.sh

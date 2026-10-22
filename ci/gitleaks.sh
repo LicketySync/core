@@ -6,7 +6,9 @@
 #   history  every commit of every ref (CI, after a full-depth checkout)
 #   tree     the files a commit would hold now: tracked and untracked files that
 #            .gitignore does not exclude, copied out and scanned as a directory
-#            (gate.sh, so that a change is checked before it is committed)
+#            (gate.sh, so that a change is checked before it is committed;
+#            CI after history, for the files git takes for binary, which
+#            history, reading `git log -p`, never sees)
 # The binary defaults to `gitleaks` on PATH; CI passes the release
 # ci/gitleaks-install.sh verified. Another version than that script pins still
 # runs, with a warning that says how to install the pinned one. Exit 1 on a

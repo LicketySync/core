@@ -6,6 +6,64 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- CI fixed forward after run 39869811485 on `main` (ab8b0f8), where two jobs
+  failed. On Windows the keys crate's 12 vector tests failed with "<name>.json
+  is not byte for byte": Git for Windows checks files out with
+  `core.autocrlf=true`, which turned the committed vectors' LF into CRLF, and
+  would also turn a fuzz seed's LF into CRLF on checkout (`link_parse/link-01`)
+  and drop the CR of a seed's CRLF on commit (`words_parse/words-03`). The new
+  `.gitattributes` unsets `text` for `crates/*/tests/vectors/**`, which covers
+  the protocol crate's vectors when they land, and for `fuzz/seeds/**`, so git
+  converts their line endings on no OS; `-text` rather than `text eol=lf`
+  because a seed holds any bytes and a vector must be committed exactly as its
+  test wrote it. `-text` does not change how git diffs these files: gitleaks'
+  history scan reads the text ones as before and, as before, skips the seeds
+  git takes for binary (a NUL byte; 15 today), so CI's gitleaks job now also
+  runs `ci/gitleaks.sh tree` after the history scan, which reads them, and
+  `ci/gitleaks.sh` says why. The tests are unchanged. Nothing else depends on
+  the conversion: the only CR bytes in the repository are in seeds, there is no
+  Windows script, and the registry test, which reads `spec/*.md`, passes on
+  Windows with CRLF. The new `ci/test-vector-line-endings.sh` checks with
+  `core.autocrlf=true` that every tracked vector and seed checks out, and every
+  one in the working tree would commit, byte for byte, and that the patterns
+  reach another crate, a nested directory and a new fuzz target and nothing
+  else; on ab8b0f8 it fails 21 checks. `gate.sh` runs it, and so does CI's
+  `ci-scripts` job (renamed to say so). gitleaks' history scan reported two
+  `generic-api-key` findings in ab8b0f8, both public: the `lsr1` key string
+  made from fixed seeds that `crates/keys/tests/vectors/link.json` names
+  "key_string" (line 2), and the word after "sealed keys," in the keys crate's
+  package description (`crates/keys/Cargo.toml` line 3). History mode reads
+  that commit on every run, so the fix is configuration. `.gitleaks.toml` gains
+  a second allowlist shaped like the hex one: `generic-api-key` only, a JSON
+  file directly under a crate's `tests/vectors/`, and a value that is `lsr1`
+  followed only by lowercase Bech32 characters: a read key string, the only
+  tier a vector needs today, so a write or sealed key string is still reported
+  even there, and the allowlist takes another tier only when a vector needs
+  it. Its header, which said no rule matches key strings, now says where the
+  rule reports one and what is still missed, the binary files the history
+  scan cannot read included. The new `.gitleaksignore` holds one fingerprint,
+  `ab8b0f8f52516ade778165b3df9043025846cca1:crates/keys/Cargo.toml:generic-api-key:3`,
+  which names its commit and so skips that one finding in that one commit; the
+  description now says "records signed with Ed25519", so the working tree,
+  which `gate.sh` scans and whose findings carry no commit, has nothing to
+  skip. gitleaks 8.30.1 reads that file from the root of what it scans, which
+  both modes of `ci/gitleaks.sh` provide, and `--ignore-gitleaks-allow`
+  disables inline `gitleaks:allow` comments only (its `cmd/root.go` and
+  `detect/detect.go`). The protocol crate's vectors and the fuzz seeds on
+  `wip/protocol-v2` (e008cb5) hold nothing the default rules report. gitleaks
+  8.30.1 finds no leaks with `ci/gitleaks.sh history` over `main`, the
+  Dependabot branches and this commit, nor with `ci/gitleaks.sh tree`; in a
+  scratch copy it still reports values planted in a vectors file in other
+  forms (mixed case, upper case, a write and a sealed key string, a link code,
+  a key string with a stray character, a GitHub token), in a nested directory,
+  in a non-JSON file and in Rust source, and the old description in the
+  working tree. Reviewed (2026-10-22) on ac8bcc4 by two fresh-context agents
+  (Claude Opus 5.5): correctness a9f6488ff90b881e8, clean, and security
+  aadde0e48576c42ad, the security-reviewer pass, blocked by 1 wording
+  should-fix. The accepted items (that wording, the tree scan in CI and the
+  allowlist narrowed to read key strings) were applied in this commit;
+  confirmed clean 2026-10-22 by aadde0e48576c42ad; the merge agent wrote this
+  line.
 - Keys crate reworked for shared folder keys, to `spec/keys.md` and `spec/suites.md` as rewritten in
   the entry below. Removed, with their tests, vectors, fuzz targets and seeds: the recovery phrase
   and the master secret, the identity seed and catalogue key, root seeds and folder nonces, key pair

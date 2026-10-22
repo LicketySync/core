@@ -1,0 +1,11 @@
+# Findings gitleaks skips, one fingerprint per line: commit:file:rule:line.
+# Each names its commit, so it skips that one finding in that one commit only;
+# a line without a commit would skip the rule at that file and line in every
+# commit and in the working tree, so none is written here. See .gitleaks.toml.
+#
+# ab8b0f8 (keys crate reworked for shared folder keys): generic-api-key took
+# the word after "sealed keys," in the keys crate's package description for a
+# value. It is prose, not a secret, and the history scan reads that commit on
+# every run; the description has been reworded since, so the working tree
+# holds nothing this rule reports.
+ab8b0f8f52516ade778165b3df9043025846cca1:crates/keys/Cargo.toml:generic-api-key:3

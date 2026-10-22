@@ -1,0 +1,14 @@
+# Test vectors and fuzz seeds are data that tests compare, and fuzzers read,
+# byte for byte, so git must never change their line endings. Unsetting `text`
+# turns end-of-line conversion off for these paths on checkout and on commit,
+# whatever core.autocrlf says: Git for Windows sets it to true, which turned
+# the keys crate's vectors from LF into CRLF on CI's Windows runner (run
+# 39869811485 on ab8b0f8). `-text` rather than `text eol=lf`, because a seed
+# holds any bytes, CR included, and a vector file must be committed exactly as
+# the test wrote it, not normalised on the way in. `-text` does not change how
+# git diffs these files: `git diff` and gitleaks' history scan read the text
+# ones as before and, as before, skip the seeds git takes for binary (a NUL
+# byte), which is why CI's gitleaks job also scans the tree.
+# ci/test-vector-line-endings.sh checks that these lines reach every such file.
+crates/*/tests/vectors/** -text
+fuzz/seeds/** -text

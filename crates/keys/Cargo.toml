@@ -1,6 +1,6 @@
 [package]
 name = "licketysync-keys"
-description = "Shared folder keys: the write secret and its derivations, read and sealed keys, Ed25519-signed records, chunk and metadata encryption, handshake proofs, key strings and words."
+description = "Shared folder keys: the write secret and its derivations, read and sealed keys, records signed with Ed25519, chunk and metadata encryption, handshake proofs, key strings and words."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

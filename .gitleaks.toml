@@ -1,23 +1,42 @@
 # gitleaks configuration, read by ci/gitleaks.sh (CI's gitleaks job, and gate.sh
-# when gitleaks is installed): the default rules plus one allowlist.
+# when gitleaks is installed): the default rules plus two allowlists. One
+# finding is ignored by its fingerprint in .gitleaksignore.
 #
-# The keys crate publishes test vectors (spec/keys.md section 9): hashes, keys
-# and ciphertexts from official vectors or from fixed seeds, public by
-# construction, whose long hex strings the generic-api-key rule reports. The
-# allowlist drops a finding only when all three hold: the rule is
-# generic-api-key, the file is a JSON file directly under a crate's
-# tests/vectors/, and the matched value is lowercase hex and nothing else. A
-# token, private key or cloud key with a rule of its own is still reported in
-# those files, as is any generic secret there that is not plain hex, and every
-# finding in a nested directory under vectors/ or anywhere else.
+# The keys crate publishes test vectors (spec/keys.md section 9), as the
+# protocol crate will (spec/protocol.md section 8): hashes, keys, ciphertexts
+# and key strings from official vectors or from fixed seeds, public by
+# construction, which the generic-api-key rule reports where a name such as
+# "key" or "secret" precedes them. Each allowlist below drops a finding only
+# when all three hold: the rule is generic-api-key, the file is a JSON file
+# directly under a crate's tests/vectors/, and the matched value has that
+# allowlist's one form and nothing else: lowercase hex, or a Lickety-Sync read
+# key string (`lsr1`, then only lowercase Bech32 characters; link.json names
+# one). A token, private key or cloud key with a rule of its own is still
+# reported in those files, as is any generic secret there of another form
+# (upper or mixed case, a write or sealed key string, a link code, a link), and
+# every finding in a nested directory under vectors/ or anywhere else. The key
+# string allowlist takes another tier only when a vector needs it.
 #
-# Still missed: a real secret that is plain lowercase hex inside a vectors file;
-# and anything no default rule knows, which includes Lickety-Sync's own key
-# strings, links and the write key's 24 words (no rule here matches them). An
-# inline `gitleaks:allow` comment does not hide a finding (ci/gitleaks.sh passes
-# --ignore-gitleaks-allow). gitleaks always reads a `.gitleaksignore` file at the
-# repository root (finding fingerprints to skip); there is none, and adding one
-# is a reviewed change like this file.
+# Still missed: a real secret of one of those two forms inside a vectors file;
+# and anything no default rule knows. No rule knows Lickety-Sync's key strings,
+# link codes, links or the write key's 24 words by their form: generic-api-key
+# reports one only where one of its keywords (key, secret, token, auth and a
+# few more), a few more name characters and an operator such as `=`, `:` or
+# `,` come just before it, with at most a few spaces, quotes or line breaks
+# between them, as in the vectors' "key_string" entry; nothing reports one
+# anywhere else (the fuzz seeds hold bare key strings, link codes and links,
+# none reported). The history scan reads no file that git takes for binary (a
+# NUL byte; fuzz seeds among them), as `git log -p` shows none; the tree scan,
+# which CI's gitleaks job runs after it, reads every file except one whose
+# first bytes match a known binary file format. An inline `gitleaks:allow`
+# comment does not hide a finding (ci/gitleaks.sh passes
+# --ignore-gitleaks-allow, which disables those comments and nothing else).
+# gitleaks always reads the `.gitleaksignore` file at the root of what it scans
+# (ci/gitleaks.sh's tree mode copies it there with the other files): finding
+# fingerprints to skip. Ours holds one, which names a commit as well as file,
+# rule and line, so it skips that one finding in that one commit and nothing
+# in any other commit or in the working tree; adding a line to it is a
+# reviewed change like this file.
 title = "Lickety-Sync"
 
 [extend]
@@ -29,4 +48,12 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]+$''']
+paths = ['''^crates/[^/]+/tests/vectors/[^/]+\.json$''']
+
+[[allowlists]]
+description = "Read key strings in the seeded test vectors"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^lsr1[02-9ac-hj-np-z]+$''']
 paths = ['''^crates/[^/]+/tests/vectors/[^/]+\.json$''']
