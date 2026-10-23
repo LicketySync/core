@@ -115,9 +115,9 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): common traits beneath the RustCrypto crates; RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.ctutils]]
-version = "0.4.3"
+version = "0.4.4"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): constant-time helpers beneath the RustCrypto crates; RustCrypto. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): constant-time helpers beneath the RustCrypto crates; RustCrypto; 0.4.4 reviewed in the RUSTSEC-2026-0385 fix of 2026-10-23 (its diff from 0.4.3: choice.rs, ct_lt.rs, ct_gt.rs and tests, plus packaging metadata; still forbids unsafe code). Not covered by the imported audits at this version."
 
 [[exemptions.curve25519-dalek]]
 version = "5.0.0"

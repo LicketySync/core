@@ -6,6 +6,46 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- `ctutils` updated from 0.4.3 to 0.4.4 for RUSTSEC-2026-0385, "Non-constant-time mask generation
+  and `u128` comparisons" (https://github.com/RustCrypto/utils/pull/1569, the 0.4.4 release; the
+  fixes are its pull requests 1567 and 1568), published on 2026-10-23. It turned the Nightly
+  workflow's cargo-audit job red in run 39931142612 on `main` (fd50a2a), and the next push to `main`
+  would have failed the same way in CI and in `gate.sh`. `ctutils` is reached only as
+  `licketysync-keys` → `chacha20poly1305` 0.11.0 → `poly1305` 0.9.1 → `universal-hash` 0.6.1 →
+  `ctutils`. `Cargo.lock` moves `ctutils` to 0.4.4 with `cargo update -p ctutils --precise 0.4.4`
+  and nothing else changes: `universal-hash` asks for `^0.4`, and 0.4.4 asks for the same `cmov`
+  `^0.5.3` as 0.4.3 (still 0.5.4, which RUSTSEC-2026-0003 does not affect).
+  `supply-chain/config.toml` moves the phase 0 exemption that covered 0.4.3 to 0.4.4, with the same
+  criteria, safe-to-deploy, because no imported audit set covers 0.4.4 either (`cargo vet` unlocked
+  left `imports.lock` unchanged); its note says that 0.4.4 was reviewed in this fix and what its
+  diff from 0.4.3 holds, in the style of the bech32 exemption's note. 0.4.5, published three hours
+  after 0.4.4, only hardens Thumb-1 (ARMv6-M) targets and adds a public `primitives` module; it is
+  not taken here, and arrives with a later `cargo update` or with a direct dependency's bump
+  (Dependabot's version updates cover only the crates our manifests name). On fd50a2a `cargo audit`
+  and `cargo deny check advisories` both fail with this advisory; with the change both pass, as do
+  `cargo deny check`, `cargo vet --locked` and `cargo machete`, and cargo-geiger's counts do not
+  change (`ctutils` forbids unsafe code in both versions). Impact: the advisory names
+  `Choice::to_u8_mask` to `to_u128_mask`, which 0.4.3 built from the raw byte without `to_u8`'s
+  `black_box` barrier, so the compiler could branch on it, and the `u128` comparisons
+  (`Choice::from_u128_lt` and `from_u128_le`, `CtLt` and `CtGt` for `u128`) on targets with 32-bit
+  pointers (the fix's cfg, which includes wasm32 and 32-bit ARM). The one call into `ctutils` in our
+  graph is `UniversalHash::verify` (`universal-hash-0.6.1/src/lib.rs` line 137), which `poly1305`
+  inherits and `chacha20poly1305` calls to check the tag on every open
+  (`chacha20poly1305-0.11.0/src/cipher.rs` line 90, reached from `xchacha_open` in
+  `crates/keys/src/aead.rs`, which chunks, sealed metadata and the handshake's `FolderProof` open
+  through). It compares the two 16-byte tags with `<[u8] as CtEq>::ct_eq`, which for `u8` is
+  `cmov`'s word-wise `cmoveq` (`ctutils-0.4.3/src/traits/ct_eq.rs` lines 65 to 109), and turns the
+  `Choice` into a `bool` through `to_u8`'s `black_box` (`ctutils-0.4.3/src/choice.rs` lines 387 to
+  398 and 575 to 578). None of the affected functions is on that path: the masks feed only
+  `Choice::select_i64` and `select_u8` to `select_u128` (`ctutils-0.4.3/src/choice.rs` lines 310 to
+  362), which nothing here calls, and `hybrid-array`'s optional `ctutils` feature is off. So tag
+  verification was not weakened, and sealing does not reach `ctutils`. Nothing has been released
+  (phase 0), so nothing shipped was exposed. TM-8's daily cargo-audit feed caught the advisory as
+  designed; TM-5, TM-10 and `suites.md` sections 2.3, 3.1 and 4.2 (the tag compared inside the
+  approved crate, `ctutils` allowed only beneath it) are unchanged.
+  Reviewed 2026-10-23 by a4bc86829376620ff (correctness, clean), a6f5b62e386e3052d (quality; one
+  should-fix, fixed, confirmed clean) and ae6e5cf67635866e1 (security, clean; confirmed, also for
+  the correctness reviewer's items). Author a9de371d3a0c03b1f; the merge agent wrote this line.
 - Index crate built for shared folder keys (`licketysync-index`), to `spec/protocol.md` §4.4 and
   §4.5 over the rebuilt protocol crate, in place of the skeleton; the old crate's model (forks,
   equivocation, the cover forest, version vectors) is not carried over. `Index` holds one folder's
