@@ -81,7 +81,7 @@ jobs:
             cargo llvm-cov nextest --all-features --fail-under-lines 90 \
               -p "licketysync-$c" --ignore-filename-regex "crates/($others)/"
           done
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           fail_ci_if_error: false
