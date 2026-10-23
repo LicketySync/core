@@ -1,5 +1,5 @@
 # Mutation testing, weekly as the plan's checks table says: cargo-mutants on
-# the key, protocol and engine crates finds the code the tests do not check
+# the key, protocol, index and engine crates finds the code the tests do not check
 # (a change to it that every test still passes). Also on demand. Until
 # 2026-10-22 it ran nightly in one job (nightly.yml), against the plan.
 name: Mutants
@@ -19,13 +19,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # cargo-mutants in shards: one run of all the mutants (1,371 on 2026-10-22,
-  # about 50 s each on a runner) needs some 20 hours, and the single job was
+  # cargo-mutants in shards: one run of all the mutants (1,661 on 2026-10-22
+  # with the rebuilt protocol crate and the index crate, about 50 s each on a
+  # runner) needs some 23 hours, and the single job was
   # cancelled at GitHub's 6 h job limit (run 39755196041). The matrix below
   # makes one job per shard; its length is the number of shards, and the shard
   # each job runs is its index (strategy.job-index of strategy.job-total), so
   # only the count matters. Mutants are dealt round-robin, which spreads the
-  # slow ones; each shard has about 86 mutants today, some 80 minutes. The
+  # slow ones; each shard has about 104 mutants today, some 90 minutes. The
   # shard stops after 180 minutes (ci/mutants.sh, which then fails and says
   # so) and the job after 210, well inside the 6 h limit; when a shard nears
   # its budget, add shards.
@@ -37,7 +38,7 @@ jobs:
   # revisited. A shard fails when the unmutated tree does not build or its
   # tests fail, when it runs past its budget, or on any cargo-mutants error.
   mutants:
-    name: cargo-mutants (keys, protocol, engine), shard ${{ strategy.job-index }} of ${{ strategy.job-total }}
+    name: cargo-mutants (keys, protocol, index, engine), shard ${{ strategy.job-index }} of ${{ strategy.job-total }}
     runs-on: ubuntu-latest
     timeout-minutes: 210
     strategy:

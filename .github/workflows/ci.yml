@@ -74,9 +74,9 @@ jobs:
         with:
           tool: cargo-llvm-cov,nextest
       - run: cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
-      - name: Enforce 90% on each crate the plan names (same loop as gate.sh)
+      - name: Enforce 90% on each crate the plan names, and the index (same loop as gate.sh)
         run: |
-          for c in keys protocol engine; do
+          for c in keys protocol index engine; do
             others=$(ls crates | grep -vx "$c" | paste -sd'|' -)
             cargo llvm-cov nextest --all-features --fail-under-lines 90 \
               -p "licketysync-$c" --ignore-filename-regex "crates/($others)/"

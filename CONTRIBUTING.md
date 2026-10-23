@@ -82,7 +82,7 @@ ci/test-no-hostnames.sh
 ci/no-hostnames.sh
 ci/test-mutants.sh
 ci/test-fuzz-targets.sh
-cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-<crate> --ignore-filename-regex 'crates/(<the others>)/'   # once each for keys, protocol, engine
+cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-<crate> --ignore-filename-regex 'crates/(<the others>)/'   # once each for keys, protocol, index, engine
 ```
 
 The coverage threshold is per crate: only that crate's own files count, so a

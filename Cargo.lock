@@ -359,6 +359,14 @@ version = "0.0.1"
 [[package]]
 name = "licketysync-index"
 version = "0.0.1"
+dependencies = [
+ "hex",
+ "licketysync-keys",
+ "licketysync-protocol",
+ "proptest",
+ "prost",
+ "serde_json",
+]
 
 [[package]]
 name = "licketysync-keys"

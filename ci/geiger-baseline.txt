@@ -35,7 +35,7 @@ cli 0 0 0 0 0
 daemon 0 0 0 0 0
 decrypt 0 0 0 0 0
 engine 0 0 0 0 0
-index 0 0 0 0 0
+index 94 4333 23 2 63
 keys 94 4333 23 2 63
 net 0 0 0 0 0
 protocol 94 4333 23 2 63

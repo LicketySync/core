@@ -1,6 +1,6 @@
 [package]
 name = "licketysync-index"
-description = "The SQLite index: records, version vectors, hash-chained record history, tombstones with a horizon, the deletion brake."
+description = "The per-folder index: signed records per device sequence and record hash, cached cursor digests, heads from supersedes with waiting records, conflicts in display order, tombstones and renames, and the serving of index requests; in memory behind a storage trait until SQLite lands in phase 1."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,24 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# Record hashes, writer digests, folder keys and identifiers (keys.md 5): every
+# hash, key and signature check is the keys crate's; this crate computes none.
+licketysync-keys = { path = "../keys" }
+# The wire forms and checks of an index record and of the exchange
+# (protocol.md 4.4, 4.5): Record, judge over Held, step 6, Draft, the serving
+# rule and the pager. This crate holds the records those checks are about.
+licketysync-protocol = { path = "../protocol" }
+
+[dev-dependencies]
+# Property tests that arrival order never changes heads or digests (plan: Tests).
+proptest = { version = "1", default-features = false, features = ["std"] }
+# The test vectors of protocol.md 8 items 6 to 8 are JSON data files, as the
+# keys and protocol crates' are.
+serde_json = "1"
+hex = "0.4"
+# Hand-built record bodies, so that tests reach the writer faults a writer's
+# Draft refuses to sign.
+prost = "0.14"
 
 [lints]
 workspace = true

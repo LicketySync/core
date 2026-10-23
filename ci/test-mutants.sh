@@ -95,8 +95,8 @@ case_ "a shard without n" 1 3 180m ""
 case_ "a budget without a unit" 1 3/16 180 ""
 
 # What reaches cargo-mutants, and what reaches the job summary.
-if [ "$(cat "$tmp/1/args")" = "mutants --package licketysync-keys --package licketysync-protocol --package licketysync-engine --timeout 300 --no-shuffle --sharding round-robin --shard 3/16" ]; then
-  echo "ok   cargo-mutants gets the three crates, the 300 s limit and the shard"
+if [ "$(cat "$tmp/1/args")" = "mutants --package licketysync-keys --package licketysync-protocol --package licketysync-index --package licketysync-engine --timeout 300 --no-shuffle --sharding round-robin --shard 3/16" ]; then
+  echo "ok   cargo-mutants gets the four crates, the 300 s limit and the shard"
 else
   echo "FAIL cargo-mutants arguments: $(cat "$tmp/1/args")"
   fails=$((fails + 1))

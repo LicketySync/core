@@ -1,0 +1,284 @@
+{
+  "convergence": [
+    {
+      "end_cursor": {
+        "digest": "68aac39fd912923f1cf8607ea8bc79aaf904954b14bafa9d667a5aee758a0f84",
+        "seq": 3,
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      "end_digests": [
+        [
+          1,
+          "fd1c44213333a177546336c6166344a882751c02f659e144c394ab25701e2ccb"
+        ],
+        [
+          2,
+          "155f7c47aa4fefa99a2daa3df817e649a9aa680756b57b27f8cc73ff04a02734"
+        ],
+        [
+          3,
+          "68aac39fd912923f1cf8607ea8bc79aaf904954b14bafa9d667a5aee758a0f84"
+        ]
+      ],
+      "name": "equal cursors",
+      "start": {
+        "a": [
+          "R1",
+          "R2",
+          "C2",
+          "R3"
+        ],
+        "a_cursor": {
+          "digest": "68aac39fd912923f1cf8607ea8bc79aaf904954b14bafa9d667a5aee758a0f84",
+          "seq": 3,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        },
+        "b": [
+          "R1",
+          "R2",
+          "R3"
+        ],
+        "b_cursor": {
+          "digest": "4b0f01ccaa17291bd84457e469e1837e1bf1e3fdf9e3b0c4860de6687f8b186c",
+          "seq": 3,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        }
+      }
+    },
+    {
+      "end_cursor": {
+        "digest": "68aac39fd912923f1cf8607ea8bc79aaf904954b14bafa9d667a5aee758a0f84",
+        "seq": 3,
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      "end_digests": [
+        [
+          1,
+          "fd1c44213333a177546336c6166344a882751c02f659e144c394ab25701e2ccb"
+        ],
+        [
+          2,
+          "155f7c47aa4fefa99a2daa3df817e649a9aa680756b57b27f8cc73ff04a02734"
+        ],
+        [
+          3,
+          "68aac39fd912923f1cf8607ea8bc79aaf904954b14bafa9d667a5aee758a0f84"
+        ]
+      ],
+      "name": "behind a lower cursor",
+      "start": {
+        "a": [
+          "R1",
+          "C2"
+        ],
+        "a_cursor": {
+          "digest": "82a4609df2724b26aedee2b18fa38b1a30b4aba036ae2dbcf25e63d9d7ee8e85",
+          "seq": 2,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        },
+        "b": [
+          "R1",
+          "R2",
+          "R3"
+        ],
+        "b_cursor": {
+          "digest": "4b0f01ccaa17291bd84457e469e1837e1bf1e3fdf9e3b0c4860de6687f8b186c",
+          "seq": 3,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        }
+      }
+    }
+  ],
+  "description": "protocol.md 8 item 8, the index's part: the cached digests of a writer with one record per seq and after a concurrent version lands below the cursor (two records at seq 2, in canonical order), equal to the reference computation; the serving cases (a) to (d), equal cursors, a listed request and a range that excludes the writer, as the pages a reply holds and the writers it marks; and two indexes converging through rounds of range and listed requests.",
+  "digests_after_concurrent_at_seq_2": [
+    [
+      1,
+      "fd1c44213333a177546336c6166344a882751c02f659e144c394ab25701e2ccb"
+    ],
+    [
+      2,
+      "155f7c47aa4fefa99a2daa3df817e649a9aa680756b57b27f8cc73ff04a02734"
+    ],
+    [
+      3,
+      "68aac39fd912923f1cf8607ea8bc79aaf904954b14bafa9d667a5aee758a0f84"
+    ]
+  ],
+  "digests_one_per_seq": [
+    [
+      1,
+      "fd1c44213333a177546336c6166344a882751c02f659e144c394ab25701e2ccb"
+    ],
+    [
+      2,
+      "6356fa19af660a4daaa04cb24db38e033c290aa926c2822d11ec2bebca119ee7"
+    ],
+    [
+      3,
+      "4b0f01ccaa17291bd84457e469e1837e1bf1e3fdf9e3b0c4860de6687f8b186c"
+    ]
+  ],
+  "folder_id": "68ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd18891",
+  "own_device": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+  "records": [
+    {
+      "hash": "fabedf188cf2fcbc784c9e58d0ab89a1357591a16fd042c6fb48a4c4f0bfbf43",
+      "label": "R1",
+      "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300162240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c010101010101010101010101010101010101010101010101a8d02527d75ebe9d7e8f3c2127634c48835c8d47967df659c1dc4924f596da0cb5f467c9b098b3dca15e0d3babf1d710fcb505c8cc870f9b70ade4b9b99d18cd330b6dcc1240cbe14df6f46da9024c25af4cf8ada875906456913e294f5243db67f186a40a95493212c7aa5fa456157c3eb2d1550a16b6c183d6e0640e92306b579927126604",
+      "seq": 1
+    },
+    {
+      "hash": "728782aab59e756157d8343282a2ed63d2138a0ddf51a313953a32c4087bc934",
+      "label": "R2",
+      "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300262240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c010101010101010101010101010101010101010101010101a8d02527d75ebe9d7e8f3c2127634c48835c8d47967df659c1dc4924f596da0cb5f467c9b098b3dca15e0d3babf1d710fcb505c8d7094d1e6b8738cec819d4100b0181da1240e0134ed4ad8ea88c6ea0e2c89839972a18b58bc19b1c8ab7f14639e8543eb1294f0349bb2cad49fa162971e4dd03de547f646fdda3764b6739ce6d8574600c0c",
+      "seq": 2
+    },
+    {
+      "hash": "bda8e52c761c66641cd9964187604bc2e00767d551182646ac5870e1fb96653b",
+      "label": "C2",
+      "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300262240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c020202020202020202020202020202020202020202020202e200ab0d13f5d76b780a69ff6066e990e82724390eb4d57351e5140d6076818d0615b3fee87ee96cc56547104af2a1038b3ef545e3786e13f73144347ad16d1107ccd7331240e6d11ba82cd226349fb57f6caf7c43afab99148963824a2271ac6b59b4614c773de1fd7f7c7867f525fcd90f378660e82098a0af761994db8d46ad9eb638ca0a",
+      "seq": 2
+    },
+    {
+      "hash": "e585d7f3fb7a8c2af71e9dee71fa58b94dcb0a6cb3ce4e87e5d631c402b5c929",
+      "label": "R3",
+      "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300362240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c010101010101010101010101010101010101010101010101a8d02527d75ebe9d7e8f3c2127634c48835c8d47967df659c1dc4924f596da0cb5f467c9b098b3dca15e0d3babf1d710fcb505c8e28b8aa165618ce2d7958f54e2f694e8124059a25a82938348d84c4976f719d62463047f8647a124521a299c2896648d533ba0b648639dd8f0340b1b0237033d0c7cfd1cd57d55027282c1ee93ed361c990c",
+      "seq": 3
+    }
+  ],
+  "serving": [
+    {
+      "have": [],
+      "name": "(a) absent from have: every record",
+      "pages": [
+        {
+          "marks": [],
+          "more": false,
+          "records": [
+            "R1",
+            "R2",
+            "C2",
+            "R3"
+          ]
+        }
+      ]
+    },
+    {
+      "have": [
+        {
+          "digest": "fd1c44213333a177546336c6166344a882751c02f659e144c394ab25701e2ccb",
+          "seq": 1,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        }
+      ],
+      "name": "(b) equal digest at 1: the records above 1",
+      "pages": [
+        {
+          "marks": [],
+          "more": false,
+          "records": [
+            "R2",
+            "C2",
+            "R3"
+          ]
+        }
+      ]
+    },
+    {
+      "have": [
+        {
+          "digest": "9999999999999999999999999999999999999999999999999999999999999999",
+          "seq": 2,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        }
+      ],
+      "name": "(c) different digest at 2: every record, the writer marked",
+      "pages": [
+        {
+          "marks": [
+            "0101010101010101010101010101010101010101010101010101010101010101"
+          ],
+          "more": false,
+          "records": [
+            "R1",
+            "R2",
+            "C2",
+            "R3"
+          ]
+        }
+      ]
+    },
+    {
+      "have": [
+        {
+          "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+          "seq": 5,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        }
+      ],
+      "name": "(d) a cursor above this side's: nothing",
+      "pages": [
+        {
+          "marks": [],
+          "more": false,
+          "records": []
+        }
+      ]
+    },
+    {
+      "have": [
+        {
+          "digest": "68aac39fd912923f1cf8607ea8bc79aaf904954b14bafa9d667a5aee758a0f84",
+          "seq": 3,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        }
+      ],
+      "name": "equal cursors and digests: nothing",
+      "pages": [
+        {
+          "marks": [],
+          "more": false,
+          "records": []
+        }
+      ]
+    },
+    {
+      "have": [
+        {
+          "digest": "fd1c44213333a177546336c6166344a882751c02f659e144c394ab25701e2ccb",
+          "seq": 1,
+          "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+        },
+        {
+          "digest": null,
+          "seq": 0,
+          "writer": "0202020202020202020202020202020202020202020202020202020202020202"
+        }
+      ],
+      "name": "a listed request",
+      "pages": [
+        {
+          "marks": [],
+          "more": false,
+          "records": [
+            "R2",
+            "C2",
+            "R3"
+          ]
+        }
+      ]
+    },
+    {
+      "have": [],
+      "name": "a range that excludes the writer",
+      "pages": [
+        {
+          "marks": [],
+          "more": false,
+          "records": []
+        }
+      ]
+    }
+  ],
+  "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+}

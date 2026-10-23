@@ -484,14 +484,17 @@ message SealedMeta {
   every record of it the peer has stored, applied or opaque (step 6). Their **canonical order** is
   ascending `seq`, then ascending `record_hash`, bytewise. The peer holds at least one record at
   every `seq` from 1 to its **cursor** for the writer, the highest `seq` it holds (0 when it holds
-  none); the cursor never decreases (below, "Rollback"). The writer's **digest at s**, for
-  `1 ≤ s ≤ cursor`, is the value of `D` after the last record with `seq ≤ s` when `D` starts as 32
-  zero bytes and each record, in canonical order, sets
-  `D = H("licketysync/v1/hash/writer-digest", D || record_hash)`. Equal digests at `s` mean the same
-  records through `s`, short of a BLAKE3 collision. A peer **caches** each writer's digest at every
-  `seq` it holds and keeps the cache current as records arrive: a record at the cursor plus one
-  extends it by one step, and a record that lands below others in canonical order recomputes it from
-  its own `seq` up. Serving a request reads the cache and never recomputes a digest (4.5).
+  none); the cursor never decreases (below, "Rollback"). The writer's **digest at s**, for `1 ≤ s ≤
+  cursor`, is the value of `D` after the last record with `seq ≤ s` when `D` starts as 32 zero bytes
+  and each record, in canonical order, sets `D = H("licketysync/v1/hash/writer-digest", D ||
+  record_hash)`. Equal digests at `s` mean the same records through `s`, short of a BLAKE3
+  collision. A peer **caches** each writer's digest at every `seq` it holds and keeps the cache
+  current as records arrive: a record that sorts last in canonical order takes one step, so a record
+  at the cursor plus one extends the cache and a concurrent version at the cursor whose
+  `record_hash` sorts above the others there moves the cursor's digest alone, and a record that
+  lands below others in canonical order recomputes it from its own `seq` up. A peer that rebuilds
+  the cache from its stored records replays them in canonical order, one step each. Serving a
+  request reads the cache and never recomputes a digest (4.5).
 - **Concurrent versions** (ruling R-K5). A record of a writer at a `seq` where the peer already
   holds another record of that writer is a concurrent version: it is stored like any other record,
   in canonical order, and the heads (below) decide what it means for its path, as for any concurrent
@@ -500,37 +503,48 @@ message SealedMeta {
   write holder signing under another device's ID (any write holder can), and a device restored from
   a backup of its index, which reuses sequence numbers (4.5, "Durability before transmission").
 - **Versions and heads** (ruling R-K6). A device that writes a path (an edit, a delete, a rename)
-  names in `supersedes` every **head** of that path it holds: usually one; several when the write
-  resolves a conflict; none for a path new to it. A rename is one record at the new path whose
-  `supersedes` names the heads of the old path (and of the new path, if it had any), so the old path
-  is left with no head (decision). A device whose path has more than `MAX_SUPERSEDES` heads names the
+  names in `supersedes` the **last known versions** of that path it holds: every **head** of the
+  path, and every version of it that a record at another path superseded (a rename away) and that no
+  record at the path has superseded since (coordinator ruling of 2026-10-22). That is usually one;
+  several when the write resolves a conflict; none for a path new to it. So a file renamed away and
+  a new file then written at the old name never show as a conflict on a peer that holds the new file
+  and the renamed version but not yet the rename: the new file names the renamed version. A rename
+  is one record at the new path whose `supersedes` names the last known versions of the old path and
+  of the new path, so the old path is left with no head (decision). A write names heads before
+  versions a rename superseded. A device whose path has more than `MAX_SUPERSEDES` heads names the
   first 16 in display order (below), and the others stay heads, still a conflict, until a later
   write names them; a rename whose old and new paths have more than 16 heads together names the old
-  path's heads first, in display order, then the new path's, up to 16, and the rest stay heads. Read
-  and write holders compute heads after step 6 of the verification below:
-  - A record is **waiting** while some entry of its `supersedes` names a record this peer does not
-    hold, or one that is itself waiting (decision: so a chain that arrives out of order waits as a
-    whole). A waiting record takes no part in heads, neither as a version nor as replacing one, until
-    every record it names is held and none of them waits; so a record that arrives before a version it
-    replaces makes no false conflict. Index sync brings what it waits for: whoever wrote the record held every version
-    it names, and two peers that exchange come to hold the same records (4.5, TM-41).
+  path's heads first, in display order, then the new path's, up to 16, and the rest stay heads.
+  Versions a rename superseded fill the room the heads leave, in display order, the old path's
+  before the new path's, and those left unnamed are named by a later write. Read and write holders
+  compute heads after step 6 of the verification below:
+  - An applied record (step 6) is **waiting** while some entry of its `supersedes` names a record
+    this peer does not hold, or one that is itself waiting (decision: so a chain that arrives out of
+    order waits as a whole). An opaque record never waits, whatever it names, since it is neither a
+    version nor replaces one (decision). A waiting record takes no part in heads, neither as a
+    version nor as replacing one, until every record it names is held and none of them waits; so a
+    record that arrives before a version it replaces makes no false conflict. Index sync brings what
+    it waits for: whoever wrote the record held every version it names, and two peers that exchange
+    come to hold the same records (4.5, TM-41).
   - A **version** of a path is an applied record (step 6) that is not waiting and whose sealed path
     is that path. The **heads** of a path are its versions that no applied, non-waiting record
     supersedes. Opaque records are neither versions nor replace anything, but they are held, so a
     record that names one does not wait for it.
   - One head is the path's current version; a tombstone head means the path is deleted. Two or more
     heads are a **conflict**, and every head is kept until a write names them. The **display order**
-    of a path's heads is: heads that are not tombstones first; among those, directories before files
-    (decision: a directory's children need it at the path); then the greater `mtime_ns` first; then
-    the smaller `record_hash` first. The first head in display order sits at the path; when every
-    head is a tombstone, the path is deleted. Every other head that is not a tombstone and whose
-    content differs from the first becomes a conflict copy (TM-40); writing those copies to disk is
-    the engine's (phase 1). Content differs when the kinds differ or, between two files, when their
-    `plain_hashes` lists differ; two directories never differ, and nor do two files with the same
-    `plain_hashes`, whatever their times or modes. So: one file and one tombstone show the file and
-    make no copy (an edit beats a delete); a file and a directory show the directory and make the
-    file a conflict copy; two files with different content show the one first in display order and
-    copy the other; two identical files or two directories show the first and copy nothing.
+    of a path's heads is: heads that are not tombstones first, and among those directories before
+    files (decision: a directory's children need it at the path); tombstones last, whose kind is not
+    compared; then, within each of these groups, the greater `mtime_ns` first; then the smaller
+    `record_hash` first (decision: so tombstones too have one order). The first head in display
+    order sits at the path; when every head is a tombstone, the path is deleted. Every other head
+    that is not a tombstone and whose content differs from the first becomes a conflict copy
+    (TM-40); writing those copies to disk is the engine's (phase 1). Content differs when the kinds
+    differ or, between two files, when their `plain_hashes` lists differ; two directories never
+    differ, and nor do two files with the same `plain_hashes`, whatever their times or modes. So:
+    one file and one tombstone show the file and make no copy (an edit beats a delete); a file and a
+    directory show the directory and make the file a conflict copy; two files with different content
+    show the one first in display order and copy the other; two identical files or two directories
+    show the first and copy nothing.
   - So a device restored from an old backup, which still holds an old head, makes its next edit name
     that old head: every peer that holds the later versions then holds two heads, a conflict, and
     nothing is lost silently.
@@ -593,10 +607,12 @@ failure is the one section 5's table gives for its cause; the causes are named h
 4. **Signature**: `Verify(folder_vk, "licketysync/v1/sig/index", body, signature)`; failure:
    **forged**. Nothing below may be charged to anyone unless the folder key signed it, and every
    signature a peer verifies either stores a record it did not hold or closes the connection
-   (TM-22).
+   (TM-22), short of a **store failure**, when this device's own index store cannot take the record
+   and the folder pauses (section 5).
 5. **Store**: `seq ≤ n`: a **concurrent version**: store it, and recompute the writer's cached
-   digests from `seq` up. `seq = n + 1`: store it; the cursor becomes `seq`. Every stored record
-   counts in its writer's records, cursor and digest, whatever step 6 finds.
+   digests from `seq` up (one step when it sorts last at the cursor, above). `seq = n + 1`: store
+   it; the cursor becomes `seq`. Every stored record counts in its writer's records, cursor and
+   digest, whatever step 6 finds.
 6. **Seal**: read and write holders open `sealed` (`keys.md` §3.4). A seal that will not open,
    non-zero padding, a path outside the grammar above (a name that is merely invalid on some platform
    is the path resolver's concern, TM-4, not a writer fault), a `kind` this release does not know, a
@@ -965,6 +981,7 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 | `CHUNK_BUSY` | An ordinary answer: the requester sends no chunk request on that connection for `CHUNK_BUSY_BACKOFF` (one timer per connection) and may ask other peers (4.6); keep |
 | `CHUNK_NOT_FOUND` | An ordinary answer: no state is kept for the hash; the pass to that peer goes on, and the requester asks other peers for the chunk; the next pass to that peer waits for a greater `chunks_stored` in its Status or a completed round with it, and at least 1 s (4.6); keep |
 | A record under this device's own device ID at or above the next `seq` it would use (4.5, "Durability before transmission") | Store and apply; move its counter past it before writing again; informational issue naming no one; keep |
+| **Store failure**: this device's own index store cannot take a record whose signature verified (the disk is full, an I/O error) | Nothing is stored and nothing changes; the folder pauses until its store takes records again (the engine's to detect), accepting none of its records meanwhile, so that no peer can make this device verify the same record again and again (TM-22); on resuming, the device owes each connection where the folder is open a round, which brings back what it set aside (decision); issue naming the cause; keep |
 
 - **Time** comes from a clock trait (wall time, as the device believes it, for the LAN beacon window
   and informational fields; monotonic time for intervals) and the network from a transport trait, so
@@ -1138,25 +1155,29 @@ explicit so that every timeout and interval in section 5's constants is a vector
    `size` 5 and no chunks, and a path that is not NFC (accepted, not a fault: a distinct path); a
    forged record that would also be a writer fault (forged wins); a record under the receiver's own
    device ID above its counter (counter moved past it, the informational issue).
-7. **Heads** (index; ruling R-K6; on a read holder, one path each unless named): a version
-   superseding the one head (one head); two versions superseding one (two heads, a conflict: the
-   greater `mtime_ns` at the path; on equal `mtime_ns`, the smaller record hash); a record naming
-   both heads (one head again); each case of the display order and of "content differs": a file and
-   a tombstone (the file shown, no copy), a file and a directory (the directory shown, the file a
-   conflict copy, whatever their times), two files with different `plain_hashes` (one copy), two
-   files with the same `plain_hashes` and different modes and times (no copy), two directories (no
-   copy), only tombstones (the path deleted); out-of-order `supersedes`: R2 superseding R1 arriving
-   before R1 (R2 waits and the old head stays, no conflict; when R1 arrives, R2 is the one head); a
-   chain R3 superseding R2 superseding R1 arriving as R3, R2, R1 (both wait, no conflict at any
-   point, R3 the one head at the end); a record naming a hash no peer holds (it waits for good, is
-   stored and is forwarded, with the log line at once and the informational issue only after a round
-   with every open peer has completed); a restored device: D's index restored from before R1, D
-   writes R2 superseding R0 while its peer holds R1 superseding R0 (after the exchange both hold two
-   heads, a conflict, nothing lost, and D's counter has moved past its own reused sequence numbers);
-   a rename (the old path has no head, the new path one); 17 heads and a write naming 16 (two heads
-   remain); a rename whose old path has 10 heads and new path 10 (the old path's 10 named first,
-   then 6 of the new path's in display order; 4 heads remain at the new path); a record naming an
-   opaque record (not waiting); an opaque record naming the one head (the head stays).
+7. **Heads** (index; ruling R-K6; on a read holder and a write holder alike, one path each unless
+   named): a version superseding the one head (one head); two versions superseding one (two heads, a
+   conflict: the greater `mtime_ns` at the path; on equal `mtime_ns`, the smaller record hash); a
+   record naming both heads (one head again); each case of the display order and of "content
+   differs": a file and a tombstone (the file shown, no copy), a file and a directory (the directory
+   shown, the file a conflict copy, whatever their times), two files with different `plain_hashes`
+   (one copy), two files with the same `plain_hashes` and different modes and times (no copy), two
+   directories (no copy), only tombstones (the path deleted); out-of-order `supersedes`: R2
+   superseding R1 arriving before R1 (R2 waits and the old head stays, no conflict; when R1 arrives,
+   R2 is the one head); a chain R3 superseding R2 superseding R1 arriving as R3, R2, R1 (both wait,
+   no conflict at any point, R3 the one head at the end); a record naming a hash no peer holds (it
+   waits for good, is stored and is forwarded, with the log line at once and the informational issue
+   only after a round with every open peer has completed); a restored device: D's index restored
+   from before R1, D writes R2 superseding R0 while its peer holds R1 superseding R0 (after the
+   exchange both hold two heads, a conflict, nothing lost, and D's counter has moved past its own
+   reused sequence numbers); a rename (the old path has no head, the new path one); a rename away
+   and then a new file at the old path, written by a device that holds the rename and delivered to a
+   peer before the rename (the new file names the renamed version, so the old path has one head at
+   every step); 17 heads and a write naming 16 (two heads remain: the write and the one it left
+   unnamed); a rename whose old path has 10 heads and new path 10 (the old path's 10 named first,
+   then 6 of the new path's in display order; the new path keeps the 4 left unnamed beside the
+   rename, 5 heads in all); a record naming an opaque record (not waiting); an opaque record naming
+   the one head (the head stays); an opaque record naming a hash no peer holds (it does not wait).
 8. **Cursors, rounds and pages** (index for digests and serving, protocol for the decoder vectors,
    engine for the rest; connection vectors unless noted): digests for a writer with one record per
    `seq` and for one with two records at one `seq`, in canonical order, and the cached digests after

@@ -372,6 +372,9 @@ These are stated so that nobody mistakes silence for a promise.
 - **The operating system and the network the program runs on.** A kernel, a keystore, a random
   number generator or a file system that lies is not defended against. Malware running as the user
   reads what the user reads, keys included.
+- **The device's own index store at rest**, and any backup of it restored into it: it is trusted like
+  the key store, and its records are not verified again when the index opens (TM-9 says what a
+  corrupted or edited store would do; phase 1, which puts it on disk, decides how it checks itself).
 - **Denial of service by traffic volume** that a home connection would already fail under. The
   program bounds what it allocates and accepts; it cannot keep a saturated link usable.
 - **Multi-file atomicity.** A git repository, an SQLite database, a password manager's vault or any
@@ -469,17 +472,25 @@ crate was added is caught without a code change. Stops a malicious or abandoned 
 build. Enforced by `gate.sh` and CI.
 
 **TM-9. Updates are accepted only when signed by the folder's write key, and no key travels inside a
-folder.** Every index record is verified with the folder's verification key, which every key at every
-tier carries, before anything in it is charged to anyone, and is stored only if it verifies (an exact
-duplicate of a record already held, and a gap on a push, are ignored unverified, since nothing of
-them is stored); read and sealed holders cannot sign, so every peer rejects a change they make. Nothing a
-peer sends can add, replace or change a folder's keys, because no record carries key material: keys
-move only as key strings outside the protocol and, between a person's linked devices, over an
-authenticated channel (`keys.md` §8.3); a record handed over by a sealed peer or relay is data to be
-verified, never a reason to act. Stops key insertion, where a storage party introduces or replaces
-key material and the client re-encrypts everything under it (Nextcloud 2024, Albrecht et al.), and
-forged changes. Enforced by `keys` (signing and verification) and `index` (verifies before storing);
-`engine` applies only stored records.
+folder.** Every index record is verified with the folder's verification key, which every key at
+every tier carries, before anything in it is charged to anyone, and is stored only if it verifies
+(an exact duplicate of a record already held, and a gap on a push, are ignored unverified, since
+nothing of them is stored); read and sealed holders cannot sign, so every peer rejects a change they
+make. Nothing a peer sends can add, replace or change a folder's keys, because no record carries key
+material: keys move only as key strings outside the protocol and, between a person's linked devices,
+over an authenticated channel (`keys.md` §8.3); a record handed over by a sealed peer or relay is
+data to be verified, never a reason to act. A device's own index store, and any backup of it
+restored into it, is trusted like its key store: a record is verified before it is stored and not
+again when the index reopens from the store. A store corrupted or edited at rest would make the
+device apply a change no write holder signed, serve records its peers refuse as forged (each such
+connection closing with an issue naming this device), or count a junk record in a writer's digest,
+so that every exchange resends that writer in full; phase 1, which puts the index on disk, decides
+between verifying every stored record when the index opens (about nine times slower to open: some
+7 s per 100 000 records, measured on 2026-10-22) and a labelled keyed checksum per stored record (a
+question for the owner; section 3.12). Stops key insertion, where a storage party introduces or
+replaces key material and the client re-encrypts everything under it (Nextcloud 2024, Albrecht et
+al.), and forged changes. Enforced by `keys` (signing and verification) and `index` (verifies before
+storing); `engine` applies only stored records.
 
 **TM-10. Fail closed.** Any decryption failure, signature failure, hash mismatch or malformed record
 ends in exactly one of three outcomes, none of them silent. The connection that delivered it is
@@ -616,19 +627,20 @@ from a peer with no key to the folder costs a lookup in the connection's hint ta
 so an outsider cannot make a device verify anything; once a folder is open, each record received
 costs one BLAKE3 hash of its body, and an exact duplicate or a gap on a push stops there, unverified
 (ruling DUP), so every signature a device verifies either stores a record it did not hold or closes
-the connection, and a peer of any tier can make it verify only as many signatures as it brings new
-records, plus the one forged record that ends the connection; serving an index request reads cached
-digests and recomputes none; chunk requests are bounded by `max_requests_in_flight`, a queued request
-holds only its hash and the chunk is read from storage only as it is sent, a requester keeps one
-`CHUNK_BUSY` backoff timer per connection and no state per hash after `CHUNK_NOT_FOUND`; a key holder
-of any tier, under any number of device identities, can still make a device queue up to
-`MAX_SEND_QUEUE` (128 MiB) of chunk replies per connection by reading them slowly, for as long as it
-keeps the connection alive (a reader that trickles is never closed by `IDLE_TIMEOUT`), so what
-bounds the total is the phase 1 connection limit;
-and a write holder can make every peer store and compare any number of writers, and recompute cached
-digests and resend a writer's history for each concurrent version it signs low in that history
-(section 3.6), which costs storage, time and bandwidth, not per-connection memory. Enforced by `net`,
-`protocol` and `index`; the flood test is in `sim`.
+the connection (or, when the device's own index store cannot take the record, pauses the folder
+until it can, `protocol.md` section 5), and a peer of any tier can make it verify only as many
+signatures as it brings new records, plus the one forged record that ends the connection; serving an
+index request reads cached digests and recomputes none; chunk requests are bounded by
+`max_requests_in_flight`, a queued request holds only its hash and the chunk is read from storage
+only as it is sent, a requester keeps one `CHUNK_BUSY` backoff timer per connection and no state per
+hash after `CHUNK_NOT_FOUND`; a key holder of any tier, under any number of device identities, can
+still make a device queue up to `MAX_SEND_QUEUE` (128 MiB) of chunk replies per connection by
+reading them slowly, for as long as it keeps the connection alive (a reader that trickles is never
+closed by `IDLE_TIMEOUT`), so what bounds the total is the phase 1 connection limit; and a write
+holder can make every peer store and compare any number of writers, and recompute cached digests and
+resend a writer's history for each concurrent version it signs low in that history (section 3.6),
+which costs storage, time and bandwidth, not per-connection memory. Enforced by `net`, `protocol`
+and `index`; the flood test is in `sim`.
 
 **TM-23. No `unwrap`, `expect`, `panic` or unchecked index on untrusted input.**
 `clippy::unwrap_used`, `expect_used` and `panic` are denied workspace-wide, `indexing_slicing` warns

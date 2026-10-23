@@ -6,6 +6,102 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Index crate built for shared folder keys (`licketysync-index`), to `spec/protocol.md` §4.4 and
+  §4.5 over the rebuilt protocol crate, in place of the skeleton; the old crate's model (forks,
+  equivocation, the cover forest, version vectors) is not carried over. `Index` holds one folder's
+  signed records by record hash and by writer in canonical order (ascending `seq`, then record hash)
+  and implements the protocol crate's `Held` (for `judge`) and `Cursors` (for the requests the
+  connection builds); `accept` runs steps 2 to 5 through `judge` (duplicates and push gaps ignored
+  unverified, reply gaps and out-of-scope writers sender violations, the folder key's signature
+  before anything is stored), step 6 with the data key (a writer fault stored opaque and counted in
+  the cursor and digest; a sealed holder stores records unopened and computes no heads), appends the
+  record to the store, and only then step 7. Each writer's digest at every `seq` is cached: a record
+  that sorts last in canonical order (at the cursor plus one, or at the cursor above the others
+  there) takes one digest step, one that lands lower recomputes from its own `seq` up, a reopen
+  replays the records in canonical order at one step each, and serving reads the cache. An applied
+  record waits while a record it names is not held or itself waits (an opaque record never waits,
+  and a record naming one does not wait for it); a record that stops waiting is activated through a
+  work list, so the versions it names leave their paths' heads and it joins its own, and the heads
+  equal the spec's definition for the set of records held in any arrival order. Heads are kept in
+  display order (non-tombstones first, directories before files, then the greater `mtime_ns` and the
+  smaller record hash, tombstones last in the same order), so the version at a path, deletion,
+  conflicts and the first heads a write names cost a lookup; conflict copies (content differs by
+  kind or by `plain_hashes`, compared in constant time) walk the heads. `draft` and `draft_rename`
+  name a path's last known versions: its heads, then the versions of it a rename superseded that no
+  record at the path has replaced since (kept per path beside the heads), in display order, at most
+  `MAX_SUPERSEDES` (a rename the old path's, then the new path's); `write` signs with the write key
+  and appends before it returns. `Reply` serves one request page by page by cases (a) to (d) from
+  the index it is given, under that index's folder ID, reporting the writers case (c) marks
+  (`Connection::send_page`'s `resent`), and resumes where it stopped. `Store` is `load` and one
+  atomic `append` per record, persisting the records as received and nothing else; `MemoryStore` is
+  phase 0's.
+  - Spec changes in this commit (`spec/protocol.md`, `spec/threat-model.md`; the review rulings of
+    2026-10-22): a write names the path's last known versions, its heads and the versions of it a
+    rename superseded that no record at the path has replaced since, so a file renamed away and a
+    new file then written at the old name never show a false conflict on a peer that has the new
+    file before the rename, heads named before the renamed versions within the 16 (§4.4, "Versions
+    and heads"; R2 SF2, R1 SF1, SEC N5); an opaque record never waits, whatever it names (§4.4); the
+    display order puts tombstones last and orders them, as the others, by `mtime_ns` then record
+    hash, their kind not compared (§4.4); the digest cache's cost: a record that sorts last takes
+    one step, and a rebuild replays the records at one step each (§4.4 and step 5; SEC-B1); a
+    **store failure** row in section 5 (this device's index store cannot take a verified record:
+    nothing changes, the folder pauses until the store takes records again and then owes each
+    connection a round) and the matching clause in §4.4 step 4 and TM-22 (SEC N3); §8 item 7 runs on
+    a read holder and a write holder alike, says which heads remain after the 16-name cases (the
+    write and the one left unnamed; the 4 left unnamed beside the rename, 5 in all), and gains the
+    rename-then-new-file and the opaque-record-naming-a-missing-hash cases (R1 N3, N4); TM-9 and
+    §3.12: the device's own index store, and any backup restored into it, is trusted like the key
+    store, with what a corrupted or edited store would do (SEC-SF2, R1 SF3).
+  - Decisions (for the plan): phase 0 keeps the index in memory behind `Store` (the plan's index
+    decision of 2026-10-14/15); `Store` is the durability seam of phase 0 only: the index keeps
+    every record and everything derived in memory whatever the store, and phase 1 moves those maps
+    into `SQLite` on disk (the plan's best-in-class row: on disk, under 1 KB of index per file), the
+    trait changing with it (R2 SF1); the store holds only the records: cursors, cached digests,
+    opaque and waiting records, heads and renamed-away versions are rebuilt when the index opens, by
+    replaying the records in canonical order through step 1 and step 6 again; `open` trusts the
+    store and does not verify signatures again (each was verified before it was appended), and phase
+    1 verifies at open (in a batch) or in `doctor`, as the plan's "Recovery is local" says, or keeps
+    a keyed checksum per record (R1 SF3, SEC-SF2; the owner question below); this device's next
+    `seq` is its cursor for its own device ID plus one, so appending a record commits the counter
+    and a record under its ID from elsewhere moves it; each record is appended on its own,
+    atomically, before anything changes in memory, so a store failure changes nothing (batching per
+    page is phase 1's; R2 N4); on a store failure the engine pauses the folder, accepting none of
+    its records, until an append succeeds, and then owes a round on each connection where it is open
+    (SEC N3); a reply's pages take their folder ID from the index they are built from, so they can
+    never carry one folder's records under another's ID (R2 SF3, SEC N4); the index holds the folder
+    key at its tier (verification key, data key, write key); a record of another folder is refused
+    before it is judged.
+  - Phase 1 question for the owner (SEC-SF2): when the index is on disk, verify every stored record's
+    signature when the index opens (measured about nine times slower to open, some 7 s per 100 000
+    records) or keep a labelled keyed checksum per stored record from the keys crate.
+  - Vectors (`crates/index/tests/vectors/*.json`, regenerated with `LICKETYSYNC_REGENERATE_VECTORS=1
+    cargo test -p licketysync-index vector_`): `outcomes.json` (item 6's outcomes against a writer's
+    records), `heads.json` (item 7 whole, each delivery and write with the heads after it, every
+    step checked against a read holder given the same records) and `digests.json` (item 8's cached
+    digests, serving cases (a) to (d), equal cursors, a listed request and a range that excludes the
+    writer, each page's records asserted, and two indexes converging through range and listed
+    requests). Each case's rows are the ones its outcomes reached, and every name in the files is
+    spelled out, never a `Debug` form (R2 N11). Property tests: arrival order (with gaps and
+    duplicates) never changes cursors, digests, waiting records, heads or renamed-away versions, nor
+    does reopening, and all equal a naive computation from the set of records; histories without
+    concurrent edits, drafted by the index itself, never show two heads at any step, a path renamed
+    away and written again included (the narrowing of e304e07 removed); two indexes that exchange
+    end with the same records and heads. Bounded work is counted in digest steps and waiter
+    notifications: k versions at one `seq` in canonical order cost k steps on arrival and on reopen
+    (SEC-B1); the dedup on open has a regression test (R1 SF2).
+  - `gate.sh` and `ci.yml` hold the index crate to 90 % line coverage per crate, and `ci/mutants.sh`
+    (with `ci/test-mutants.sh` and `mutants.yml`) runs cargo-mutants on it, since TM-17, TM-40 and
+    TM-41 name it as their enforcer (R2 N14).
+  - `ci/geiger-baseline.txt`: the index crate now builds on the protocol crate's unsafe counts.
+  - Dependencies: none new; `licketysync-keys` and `licketysync-protocol` (normal), `proptest`,
+    `serde_json`, `hex` and `prost` (dev), all already in the tree and vetted.
+  - Reviewed (2026-10-22) on e304e07 by three fresh-context agents (Claude Opus 5.5): correctness
+    adffa6f35bc9c6984, quality a291f17548a6bbd28 and security a81869b0f8884df7d (the
+    security-reviewer pass); the accepted findings were applied in this commit (the one-step digest
+    extension and linear reopen, the rename rule, `Reply` built from the index, one atomic `append`,
+    the store-trust documents, and the tests, vectors, CI lists and spec edits they named);
+    confirmed clean 2026-10-22 by a291f17548a6bbd28 and a81869b0f8884df7d (the latter also for
+    adffa6f35bc9c6984's items); the merge agent wrote this line.
 - Protocol crate rebuilt for shared folder keys (`licketysync-protocol`), to `spec/protocol.md` as
   rewritten for that model (and amended here, below), over the reworked keys crate (every key,
   hash, label, signature and cipher is the keys crate's; the protocol crate depends on no

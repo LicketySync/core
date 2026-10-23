@@ -1,0 +1,682 @@
+{
+  "case": {
+    "end": {
+      "cursors": [
+        [
+          "0101010101010101010101010101010101010101010101010101010101010101",
+          7
+        ],
+        [
+          "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+          1
+        ]
+      ],
+      "next_seq": 2,
+      "paths": {
+        "a": {
+          "conflict": false,
+          "copies": [],
+          "current": "R1",
+          "deleted": false,
+          "heads": [
+            "R1"
+          ]
+        },
+        "b": {
+          "conflict": false,
+          "copies": [],
+          "current": "R2",
+          "deleted": false,
+          "heads": [
+            "R2"
+          ]
+        },
+        "b2": {
+          "conflict": false,
+          "copies": [],
+          "current": "C2",
+          "deleted": false,
+          "heads": [
+            "C2"
+          ]
+        },
+        "c": {
+          "conflict": false,
+          "copies": [],
+          "current": "R3",
+          "deleted": false,
+          "heads": [
+            "R3"
+          ]
+        },
+        "c3": {
+          "conflict": false,
+          "copies": [],
+          "current": "C3",
+          "deleted": false,
+          "heads": [
+            "C3"
+          ]
+        },
+        "café": {
+          "conflict": false,
+          "copies": [],
+          "current": "N7",
+          "deleted": false,
+          "heads": [
+            "N7"
+          ]
+        },
+        "o": {
+          "conflict": false,
+          "copies": [],
+          "current": "O1",
+          "deleted": false,
+          "heads": [
+            "O1"
+          ]
+        }
+      },
+      "waiting": []
+    },
+    "name": "outcomes of one writer's records",
+    "records": [
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": null,
+        "hash": "fabedf188cf2fcbc784c9e58d0ab89a1357591a16fd042c6fb48a4c4f0bfbf43",
+        "kind": "file",
+        "label": "R1",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "a",
+        "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300162240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c010101010101010101010101010101010101010101010101a8d02527d75ebe9d7e8f3c2127634c48835c8d47967df659c1dc4924f596da0cb5f467c9b098b3dca15e0d3babf1d710fcb505c8cc870f9b70ade4b9b99d18cd330b6dcc1240cbe14df6f46da9024c25af4cf8ada875906456913e294f5243db67f186a40a95493212c7aa5fa456157c3eb2d1550a16b6c183d6e0640e92306b579927126604",
+        "seq": 1,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": null,
+        "hash": "0229e1728f49680b1ace31cc3a6b1fb7fe7a99475839f10d1b28ed4b4893c96f",
+        "kind": "file",
+        "label": "R2",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "b",
+        "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300262240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c010101010101010101010101010101010101010101010101a8d02527d75ebd9d7e8f3c2127634c48835c8d47967df659c1dc4924f596da0cb5f467c9b098b3dca15e0d3babf1d710fcb505c8794a126b424f84885146df1dc841835412403db2e6a05f15d7a068d328c15129dbd2015a41a6703084f1dacc13119bb3d4a244df281987884484998023986a35d6284535175d337f601f4475bce81ee18700",
+        "seq": 2,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": null,
+        "hash": "7a8887f87a08e61a93ad523f18867a1186e24b7219d840d19ce11bfa2ca26fe1",
+        "kind": "file",
+        "label": "R3",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "c",
+        "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300362240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c010101010101010101010101010101010101010101010101a8d02527d75ebc9d7e8f3c2127634c48835c8d47967df659c1dc4924f596da0cb5f467c9b098b3dca15e0d3babf1d710fcb505c8210d153b14f12357e9eea56e5c7899dc1240788c80bbaf9f80fca564a040389618b8a86c63a4dc3242f474bc32c6f458a06e17865289c318ea1986e5aaaa1ffd4e6d4b51b7435c197ef618694ad84cb04302",
+        "seq": 3,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": null,
+        "hash": "2910479366798bd5989fb67ebe0f1e4d5cb1977ec288889f069b368a73487f14",
+        "kind": "file",
+        "label": "C2",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "b2",
+        "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300262240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c020202020202020202020202020202020202020202020202e200ab1213f6d749691370dea889c61c4f1636180eb4d57351e5140d6076818d0615b3fee87ee96cc56547104af2a1038b3ef544dd5a85f5d1aaaa9e5887aa0bc92d76ae12409d66cfa6804fc099ffc415ae97f683dad82f03a40023d8a64ca31e851e7a46f7252816d013f5ab184c24ffb41ab47ad5ef3d976d9cffccc82af7ff7e3e5c300b",
+        "seq": 2,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": null,
+        "hash": "c4656cf7dd50453f547571735de91904cc1bcb3de930495f610441ad387057c6",
+        "kind": "file",
+        "label": "C3",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "c3",
+        "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300362240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c020202020202020202020202020202020202020202020202e200ab1213f6d648691370dea889c61c4f1636180eb4d57351e5140d6076818d0615b3fee87ee96cc56547104af2a1038b3ef5441142842cae6ee9b5ce292ad31196984a1240fb8b0fd1cd74541ba4c290e3c065771172385106c50ab90095822e235b559489f190081c34fc1cd34033aaf7fb68a65d6fe700dec98ba6a6b9e0ffacd7964402",
+        "seq": 3,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": "seal",
+        "hash": "4c1b26d8fc9235064d6db387d06c30fec5eb34f598e5c5bd40b8e2388185f108",
+        "kind": "file",
+        "label": "F4",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "s",
+        "record": "0ab201080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300462240a200101010101010101010101010101010101010101010101010101010101010101102e6a4004040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404124019858dda6bc78bd01d4d9421e7be1574e44f92754c4e5b4c9ddfec570bd68084969c0b173b77aa46480ddf7918627fc22fd9072e18a9beeeaaf72debb2561a0c",
+        "seq": 4,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": "directory_with_chunk",
+        "hash": "4986d68073e3c558c46e74c7f0195a6e85008ce3d0ca303d80995daedb0d12cf",
+        "kind": "directory",
+        "label": "F5",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "d",
+        "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300562240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c0000000000000000000000000000000000000000000000003b27a0e6747c769d362ef7017a9c9250dc5d47bc0efe6c4e3aa6a8013994244b1d22ab1feb15c0a03d1c3523c78756f3ec3f8043f1b51f7814ad5ba71fa26a8b6f33271512401f6682e9c4b177ab096c4df811fea8e3782fd670152943e630747010e5e731394349955a180d19ed86f1c8d0f4c706bf231918a908778930b13e48abf4ecd10c",
+        "seq": 5,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": "file_without_chunks",
+        "hash": "c770cb05e93b97976b17ae8c69111ef4f90760a29f905110aa1053ca4b7aea0c",
+        "kind": "file",
+        "label": "F6",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "e",
+        "record": "0a8601080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a20010101010101010101010101010101010101010101010101010101010101010130066a3a0000000000000000000000000000000000000000000000003b27a0c4747c779d352ef3017a9c9250dc6fd4f3fd8d8393ffa90fe00fbd7581af6d12401171d025e767b406f66e2e663be7efc6cd2ab4b9171751366806383d8fa564f2f0247e19440e3b73398b0214c92afcee689a43d26bf2457c12476a6c13de5a05",
+        "seq": 6,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": "seal",
+        "hash": "322201679ee18c3d1cd86b1175f2d6ca653ecea5b6ffff65e46345f5c61683fa",
+        "kind": "file",
+        "label": "F7",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "s",
+        "record": "0ab201080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300762240a200101010101010101010101010101010101010101010101010101010101010101102e6a40070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707071240b3b61bc7d3f3ae19e68a1da81f5fa93086a988f7f24437353bad757e7ba08c1a1e2ffcfc21c079922752ac7c3f5ee1b52d462e822b6f54914b7936ce2527ff02",
+        "seq": 7,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": null,
+        "hash": "fdaec1e5f5aefe8220b7e9ae89227b4ec14a91509b55bb1e7f7fba927e14e4ce",
+        "kind": "file",
+        "label": "N7",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "café",
+        "record": "0ad201080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a200101010101010101010101010101010101010101010101010101010101010101300762240a200101010101010101010101010101010101010101010101010101010101010101102e6a600000000000000000000000000000000000000000000000003b27a0fd747b71ec52533aa0829aa2f5ff876095abfc5f6f3aa6a8013994244b1d22ab1feb15c0a03d1c3523c78756f3ec3f80421aac5d7de7e62bfe5088961f609485b7961e32fb1240a2c89cfe2ef8c5f357178e5078f9c3ff42f85beac612d9f29dcbf1ce19cbb55225c7b89c7c5d09dd6484c051cd308bcd97569222efc59c90961f285101a5240c",
+        "seq": 7,
+        "supersedes": [],
+        "writer": "0101010101010101010101010101010101010101010101010101010101010101"
+      },
+      {
+        "content": 1,
+        "deleted": false,
+        "fault": null,
+        "hash": "a59f11a37f12115995732bc5311a6109f488361e072d380e90e904e982847452",
+        "kind": "file",
+        "label": "O1",
+        "mode": 420,
+        "mtime_ns": 1000,
+        "path": "o",
+        "record": "0ace01080110101a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912a20a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0300162240a200101010101010101010101010101010101010101010101010101010101010101102e6a5c0000000000000000000000000000000000000000000000003b27a0e6747c7d9d352ef7017a9c9250dc5d47bc0efe6c4e3aa6a8013994244b1d22ab1feb15c0a03d1c3523c78756f3ec3f804310e709e5850100d5fca9223e4adf697712409ecb2b0a23a245db5a45c5d2d1ef8e5082c381e178ccc8d6f781d1377e553df70b0513173931cf59d88edf2a18933ddfcf9dbb5c6fe76ea26e010c3ea2efa805",
+        "seq": 1,
+        "supersedes": [],
+        "writer": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+      }
+    ],
+    "rows": [
+      "push_gap",
+      "sender_violation",
+      "forged",
+      "duplicate",
+      "concurrent_version",
+      "writer_fault",
+      "own_sequence_ahead"
+    ],
+    "steps": [
+      {
+        "after": {
+          "paths": {
+            "a": {
+              "conflict": false,
+              "copies": [],
+              "current": "R1",
+              "deleted": false,
+              "heads": [
+                "R1"
+              ]
+            }
+          },
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "R1",
+        "outcome": {
+          "changed": [
+            "a"
+          ],
+          "fault": null,
+          "judgement": "next",
+          "own_ahead": false,
+          "released": [],
+          "rows": [],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "R3",
+        "outcome": {
+          "changed": [],
+          "fault": null,
+          "judgement": "push_gap",
+          "own_ahead": false,
+          "released": [],
+          "rows": [
+            "push_gap"
+          ],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "R3",
+        "outcome": {
+          "changed": [],
+          "fault": null,
+          "judgement": "push_gap",
+          "own_ahead": false,
+          "released": [],
+          "rows": [
+            "push_gap"
+          ],
+          "waits": false
+        },
+        "variant": "signature bit flipped"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": {
+          "reply": {
+            "in_scope": true
+          }
+        },
+        "deliver": "R3",
+        "outcome": {
+          "refused": "sender_violation"
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": {
+          "reply": {
+            "in_scope": true
+          }
+        },
+        "deliver": "R3",
+        "outcome": {
+          "refused": "sender_violation"
+        },
+        "variant": "signature bit flipped"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": {
+          "reply": {
+            "in_scope": false
+          }
+        },
+        "deliver": "R2",
+        "outcome": {
+          "refused": "sender_violation"
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "R2",
+        "outcome": {
+          "refused": "forged"
+        },
+        "variant": "signature bit flipped"
+      },
+      {
+        "after": {
+          "paths": {
+            "b": {
+              "conflict": false,
+              "copies": [],
+              "current": "R2",
+              "deleted": false,
+              "heads": [
+                "R2"
+              ]
+            }
+          },
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "R2",
+        "outcome": {
+          "changed": [
+            "b"
+          ],
+          "fault": null,
+          "judgement": "next",
+          "own_ahead": false,
+          "released": [],
+          "rows": [],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {
+            "c": {
+              "conflict": false,
+              "copies": [],
+              "current": "R3",
+              "deleted": false,
+              "heads": [
+                "R3"
+              ]
+            }
+          },
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "R3",
+        "outcome": {
+          "changed": [
+            "c"
+          ],
+          "fault": null,
+          "judgement": "next",
+          "own_ahead": false,
+          "released": [],
+          "rows": [],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "R2",
+        "outcome": {
+          "changed": [],
+          "fault": null,
+          "judgement": "duplicate",
+          "own_ahead": false,
+          "released": [],
+          "rows": [
+            "duplicate"
+          ],
+          "waits": false
+        },
+        "variant": "garbage signature"
+      },
+      {
+        "after": {
+          "paths": {
+            "b2": {
+              "conflict": false,
+              "copies": [],
+              "current": "C2",
+              "deleted": false,
+              "heads": [
+                "C2"
+              ]
+            }
+          },
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "C2",
+        "outcome": {
+          "changed": [
+            "b2"
+          ],
+          "fault": null,
+          "judgement": "concurrent_version",
+          "own_ahead": false,
+          "released": [],
+          "rows": [
+            "concurrent_version"
+          ],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {
+            "c3": {
+              "conflict": false,
+              "copies": [],
+              "current": "C3",
+              "deleted": false,
+              "heads": [
+                "C3"
+              ]
+            }
+          },
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "C3",
+        "outcome": {
+          "changed": [
+            "c3"
+          ],
+          "fault": null,
+          "judgement": "concurrent_version",
+          "own_ahead": false,
+          "released": [],
+          "rows": [
+            "concurrent_version"
+          ],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "F4",
+        "outcome": {
+          "changed": [],
+          "fault": "seal",
+          "judgement": "next",
+          "own_ahead": false,
+          "released": [],
+          "rows": [
+            "writer_fault"
+          ],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "F5",
+        "outcome": {
+          "changed": [],
+          "fault": "directory_with_chunks",
+          "judgement": "next",
+          "own_ahead": false,
+          "released": [],
+          "rows": [
+            "writer_fault"
+          ],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "F6",
+        "outcome": {
+          "changed": [],
+          "fault": "file_without_chunks",
+          "judgement": "next",
+          "own_ahead": false,
+          "released": [],
+          "rows": [
+            "writer_fault"
+          ],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {},
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "F7",
+        "outcome": {
+          "refused": "forged"
+        },
+        "variant": "signature bit flipped"
+      },
+      {
+        "after": {
+          "paths": {
+            "café": {
+              "conflict": false,
+              "copies": [],
+              "current": "N7",
+              "deleted": false,
+              "heads": [
+                "N7"
+              ]
+            }
+          },
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "N7",
+        "outcome": {
+          "changed": [
+            "café"
+          ],
+          "fault": null,
+          "judgement": "next",
+          "own_ahead": false,
+          "released": [],
+          "rows": [],
+          "waits": false
+        },
+        "variant": "as signed"
+      },
+      {
+        "after": {
+          "paths": {
+            "o": {
+              "conflict": false,
+              "copies": [],
+              "current": "O1",
+              "deleted": false,
+              "heads": [
+                "O1"
+              ]
+            }
+          },
+          "waiting": []
+        },
+        "as": "push",
+        "deliver": "O1",
+        "outcome": {
+          "changed": [
+            "o"
+          ],
+          "fault": null,
+          "judgement": "next",
+          "own_ahead": true,
+          "released": [],
+          "rows": [
+            "own_sequence_ahead"
+          ],
+          "waits": false
+        },
+        "variant": "as signed"
+      }
+    ]
+  },
+  "description": "protocol.md 8 item 6, the index's part: each record's outcome against its writer's records (next, push gap, reply gap, out of scope, forged, duplicate, concurrent versions below and at the cursor, writer faults, a path that is not NFC, a record under the device's own ID), with the section 5 rows reached, and the writer's cached digests at the end.",
+  "digests": [
+    "fd1c44213333a177546336c6166344a882751c02f659e144c394ab25701e2ccb",
+    "a06730c225fbdd5dfb916409ae6d4b911a84f20db408f3c79ec858c3d046113b",
+    "f2bdd6b5fca5b9fef902ca33791756d71c45e4e1f6b1da1e5bb3a0f348311536",
+    "72fe893a2643260cc3b15bab45a319aa929fb137672a43844d9bcc6a6dd7286e",
+    "00d55595db62f3f9c7ce9fa4fabd89d580e8fcd91a90e28bc191349902bd24d1",
+    "817e92d655c769663a5aa5d586c14cc040a766b46d5319fa64f3bbb53e8df14e",
+    "0ffa242addbccecca6142b0fbb19a9bfe3c3513e3f29db5eafbae6970d72667b"
+  ],
+  "folder_id": "68ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd18891",
+  "own_device": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+}

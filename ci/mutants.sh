@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One shard of the weekly mutation test (mutants.yml):
-# cargo-mutants over the crates the plan names (keys, protocol, engine), shard
+# cargo-mutants over the crates the plan names (keys, protocol, engine) and the
+# index crate, which TM-17, TM-40 and TM-41 name as their enforcer, shard
 # <k>/<n> of their mutants dealt round-robin, stopped after <budget> (a
 # duration as timeout(1) reads it, such as 180m). cargo-mutants first builds and
 # tests the unmutated tree (its baseline), then each mutant of the shard with a
@@ -46,7 +47,7 @@ tmo=/usr/bin/timeout
 status=0
 "$tmo" --signal=INT "$budget" \
   cargo mutants --package licketysync-keys --package licketysync-protocol \
-  --package licketysync-engine --timeout 300 --no-shuffle --sharding round-robin \
+  --package licketysync-index --package licketysync-engine --timeout 300 --no-shuffle --sharding round-robin \
   --shard "$shard" || status=$?
 
 count() { # count <outcome>: the lines of mutants.out/<outcome>.txt, 0 when absent

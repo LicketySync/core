@@ -145,9 +145,11 @@ step ci/test-vector-line-endings.sh
 # The scripts mutants.yml and nightly.yml's fuzz jobs run, on stand-ins for the tools.
 step ci/test-mutants.sh
 step ci/test-fuzz-targets.sh
-# 90% line coverage on each of the crates the plan names, measured per crate:
-# only that crate's own files count, so a well-tested neighbour cannot mask it.
-for c in keys protocol engine; do
+# 90% line coverage on each of the crates the plan names, and on the index
+# crate, which TM-17, TM-40 and TM-41 name as their enforcer (review ruling of
+# 2026-10-22), measured per crate: only that crate's own files count, so a
+# well-tested neighbour cannot mask it.
+for c in keys protocol index engine; do
   others=$(ls crates | grep -vx "$c" | paste -sd'|' -)
   step cargo llvm-cov nextest --all-features --fail-under-lines 90 \
     -p "licketysync-$c" --ignore-filename-regex "crates/($others)/"
