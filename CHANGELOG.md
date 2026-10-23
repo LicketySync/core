@@ -6,6 +6,31 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- `ctutils`, `cmov` and `constant_time_eq` confined beneath their wrappers in `deny.toml`, as the
+  other primitives beneath the approved crates are (`suites.md` section 3.1, TM-5): `ctutils` to
+  `universal-hash`, whose Poly1305 tag comparison is its one use here; `cmov` to `ctutils`; and
+  `constant_time_eq` to `blake3`, whose constant-time `Hash` equality uses it
+  (`blake3-1.8.7/src/lib.rs` lines 354 to 370). The changes that added `chacha20poly1305` and
+  `blake3`, which brought them in, added no entries, so until now any first-party crate could depend
+  on them directly and compare secrets with them instead of `subtle` (section 4.2). The other
+  cryptography crates were checked against the lock file: every primitive beneath an approved crate
+  already had its entry (`curve25519-dalek`, `fiat-crypto`, `ed25519`, `signature`, `sha2`,
+  `chacha20`, `poly1305`, `universal-hash`, `cipher`, `aead`, `bitcoin_hashes`). `subtle` and
+  `zeroize` are approved crates that first-party code may use, so they stay open. `rand`,
+  `rand_core` and `getrandom` reach only the dev graph, through `proptest`. Trait, buffer and
+  platform crates with no primitive of their own (`digest`, `crypto-common`, `block-buffer`,
+  `inout`, `hybrid-array`, `cpufeatures`, `typenum`, the proc macro `curve25519-dalek-derive`) are
+  not entries. Section 3.1's text needs no change: it already says that `deny.toml` restricts the
+  primitives beneath the crates `keys` uses to listed wrappers, and that a change that adds another
+  adds its entry; `deny.toml` lacked these three. They go in `deny.toml` alone: test tooling reaches
+  none of them, so `deny-production.toml` needs no counterpart. Test that fails without the change:
+  in a scratch copy of 48fdd51, each of the three made a direct dependency of `licketysync-engine`
+  passes `cargo deny check bans` ("bans ok"); with this `deny.toml` each fails with exit 2,
+  "error[banned]: crate '<name> = <version>' is explicitly banned" and an unmatched-wrapper warning
+  naming `licketysync-engine`. The tree itself still passes both `cargo deny check` and
+  `cargo deny --config deny-production.toml check bans`.
+  Reviewed 2026-10-23 by a6f5b62e386e3052d (quality) and ae6e5cf67635866e1 (security), both clean.
+  Author a9de371d3a0c03b1f; the merge agent wrote this line.
 - CI's coverage job renamed from "coverage (cargo-llvm-cov, 90% on key/protocol/engine)" to
   "coverage (cargo-llvm-cov, 90% on keys/protocol/index/engine)", the crates its loop holds to 90%
   line coverage, as `gate.sh`'s does, since the index crate joined them (the review ruling of

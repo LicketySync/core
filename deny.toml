@@ -53,6 +53,9 @@ deny = [
   # BLAKE3 only through the keys crate's labelled helpers, so no other crate
   # can compute an unlabelled hash (threat-model ruling of 2026-10-17).
   { crate = "blake3", wrappers = ["licketysync-keys"], reason = "labelled hashing lives in licketysync-keys; the protocol crate takes its hashes from there" },
+  # blake3's constant-time `Hash` equality. First-party code compares secrets
+  # with subtle (suites.md 4.2).
+  { crate = "constant_time_eq", wrappers = ["blake3"], reason = "BLAKE3's hash comparison, inside blake3 only" },
   # The record layer's AEAD: chunks, sealed metadata and the sealed
   # FolderProof's primitive, all in keys.
   { crate = "chacha20poly1305", wrappers = ["licketysync-keys"], reason = "the AEAD of suite 1, used through licketysync-keys only" },
@@ -73,6 +76,10 @@ deny = [
   { crate = "chacha20", wrappers = ["chacha20poly1305", "proptest"], reason = "never without the MAC" },
   { crate = "poly1305", wrappers = ["chacha20poly1305"], reason = "never without the cipher" },
   { crate = "universal-hash", wrappers = ["poly1305"], reason = "reached only through chacha20poly1305" },
+  # universal-hash's constant-time tag comparison and the conditional moves
+  # beneath it. First-party code compares secrets with subtle (suites.md 4.2).
+  { crate = "ctutils", wrappers = ["universal-hash"], reason = "reached only through chacha20poly1305" },
+  { crate = "cmov", wrappers = ["ctutils"], reason = "reached only through chacha20poly1305" },
   { crate = "cipher", wrappers = ["chacha20", "chacha20poly1305"], reason = "reached only through chacha20poly1305" },
   { crate = "aead", wrappers = ["chacha20poly1305"], reason = "reached only through chacha20poly1305" },
   { crate = "bitcoin_hashes", wrappers = ["bip39"], reason = "the words' checksum SHA-256, inside bip39 only" },
