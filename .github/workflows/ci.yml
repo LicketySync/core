@@ -62,7 +62,7 @@ jobs:
       - run: cargo test --workspace --doc
 
   coverage:
-    name: coverage (cargo-llvm-cov, 90% on key/protocol/engine)
+    name: coverage (cargo-llvm-cov, 90% on keys/protocol/index/engine)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

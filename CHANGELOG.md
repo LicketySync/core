@@ -6,6 +6,13 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- CI's coverage job renamed from "coverage (cargo-llvm-cov, 90% on key/protocol/engine)" to
+  "coverage (cargo-llvm-cov, 90% on keys/protocol/index/engine)", the crates its loop holds to 90%
+  line coverage, as `gate.sh`'s does, since the index crate joined them (the review ruling of
+  2026-10-22). Only the display name changes; no ruleset requires a status check by name.
+  Reviewed 2026-10-23 by a4bc86829376620ff (correctness, clean), a6f5b62e386e3052d (quality; one
+  should-fix, fixed, confirmed clean) and ae6e5cf67635866e1 (security, clean; confirmed, also for
+  the correctness reviewer's items). Author a9de371d3a0c03b1f; the merge agent wrote this line.
 - `ctutils` updated from 0.4.3 to 0.4.4 for RUSTSEC-2026-0385, "Non-constant-time mask generation
   and `u128` comparisons" (https://github.com/RustCrypto/utils/pull/1569, the 0.4.4 release; the
   fixes are its pull requests 1567 and 1568), published on 2026-10-23. It turned the Nightly
