@@ -32,7 +32,7 @@ jobs:
           tool: cargo-auditable,cargo-cyclonedx
       - run: cargo auditable build --release --locked --target ${{ matrix.target }} --package licketysync-cli
       - run: cargo cyclonedx --format json --all
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: target/${{ matrix.target }}/release/licketysync
       - uses: actions/upload-artifact@v4
