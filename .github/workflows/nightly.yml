@@ -83,7 +83,7 @@ jobs:
           cargo +nightly fuzz run "$TARGET" "$PWD/corpus/$TARGET" "$PWD/seeds/$TARGET" -- -max_total_time=1800
       # The input that crashed, to reproduce with `cargo +nightly fuzz run
       # <target> <file>`.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: fuzz-crash-${{ matrix.target }}

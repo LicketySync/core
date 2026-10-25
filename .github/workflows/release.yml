@@ -35,7 +35,7 @@ jobs:
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: target/${{ matrix.target }}/release/licketysync
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: licketysync-${{ matrix.target }}
           path: |
