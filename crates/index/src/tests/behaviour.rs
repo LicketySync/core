@@ -16,8 +16,8 @@ use licketysync_protocol::Cause;
 
 use super::kit::{
     converge, dev, display_order, flipped_signature, garbage_signature, heads, index, index_as,
-    other_key, push, read_index, sealed_index, snapshot, verifier, write_key, Fault, Flaky, Spec,
-    OWN,
+    other_key, push, read_index, reopen, sealed_index, snapshot, verifier, with_set_aside,
+    write_key, Fault, Flaky, Spec, OWN,
 };
 use crate::{
     AcceptError, Index, Kept, MemoryStore, OpenError, Reply, Store, StoreError, WriteError,
@@ -326,7 +326,7 @@ fn a_store_failure_changes_nothing() {
         fail_append: true,
         ..Flaky::default()
     };
-    let mut ix = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
+    let mut ix = reopen(FolderKey::from(write_key()), OWN, store);
     let before = snapshot(&ix);
     let err = ix.accept(r.clone(), Arrival::Push).unwrap_err();
     assert_eq!(err, AcceptError::Store(StoreError::Full));
@@ -347,7 +347,7 @@ fn a_store_failure_changes_nothing() {
     // failure left nothing behind that would make it a duplicate.
     let mut store = ix.into_store();
     store.fail_append = false;
-    let mut ix = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
+    let mut ix = reopen(FolderKey::from(write_key()), OWN, store);
     assert_eq!(
         ix.accept(r, Arrival::Push).unwrap().judgement,
         Judgement::Next
@@ -390,7 +390,7 @@ fn reopening_rebuilds_the_same_state_from_the_records() {
     assert_eq!(state.waiting.len(), 1);
     assert_eq!(state.opaque.len(), 1);
     assert!(ix.heads("c").is_deleted());
-    let reopened = Index::open(FolderKey::from(write_key()), OWN, ix.into_store()).unwrap();
+    let reopened = reopen(FolderKey::from(write_key()), OWN, ix.into_store());
     assert_eq!(snapshot(&reopened), state);
     assert_eq!(reopened.next_seq(), Some(1));
 }
@@ -405,23 +405,27 @@ fn opening_counts_a_record_loaded_twice_once_even_when_a_lower_writer_names_it()
         .names(&[named.hash()])
         .content(2)
         .record();
-    let mut ix = Index::open(FolderKey::from(write_key()), OWN, Flaky::default()).unwrap();
+    let mut ix = reopen(FolderKey::from(write_key()), OWN, Flaky::default());
     push(&mut ix, &named);
     push(&mut ix, &naming);
     let state = snapshot(&ix);
     assert_eq!(state.heads, vec![("p".to_string(), vec![naming.hash()])]);
     let mut store = ix.into_store();
     store.extra = vec![named.signed().clone(), named.signed().clone()];
-    let reopened = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
+    let reopened = reopen(FolderKey::from(write_key()), OWN, store);
     assert_eq!(snapshot(&reopened), state);
     // One digest step per distinct record, and the one waiter notified.
     assert_eq!(reopened.work, 3);
 }
 
+/// Was "opening refuses a corrupt store": a gap in the store and a record of
+/// another folder made `open` fail. Each is now set aside or dropped and
+/// reported, and the rest opens as before (the owner's decision of
+/// 2026-10-25).
 #[test]
-fn opening_refuses_a_corrupt_store_and_tolerates_repeats() {
+fn opening_sets_aside_a_gap_drops_a_foreign_record_and_tolerates_repeats() {
     let records = assorted();
-    let mut ix = Index::open(FolderKey::from(write_key()), OWN, Flaky::default()).unwrap();
+    let mut ix = reopen(FolderKey::from(write_key()), OWN, Flaky::default());
     for r in &records {
         push(&mut ix, r);
     }
@@ -432,15 +436,17 @@ fn opening_refuses_a_corrupt_store_and_tolerates_repeats() {
         records[2].signed().clone(),
         records[6].signed().clone(),
     ];
-    let ix = Index::open(FolderKey::from(write_key()), OWN, store.clone()).unwrap();
+    let ix = reopen(FolderKey::from(write_key()), OWN, store.clone());
     assert_eq!(snapshot(&ix), state, "a record loaded twice counts once");
-    store.extra = vec![Spec::file(dev(7), 3, "gap").record().signed().clone()];
+    // A record past a gap, here one the store never held below it.
+    let past_gap = Spec::file(dev(7), 3, "gap").record();
+    store.extra = vec![past_gap.signed().clone()];
+    let (ix, report) = Index::open(FolderKey::from(write_key()), OWN, store.clone()).unwrap();
+    assert_eq!(report.set_aside, vec![past_gap.hash()]);
+    assert!(report.dropped.is_empty() && !report.is_clean());
     assert_eq!(
-        Index::open(FolderKey::from(write_key()), OWN, store.clone()).unwrap_err(),
-        OpenError::Gap {
-            writer: dev(7),
-            seq: 3
-        }
+        snapshot(&ix),
+        with_set_aside(state.clone(), &report.set_aside)
     );
     // A record of another folder fails step 1 against this one.
     let key = other_key();
@@ -454,11 +460,11 @@ fn opening_refuses_a_corrupt_store_and_tolerates_repeats() {
     }
     .sign(&key, &mut |b: &mut [u8]| b.fill(1))
     .unwrap();
-    store.extra = vec![foreign];
-    assert!(matches!(
-        Index::open(FolderKey::from(write_key()), OWN, store.clone()).unwrap_err(),
-        OpenError::Unreadable(_)
-    ));
+    store.extra = vec![foreign.clone()];
+    let (ix, report) = Index::open(FolderKey::from(write_key()), OWN, store.clone()).unwrap();
+    assert_eq!(report.dropped, vec![foreign.hash()]);
+    assert_eq!(report.set_aside, Vec::<RecordHash>::new());
+    assert_eq!(snapshot(&ix), state);
     store.extra.clear();
     store.fail_load = true;
     assert_eq!(
@@ -483,12 +489,11 @@ fn a_sealed_holder_stores_unopened_and_computes_no_heads() {
     assert!(s.heads.is_empty() && s.waiting.is_empty() && s.opaque.is_empty());
     assert!(sealed.heads("a").is_empty());
     // A sealed holder rebuilds the same way.
-    let reopened = Index::open(
+    let reopened = reopen(
         FolderKey::from(write_key().sealed_key()),
         OWN,
         sealed.into_store(),
-    )
-    .unwrap();
+    );
     assert_eq!(snapshot(&reopened), s);
 }
 
@@ -638,7 +643,7 @@ fn versions_at_one_seq_in_canonical_order_cost_one_step_each_even_on_reopen() {
         assert_eq!(ix.work - work, 1);
     }
     assert_eq!(cached_digests(&ix, &w), reference_digests(&ix, &w));
-    let reopened = Index::open(FolderKey::from(write_key()), OWN, ix.into_store()).unwrap();
+    let reopened = reopen(FolderKey::from(write_key()), OWN, ix.into_store());
     assert_eq!(reopened.work, k, "a reopen is linear");
     assert_eq!(
         cached_digests(&reopened, &w),
@@ -976,17 +981,11 @@ fn errors_and_debug_name_their_cause() {
         WriteError::Draft(licketysync_protocol::record::DraftError::Seq(0)).to_string(),
         WriteError::Store(StoreError::Io("x".into())).to_string(),
         OpenError::Store(StoreError::Full).to_string(),
-        OpenError::Unreadable(licketysync_protocol::WireError::Truncated).to_string(),
-        OpenError::Gap {
-            writer: dev(1),
-            seq: 2,
-        }
-        .to_string(),
     ];
     for t in &texts {
         assert_ne!(t, "");
     }
-    assert!(texts[5].contains('3') && texts[10].contains("seq 2"));
+    assert!(texts[5].contains('3') && texts[8].contains("full"));
     let ix = index();
     let debug = format!("{ix:?}");
     assert!(debug.starts_with("Index") && debug.contains("records: 0"));
@@ -1005,6 +1004,14 @@ fn the_memory_store_keeps_what_is_appended() {
     // The same record again is kept once.
     s.append(&r).unwrap();
     assert_eq!(s.len(), 1);
+    // A copy under the same hash replaces the envelope kept: a bad one is
+    // replaced by the good one appended after it.
+    let bad = flipped_signature(&r);
+    assert_eq!(bad.hash(), r.hash());
+    s.append(&bad).unwrap();
+    assert_eq!(s.load().unwrap(), vec![bad.signed().clone()]);
+    s.append(&r).unwrap();
+    assert_eq!((s.len(), s.load().unwrap()), (1, vec![r.signed().clone()]));
     // A backup is a clone; it does not see what lands later.
     let backup = s.clone();
     s.append(&Spec::file(dev(1), 2, "a").record()).unwrap();

@@ -12,7 +12,9 @@ Every byte that arrives from a peer is untrusted: lengths are checked before any
 every collection a peer can grow is bounded, every decoder is fuzzed, and nothing is ever silently
 skipped: section 5's table says, for every failure, whether it closes the connection (malformed or
 forged input, the sender's fault), is set aside while the connection stays open (a difference in
-what the two peers hold), or is raised under Issues against the record a valid signature covers.
+what the two peers hold), or is raised under Issues against the record a valid signature covers. A
+record in this device's own index store that fails its check when a folder opens involves no
+connection: it is dropped and reported (4.4, "Opening a folder"; `threat-model.md` TM-9).
 **Issues** is the list of problems a device shows its person (the plan's Issues panel); every
 outcome in section 5 that says "issue" adds one that names its cause.
 
@@ -493,8 +495,10 @@ message SealedMeta {
   at the cursor plus one extends the cache and a concurrent version at the cursor whose
   `record_hash` sorts above the others there moves the cursor's digest alone, and a record that
   lands below others in canonical order recomputes it from its own `seq` up. A peer that rebuilds
-  the cache from its stored records replays them in canonical order, one step each. Serving a
-  request reads the cache and never recomputes a digest (4.5).
+  the cache from its stored records checks them again and replays in canonical order, one step each,
+  those that pass and do not lie above a gap; a record set aside above a gap costs one step when it
+  lands (below, "Opening a folder"). Serving a request reads the cache and never recomputes a digest
+  (4.5).
 - **Concurrent versions** (ruling R-K5). A record of a writer at a `seq` where the peer already
   holds another record of that writer is a concurrent version: it is stored like any other record,
   in canonical order, and the heads (below) decide what it means for its path, as for any concurrent
@@ -608,7 +612,11 @@ failure is the one section 5's table gives for its cause; the causes are named h
    **forged**. Nothing below may be charged to anyone unless the folder key signed it, and every
    signature a peer verifies either stores a record it did not hold or closes the connection
    (TM-22), short of a **store failure**, when this device's own index store cannot take the record
-   and the folder pauses (section 5).
+   and the folder pauses (section 5). (The check of this device's own store when a folder opens,
+   below, verifies records already stored, one verification each. No peer can make it run, but a
+   write holder that floods the folder with records makes every later open longer by one
+   verification per record, the cost class of `threat-model.md` §3.6. Resuming after a store failure
+   does not reopen the index, so the check does not run again then.)
 5. **Store**: `seq ≤ n`: a **concurrent version**: store it, and recompute the writer's cached
    digests from `seq` up (one step when it sorts last at the cursor, above). `seq = n + 1`: store
    it; the cursor becomes `seq`. Every stored record counts in its writer's records, cursor and
@@ -634,7 +642,64 @@ failure is the one section 5's table gives for its cause; the causes are named h
 (tombstone expiry, which drops a path's visibility and keeps its records, and any compaction are the
 index design's, phase 1). A peer that offers lower cursors is simply behind, and nothing is asked of
 it. Each peer persists its records, so a stale snapshot from a sealed peer or relay can never be
-mistaken for the present.
+mistaken for the present. The one way a cursor falls is this device's own store losing or corrupting
+records at rest: the next open drops a corrupted record and sets aside the records above a lost or
+dropped one (below); nothing a peer sends causes it, and index sync fetches the records again.
+
+**Opening a folder** (the owner's decision of 2026-10-25). This device's own index store is trusted
+to keep the records appended to it, not for their authenticity (`threat-model.md` TM-9). When a
+folder opens, every record its store returns gets the checks a record from a peer gets before it is
+stored: step 1 against the folder, its `folder_id` included, and step 4, its signature under the
+folder's verification key, at every tier, a sealed holder's included; the signatures are verified
+across the processor's cores, and the result does not depend on how many.
+
+- A record that fails (corrupted or edited at rest, or not this folder's) is **dropped**: nothing of
+  it is applied, counted in a cursor or digest, or served, and the open reports it by record hash
+  (of the body as stored). A failing copy beside a copy of the same record hash that passes is
+  dropped without a report, since the record itself is there.
+- Since a writer's records are held contiguously from `seq` 1, a record that passes but lies above a
+  `seq` at which its writer has no stored record that passes (one was dropped, or the store lost it)
+  is **set aside**: kept in memory, neither held nor served, reported with the dropped ones, and
+  **landed**, without being stored again, once every gap below it is filled, that is once its
+  writer's cursor reaches its `seq` minus one, the records at the missing `seq`s coming from peers
+  or written by this device. Landing replays it in canonical order like any other record, so the
+  index stays what a reopen of the same store gives, and a landed record counts as newly accepted:
+  it is pushed to every connection where the folder is open, the one the filling record arrived on
+  included (4.5, "Pushes").
+- The other records that pass are replayed as above: the cursors, cached digests, waiting records
+  and heads are rebuilt from the records held (opaque and sealed ones included), exactly as the same
+  records accepted from peers would give. So a dropped or set-aside record is one this device lacks,
+  and index sync fetches every genuine one again from any peer that holds it: the device's cursor
+  stands below a record missing at the top of a writer's sequence, so a responder sends it by case
+  (a), (b) or (c), and a concurrent version missing at or below the cursor makes the device's digest
+  differ from that of any peer that holds it, so the comparison resends the writer in full (case (c)
+  and the marks; 4.5, "Why it converges").
+- A record changed at rest under a new record hash stays in the store and is dropped and reported
+  again at each open; one changed under the same hash (its signature bytes) is replaced in the store
+  by the good copy when that arrives, since a store keeps the envelope appended last under a hash.
+- Stated residuals, of a store that lost records or had them withheld at rest: a record that no peer
+  holds stays missing, and the records of its writer above it, whatever the writer, stay set aside,
+  intact, and reported at every open until a record at that `seq` is held; withholding this device's
+  own records makes it reuse their sequence numbers, which peers keep as concurrent versions, as
+  after a restored backup (4.5, "Durability before transmission"), and it reuses only those at which
+  no record of its own passed, since the records set aside above each land once it writes at the
+  gap; and records of any writer that only this device held are lost with the store.
+- For the engine (when it lands): it shows the folder as **Checking** in its folder state (the
+  engine's own, which the Status message does not carry) while the index opens, and runs the open
+  off any asynchronous executor, since the open blocks its thread for the whole check; it raises one
+  issue for what was dropped or set aside, with the counts and at most 16 of the record hashes (a
+  fixed engine constant), never a device; when the store returned records and none of them passed (a
+  store of another folder, or under another key), which it tells by an index that holds nothing, an
+  empty set-aside list and a non-empty dropped list, it treats the folder as misconfigured and shows
+  an error rather than scanning the disk into an empty index; and a folder re-keyed under a new
+  write key starts with a fresh store.
+- A phase 1 store that keeps bytes decodes each envelope when it loads; bytes that no longer decode
+  it drops and reports, as the open does for a record that fails its checks, and it never fails the
+  whole load for them or loses them without trace; `Store::load` will need a way to report them, for
+  example into the open's report.
+- Opening costs one signature verification per stored record (`threat-model.md` TM-9 gives the
+  measured cost); a labelled keyed checksum per stored record replaces it only if measurements on a
+  phone or NAS show start-up too slow.
 
 What this layer guarantees is that every peer that holds the same records applies the same ones and
 computes the same heads, in any arrival order, and that two peers that serve each other's requests
@@ -801,21 +866,24 @@ message FolderStatus {
 - **Pushes** (ruling PUSH-2). From the moment a folder opens on a connection, a peer pushes every
   index record it newly accepts to every connection where the folder is open except the one the
   record arrived on, so that a record accepted while the first round runs is not missed: each
-  writer's records in canonical order, at most `MAX_PAGE_RECORDS` records per push. A push that the
-  send queue cannot take is dropped, and the sender then owes the receiver one empty push for the
-  folder (one flag per folder per connection), which waits in order like a reply and is never
-  dropped (3.1).
+  writer's records in canonical order, at most `MAX_PAGE_RECORDS` records per push. Records that
+  land because a record filled the gaps below them (4.4, "Opening a folder") count as newly accepted
+  too, and are pushed to every connection where the folder is open, the one the filling record
+  arrived on included, since they did not arrive there. A push that the send queue cannot take is
+  dropped, and the sender then owes the receiver one empty push for the folder (one flag per folder
+  per connection), which waits in order like a reply and is never dropped (3.1).
 - **Durability before transmission.** A writer commits a new record and its sequence counter to its
   own index before any peer may receive it, so a crash can never make it reuse a sequence number; a
   peer forwards only records it has itself verified and committed, opaque ones (4.4 step 6)
   included. A device that comes to hold a record under its own device ID at a `seq` at or above the
-  next one it would use (it was restored from a backup of its index, or another write holder wrote
-  under its ID) moves its counter past the highest such `seq` before it writes again and raises an
-  informational issue that names no one. A restored device's reused sequence numbers make concurrent
-  versions (4.4), never a fault, and its edits name the heads it still held, which makes a conflict
-  rather than a silent loss (an engine rule). A device whose next `seq` would pass `MAX_SEQ` takes a
-  new device ID (`keys.md` §8.1); since a peer holds a writer's records contiguously from 1, no
-  device comes near it.
+  next one it would use (it was restored from a backup of its index, opening its folder dropped
+  records of its own that its store corrupted at rest or set aside those above one it lost or
+  dropped (4.4, "Opening a folder"), or another write holder wrote under its ID) moves its counter
+  past the highest such `seq` before it writes again and raises an informational issue that names no
+  one. A restored device's reused sequence numbers make concurrent versions (4.4), never a fault,
+  and its edits name the heads it still held, which makes a conflict rather than a silent loss (an
+  engine rule). A device whose next `seq` would pass `MAX_SEQ` takes a new device ID (`keys.md`
+  §8.1); since a peer holds a writer's records contiguously from 1, no device comes near it.
 - Status is sent every `STATUS_INTERVAL` (30 s, through the clock trait) and on change, for open
   folders only; a change in `chunks_stored` alone sends at most one Status per second per folder per
   connection. It is advisory and never changes what a peer will accept. A Status that the send queue
@@ -938,16 +1006,19 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 - **Every decoder is fuzzed**: frames, every message body, every record body, the sealed metadata,
   chunk blobs, key strings, words and links. A decoder never panics and never reads past a declared
   length.
-- **Nothing is silently skipped.** Every failure has exactly one of three outcomes, and the table
-  below is the complete mapping. *Close* is for what only the sender can be blamed for: it forwarded
+- **Nothing is silently skipped.** Every failure on a connection has exactly one of three outcomes,
+  and the table below is the complete mapping; its last two rows concern this device's own index
+  store: a store failure, for a record that arrived on a connection and that the store cannot take,
+  and a stored record that fails its check when a folder opens, which involves no connection
+  (`threat-model.md` TM-9). *Close* is for what only the sender can be blamed for: it forwarded
   bytes that do not parse or do not verify, or broke the protocol's order or bounds. *Set aside and
-  keep* is for differences in what two peers hold: a gap, a duplicate, a record waiting for a version
-  it names, a proof for a folder that is not here, a chunk the holder lacks. *Issue against the
-  record* is for what a valid signature covers: the body is what a write holder signed, the sender
-  merely carried it, so the issue names the record (by hash, and by path where the seal opened),
-  never a device (ruling S-4), the item is kept opaque or marked corrupt, and the connection stays
-  open. Every outcome raises an issue or a log line that names the cause; none drops the item without
-  trace.
+  keep* is for differences in what two peers hold: a gap, a duplicate, a record waiting for a
+  version it names, a proof for a folder that is not here, a chunk the holder lacks. *Issue against
+  the record* is for what a valid signature covers: the body is what a write holder signed, the
+  sender merely carried it, so the issue names the record (by hash, and by path where the seal
+  opened), never a device (ruling S-4), the item is kept opaque or marked corrupt, and the
+  connection stays open. Every outcome raises an issue or a log line that names the cause; none
+  drops the item without trace.
 - **No blame before a signature.** No writer-fault outcome may be reached on a record whose signature
   has not verified; a signature failure is always forged. Every procedure in this file and in
   `keys.md` verifies the signature before any step whose failure is charged to the signer; until
@@ -982,6 +1053,7 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 | `CHUNK_NOT_FOUND` | An ordinary answer: no state is kept for the hash; the pass to that peer goes on, and the requester asks other peers for the chunk; the next pass to that peer waits for a greater `chunks_stored` in its Status or a completed round with it, and at least 1 s (4.6); keep |
 | A record under this device's own device ID at or above the next `seq` it would use (4.5, "Durability before transmission") | Store and apply; move its counter past it before writing again; informational issue naming no one; keep |
 | **Store failure**: this device's own index store cannot take a record whose signature verified (the disk is full, an I/O error) | Nothing is stored and nothing changes; the folder pauses until its store takes records again (the engine's to detect), accepting none of its records meanwhile, so that no peer can make this device verify the same record again and again (TM-22); on resuming, the device owes each connection where the folder is open a round, which brings back what it set aside (decision); issue naming the cause; keep |
+| **Stored record fails its check** when the folder opens: a record in this device's own index store that fails step 1 against the folder or whose signature does not verify under the folder key; or one that passes but lies above a `seq` at which its writer has no stored record that passes (4.4, "Opening a folder"; the owner's decision of 2026-10-25) | Drop a record that fails: nothing of it is applied, counted or served (a failing copy beside a passing copy of the same record hash is dropped without a report); set aside one above a gap, neither held nor served, until every gap below it is filled, then land it without storing it again and push it like a record newly accepted (4.5, "Pushes"); the open reports both by record hash; the engine's folder state (not the Status message) shows the counts, and one issue gives the counts and at most 16 of the hashes (a fixed engine constant), never a device; index sync fetches the genuine ones again from peers; no connection is involved |
 
 - **Time** comes from a clock trait (wall time, as the device believes it, for the LAN beacon window
   and informational fields; monotonic time for intervals) and the network from a transport trait, so

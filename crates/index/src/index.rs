@@ -16,6 +16,20 @@
 //! the record unopened); the record is committed to the [`Store`] before
 //! anything changes in memory; then step 7 brings the heads up to date.
 //!
+//! # Opening
+//!
+//! [`Index::open`] rebuilds everything from the store, which is not trusted
+//! for the records' authenticity (TM-9): every stored record passes step 1
+//! and its signature again, through the same functions as a peer's record,
+//! with the signatures verified on every core (`verify`). A record that
+//! fails is dropped. A record that passes but lies above a `seq` at which its
+//! writer has no record that passed is set aside: kept in memory, not held,
+//! and landed without a second append as soon as a record at that `seq`
+//! lands (from a peer, or written here). The [`OpenReport`] names both
+//! lists. The rest are replayed in canonical order, as below, and so are the
+//! set-aside records when they land, so the index stays a function of the
+//! records in the store.
+//!
 //! # Digests
 //!
 //! Each writer's records are kept in canonical order (ascending `seq`, then
@@ -23,9 +37,11 @@
 //! cursor. A record that sorts last (at the cursor plus one, or at the cursor
 //! with the greatest hash there) costs one step; one that lands below others
 //! recomputes the cache from its own `seq` up, as the spec states and TM-22
-//! prices. Opening replays the stored records in canonical order, so
-//! each costs one step and a reopen is linear in the records held. Serving
-//! reads the cache and computes nothing.
+//! prices. Opening replays the stored records in canonical order, so each
+//! costs one step and a reopen is linear in the records held; a set-aside
+//! record lands at the cursor plus one, or at the cursor above the others
+//! there, so it too costs one step. Serving reads the cache and computes
+//! nothing.
 //!
 //! # Heads and waiting
 //!
@@ -53,9 +69,10 @@
 //! as a conflict on a peer that holds the new file and the renamed version
 //! but not yet the rename: the new file names the renamed version.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use core::fmt;
+use core::num::NonZeroUsize;
 use core::ops::Bound;
 
 use licketysync_keys::records::SignedRecord;
@@ -66,10 +83,11 @@ use licketysync_protocol::record::{
     judge, own_sequence_ahead, Arrival, Chunk, Draft, DraftError, Held, Judgement, Meta, Record,
     WriterFault,
 };
-use licketysync_protocol::{Cause, WireError};
+use licketysync_protocol::Cause;
 
 use crate::heads::{Heads, Rank};
 use crate::store::{Store, StoreError};
+use crate::verify::authentic;
 
 /// What step 6 made of a held record.
 #[derive(Clone, Debug)]
@@ -87,6 +105,12 @@ pub enum Kept {
 }
 
 /// What became of a record handed to [`Index::accept`] or [`Index::write`].
+///
+/// `fault` and `waits` describe the record passed in alone, and so does
+/// `own_ahead` but for one case it names; so [`Outcome::rows`] does too. The
+/// records it let land are listed in `landed`, and their effects are in
+/// `released` and `changed`; each landed record's step 6 result and waiting
+/// state show through [`Index::kept`] and [`Index::is_waiting`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outcome {
     /// The record's hash.
@@ -94,21 +118,31 @@ pub struct Outcome {
     /// Steps 2 to 5: a duplicate or a push gap (ignored, not verified,
     /// nothing stored), the writer's next record, or a concurrent version.
     pub judgement: Judgement,
-    /// Step 6 found a writer fault: the record is stored opaque and an issue
-    /// names it.
+    /// Step 6 found a writer fault in the record passed in: it is stored
+    /// opaque and an issue names it.
     pub fault: Option<WriterFault>,
-    /// The record is under this device's own device ID at or above the next
-    /// `seq` it would use: the counter has moved past it (it is this device's
-    /// cursor for itself plus one), and an informational issue names no one.
+    /// The record passed in is under this device's own device ID at or above
+    /// the next `seq` it would use, or it is this device's own and let
+    /// records of this device's own land, which lie above it: the counter
+    /// has moved past them (it is this device's cursor for itself plus one),
+    /// and an informational issue names no one (`protocol.md` 4.5).
     pub own_ahead: bool,
-    /// The record waits for a record it names: a log line now, and the
-    /// engine raises the informational issue if it still waits after a round
-    /// with every peer that has the folder open.
+    /// The record passed in waits for a record it names: a log line now,
+    /// and the engine raises the informational issue if it still waits after
+    /// a round with every peer that has the folder open.
     pub waits: bool,
-    /// Records that stopped waiting because this one landed, in the order
-    /// they stopped waiting.
+    /// Records that stopped waiting because this one landed, or because a
+    /// record it let land did, in the order they stopped waiting.
     pub released: Vec<RecordHash>,
-    /// The paths whose heads changed, in byte order.
+    /// Records that opening set aside and that landed because this one
+    /// filled the last gap below them, in canonical order: they were in the
+    /// store already and are not appended again. They count as newly
+    /// accepted, so the engine pushes them to every connection where the
+    /// folder is open, the one this record arrived on included (`protocol.md`
+    /// 4.5, "Pushes").
+    pub landed: Vec<RecordHash>,
+    /// The paths whose heads changed, in byte order, those of the records it
+    /// let land included.
     pub changed: Vec<String>,
 }
 
@@ -121,6 +155,7 @@ impl Outcome {
             own_ahead: false,
             waits: false,
             released: Vec::new(),
+            landed: Vec::new(),
             changed: Vec::new(),
         }
     }
@@ -131,7 +166,8 @@ impl Outcome {
         self.judgement.stores()
     }
 
-    /// The section 5 rows the record reached, each of which the engine turns
+    /// The section 5 rows the record passed in reached (with `own_ahead`'s
+    /// one case for the records it let land), each of which the engine turns
     /// into the log line or issue its row names.
     #[must_use]
     pub fn rows(&self) -> Vec<Cause> {
@@ -217,38 +253,60 @@ impl fmt::Display for WriteError {
 
 impl std::error::Error for WriteError {}
 
-/// Why [`Index::open`] could not rebuild the index from its store.
+/// Why [`Index::open`] could not rebuild the index from its store. A stored
+/// record that fails its checks is no error: it is dropped and reported
+/// ([`OpenReport`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum OpenError {
     /// The store could not be read.
     Store(StoreError),
-    /// A stored record fails step 1 against the folder: the store is
-    /// corrupt.
-    Unreadable(WireError),
-    /// A writer's stored records are not contiguous from `seq` 1: the store
-    /// is corrupt.
-    Gap {
-        /// The writer.
-        writer: DeviceId,
-        /// The first `seq` past the gap.
-        seq: u64,
-    },
 }
 
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Store(e) => write!(f, "{e}"),
-            Self::Unreadable(e) => write!(f, "index store: a record does not parse: {e}"),
-            Self::Gap { writer, seq } => {
-                write!(f, "index store: writer {writer} has a gap before seq {seq}")
-            }
         }
     }
 }
 
 impl std::error::Error for OpenError {}
+
+/// What [`Index::open`] did not take into the index of what the store
+/// returned, so that nothing is skipped without trace (`protocol.md` section
+/// 5, "Stored record fails its check"). The engine (when it lands) shows the
+/// counts in the folder's state and raises an issue naming the records by
+/// hash; index sync fetches every genuine one again from the peers that hold
+/// it, since the cursors and digests describe only the records held.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OpenReport {
+    /// The stored records that fail step 1 against the folder (the folder ID
+    /// included) or whose signature does not verify under its verification
+    /// key: corrupted or edited at rest, or not this folder's. Each is named
+    /// by the hash of its body as stored, which for a body that changed at
+    /// rest is the hash of no record a writer signed; ascending, each once. A
+    /// failing copy of a record of which the store also returned a copy that
+    /// passed is dropped without being listed: the record is held or set
+    /// aside.
+    pub dropped: Vec<RecordHash>,
+    /// Stored records that passed but lie above a `seq` at which their
+    /// writer has no stored record that passes (a gap that a dropped or lost
+    /// record left): kept in memory but not held, since a writer's records are
+    /// held contiguously from `seq` 1, and landed without a second append as
+    /// soon as a record at the gap lands ([`Outcome::landed`]); in canonical
+    /// order by writer.
+    pub set_aside: Vec<RecordHash>,
+}
+
+impl OpenReport {
+    /// Whether nothing was dropped or set aside.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.dropped.is_empty() && self.set_aside.is_empty()
+    }
+}
 
 /// One held record and what step 6 made of it.
 #[derive(Debug)]
@@ -333,6 +391,7 @@ impl Writer {
 struct Effects {
     waits: bool,
     released: Vec<RecordHash>,
+    landed: Vec<RecordHash>,
     changed: BTreeSet<String>,
 }
 
@@ -361,6 +420,11 @@ pub struct Index<S> {
     /// Each record a waiting record names and that is not held or still
     /// waits, with the records that wait for it.
     waiters: BTreeMap<RecordHash, Vec<RecordHash>>,
+    /// The records opening set aside, by writer, in canonical order: in the
+    /// store, verified, and not held. Each lies above a `seq` at which its
+    /// writer has no record held, so a peer's copy of it is a gap; it lands
+    /// once the writer's cursor reaches its `seq` minus one.
+    set_aside: BTreeMap<DeviceId, VecDeque<Record>>,
     /// Digest steps and waiter notifications so far, for the bounded-work
     /// tests.
     #[cfg(test)]
@@ -376,31 +440,64 @@ impl<S> fmt::Debug for Index<S> {
             .field("writers", &self.writers.len())
             .field("paths", &self.heads.len())
             .field("waiting", &self.waiting.len())
+            .field(
+                "set_aside",
+                &self.set_aside.values().map(VecDeque::len).sum::<usize>(),
+            )
             .finish_non_exhaustive()
     }
 }
 
 impl<S: Store> Index<S> {
     /// Opens the index of `key`'s folder for the device `own` over `store`,
-    /// rebuilding everything from the records the store holds: each passes
-    /// step 1 against the folder again and its seal is opened again, and the
-    /// records are replayed in canonical order, once each, at one digest step
-    /// a record. Their signatures are not checked again: every one was
-    /// verified before it was appended, and the store is trusted, as this
-    /// device's own state (the [`store`](crate::store) module documentation,
-    /// `threat-model.md` TM-9).
+    /// rebuilding everything from the records the store holds, which is not
+    /// trusted for their authenticity (`threat-model.md` TM-9; the
+    /// [`store`](crate::store) module documentation). Every record gets the
+    /// checks a record from a peer gets before it is stored, with the same
+    /// functions: step 1 against the folder, its folder ID included, and its
+    /// signature under the folder's verification key, which every tier holds
+    /// (`protocol.md` 4.4), the signatures spread across the processor's
+    /// cores. A record that fails is dropped: nothing of it is applied,
+    /// counted or served. The records that pass are replayed in canonical
+    /// order, once each, at one digest step a record, with their seals opened
+    /// again (step 6), so the index is the one that accepting them from peers
+    /// builds; a writer's records above a `seq` at which none of its records
+    /// passed are set aside, since a writer's records are held contiguously
+    /// from `seq` 1, and land when a record at that `seq` does. The cursors
+    /// and digests are rebuilt from the records held, so index sync fetches
+    /// every genuine record dropped or missing again from the peers that hold
+    /// it (`protocol.md` 4.5, "Why it converges").
+    ///
+    /// It blocks the calling thread for the whole check, one signature
+    /// verification per stored record, so the engine (when it lands) runs it
+    /// off any async executor and shows the folder as Checking until it
+    /// returns.
     ///
     /// # Errors
-    /// [`OpenError`] when the store cannot be read or is corrupt.
-    pub fn open(key: FolderKey, own: DeviceId, store: S) -> Result<Self, OpenError> {
-        let verifier = *key.verifier();
-        let mut records = store
-            .load()
-            .map_err(OpenError::Store)?
-            .into_iter()
-            .map(|signed| Record::parse(signed, &verifier))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(OpenError::Unreadable)?;
+    /// [`OpenError`] when the store cannot be read. What was dropped or set
+    /// aside is in the [`OpenReport`].
+    pub fn open(key: FolderKey, own: DeviceId, store: S) -> Result<(Self, OpenReport), OpenError> {
+        let threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+        Self::open_with_threads(key, own, store, threads)
+    }
+
+    /// [`Index::open`] with the signatures verified on up to `threads`
+    /// threads, the calling thread included; the result is the same for any
+    /// number.
+    pub(crate) fn open_with_threads(
+        key: FolderKey,
+        own: DeviceId,
+        store: S,
+        threads: usize,
+    ) -> Result<(Self, OpenReport), OpenError> {
+        let loaded = store.load().map_err(OpenError::Store)?;
+        let (mut records, mut dropped) = authentic(loaded, key.verifier(), threads);
+        if !dropped.is_empty() {
+            let passed: BTreeSet<RecordHash> = records.iter().map(Record::hash).collect();
+            dropped.retain(|hash| !passed.contains(hash));
+            dropped.sort_unstable();
+            dropped.dedup();
+        }
         records.sort_unstable_by_key(|r| (r.device_id(), r.seq(), r.hash()));
         records.dedup_by_key(|r| r.hash());
         let mut index = Self {
@@ -413,21 +510,25 @@ impl<S: Store> Index<S> {
             moved: BTreeMap::new(),
             waiting: BTreeMap::new(),
             waiters: BTreeMap::new(),
+            set_aside: BTreeMap::new(),
             #[cfg(test)]
             work: 0,
         };
+        let mut set_aside = Vec::new();
         for record in records {
+            // Sorted by writer then `seq`, so once a writer's next record is
+            // past a gap, so is every later one of it, and no record of the
+            // writer lands here after it.
             let writer = record.device_id();
             if record.seq() > index.cursor_of(&writer).saturating_add(1) {
-                return Err(OpenError::Gap {
-                    writer,
-                    seq: record.seq(),
-                });
+                set_aside.push(record.hash());
+                index.set_aside.entry(writer).or_default().push_back(record);
+                continue;
             }
             let kept = index.open_seal(&record);
             index.insert(record, kept, &mut Effects::default());
         }
-        Ok(index)
+        Ok((index, OpenReport { dropped, set_aside }))
     }
 
     /// Steps 2 to 7 of `protocol.md` 4.4 for a record that passed step 1
@@ -495,7 +596,9 @@ impl<S: Store> Index<S> {
         self.store
     }
 
-    /// Appends a judged record to the store, then lands it in memory.
+    /// Appends a judged record to the store, then lands it in memory, and
+    /// after it every record of its writer that opening set aside and that
+    /// the cursor now reaches.
     fn hold(
         &mut self,
         record: Record,
@@ -505,19 +608,26 @@ impl<S: Store> Index<S> {
         let kept = self.open_seal(&record);
         self.store.append(&record)?;
         let hash = record.hash();
+        let writer = record.device_id();
         let fault = match &kept {
             Kept::Opaque(fault) => Some(fault.clone()),
             Kept::Applied(_) | Kept::Sealed => None,
         };
         let mut effects = Effects::default();
         self.insert(record, kept, &mut effects);
+        let waits = effects.waits;
+        self.land_set_aside(writer, &mut effects);
+        // This device's own records landing above this one moved the counter
+        // past them (`protocol.md` 4.5).
+        let own_ahead = own_ahead || (writer == self.own && !effects.landed.is_empty());
         Ok(Outcome {
             hash,
             judgement,
             fault,
             own_ahead,
-            waits: effects.waits,
+            waits,
             released: effects.released,
+            landed: effects.landed,
             changed: effects.changed.into_iter().collect(),
         })
     }
@@ -637,6 +747,18 @@ impl<S> Index<S> {
     /// order.
     pub fn paths(&self) -> impl Iterator<Item = &str> + '_ {
         self.heads.keys().map(String::as_str)
+    }
+
+    /// The records opening set aside that have not landed, by writer in
+    /// canonical order: for the tests, which check that they too follow from
+    /// the store's records.
+    #[cfg(test)]
+    pub(crate) fn set_aside(&self) -> Vec<RecordHash> {
+        self.set_aside
+            .values()
+            .flatten()
+            .map(Record::hash)
+            .collect()
     }
 
     /// Each path's versions that a write there names besides its heads (the
@@ -813,6 +935,31 @@ impl<S> Index<S> {
                 self.waiters.entry(named).or_default().push(hash);
             }
             effects.waits = true;
+        }
+    }
+
+    /// Lands, in canonical order and without an append (each is in the store
+    /// already), every record of `writer` that opening set aside and whose
+    /// `seq` is at most the cursor plus one, the cursor rising as each
+    /// lands. Each sorts last in the writer's canonical order when it lands,
+    /// so it costs one digest step.
+    fn land_set_aside(&mut self, writer: DeviceId, effects: &mut Effects) {
+        let Some(mut queue) = self.set_aside.remove(&writer) else {
+            return;
+        };
+        while queue
+            .front()
+            .is_some_and(|r| r.seq() <= self.cursor_of(&writer).saturating_add(1))
+        {
+            let Some(record) = queue.pop_front() else {
+                break;
+            };
+            effects.landed.push(record.hash());
+            let kept = self.open_seal(&record);
+            self.insert(record, kept, effects);
+        }
+        if !queue.is_empty() {
+            self.set_aside.insert(writer, queue);
         }
     }
 

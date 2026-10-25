@@ -31,8 +31,8 @@ use licketysync_protocol::Cause;
 use serde_json::{json, Map, Value};
 
 use super::kit::{
-    converge, dev, flipped_signature, garbage_signature, index, index_as, push, snapshot, verifier,
-    write_key, Fault, Spec, OWN,
+    converge, dev, flipped_signature, garbage_signature, index, index_as, push, reopen, snapshot,
+    verifier, write_key, Fault, Spec, OWN,
 };
 use crate::{AcceptError, Index, MemoryStore, Outcome, Reply};
 
@@ -145,12 +145,11 @@ impl Case {
 
     /// A case over `index`, with a read holder that holds what it holds.
     fn with(name: &str, index: Index<MemoryStore>) -> Self {
-        let reader = Index::open(
+        let reader = reopen(
             FolderKey::from(write_key().read_key()),
             OWN,
             index.store().clone(),
-        )
-        .unwrap();
+        );
         Self {
             name: name.into(),
             index,
@@ -690,7 +689,7 @@ fn vector_heads() {
         p.learn(label, r);
         p.deliver(label, r);
     }
-    let restored = Index::open(FolderKey::from(write_key()), d, backup).unwrap();
+    let restored = reopen(FolderKey::from(write_key()), d, backup);
     let mut dd = Case::with("a restored device: after the restore", restored);
     for (label, r) in [("R0", &r0), ("R1", &r1), ("RQ", &rq)] {
         dd.learn(label, r);

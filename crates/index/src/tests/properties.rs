@@ -10,7 +10,8 @@
 //! no concurrent edit, whose records the index's own drafts make, never show
 //! a conflict on the way, renames and paths written again after a rename
 //! included; and two indexes that exchange end with the same records and
-//! heads.
+//! heads; and a store with records changed at rest opens to exactly what
+//! accepting the genuine ones builds, on one thread or several.
 //!
 //! Records are signed for real, which a debug build makes slow, so the cases
 //! are few and small; each covers concurrent versions, out-of-order
@@ -24,10 +25,10 @@ use licketysync_protocol::record::{writer_digests, Arrival, Judgement, Kind, Rec
 use proptest::prelude::*;
 
 use super::kit::{
-    converge, dev, display_order, index_as, key, push, snapshot, write_key, Fault, Snapshot, Spec,
-    OWN,
+    converge, dev, display_order, flipped_body, flipped_signature, index_as, key, push, reopen,
+    snapshot, with_set_aside, write_key, Fault, Snapshot, Spec, OWN,
 };
-use crate::{Index, Kept, MemoryStore};
+use crate::{Index, Kept, MemoryStore, OpenReport, Store};
 
 /// One generated record: indices are reduced modulo what exists when it is
 /// built, so every generated list is valid.
@@ -267,6 +268,7 @@ fn reference(records: &[Record]) -> Snapshot {
             .filter(|h| opened[h].is_none())
             .copied()
             .collect(),
+        set_aside: Vec::new(),
     }
 }
 
@@ -325,7 +327,7 @@ proptest! {
         prop_assert_eq!(&s1, &snapshot(&two));
         prop_assert_eq!(as_sets(&one), reference(&records));
         prop_assert_eq!(s1.held.len(), records.len());
-        let reopened = Index::open(FolderKey::from(write_key()), OWN, one.into_store()).unwrap();
+        let reopened = reopen(FolderKey::from(write_key()), OWN, one.into_store());
         prop_assert_eq!(&snapshot(&reopened), &s1);
     }
 
@@ -354,6 +356,114 @@ proptest! {
         prop_assert_eq!(snapshot(&a), snapshot(&b));
         prop_assert_eq!(&snapshot(&a).held, &union);
         prop_assert_eq!(snapshot(&a), snapshot(&expected));
+    }
+}
+
+/// For each record: whether it changed at rest, and if so whether in its
+/// signature (rather than its body); and how many threads verify.
+fn changed_case() -> impl Strategy<Value = (Vec<Gen>, Vec<(bool, bool)>, usize)> {
+    prop::collection::vec(gen(), 1..10).prop_flat_map(|gens| {
+        let n = gens.len();
+        (
+            Just(gens),
+            prop::collection::vec((prop::bool::weighted(0.25), any::<bool>()), n),
+            2..9usize,
+        )
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+    /// Opening checks every stored record (the owner's decision of
+    /// 2026-10-25): a store with some records changed at rest, by one bit
+    /// of the signature or of the body, opens to the index that accepting
+    /// only the genuine ones builds, names exactly the changed ones as
+    /// dropped and the genuine ones past the gaps they leave as set aside,
+    /// and gives the same on one thread and on several. With none changed,
+    /// that is the index accepting them all builds, and the report is clean.
+    /// When the changed records' originals come back, the records set aside
+    /// land and the index is the one accepting every record builds.
+    #[test]
+    fn opening_applies_exactly_what_accepting_the_genuine_records_builds(
+        (gens, changes, threads) in changed_case()
+    ) {
+        let records = build(&gens);
+        let mut store = MemoryStore::new();
+        let mut dropped = Vec::new();
+        let mut genuine = Vec::new();
+        for (i, (r, (changed, in_signature))) in records.iter().zip(&changes).enumerate() {
+            let stored = match (changed, in_signature) {
+                (false, _) => {
+                    genuine.push(i);
+                    r.clone()
+                }
+                (true, true) => flipped_signature(r),
+                (true, false) => flipped_body(r),
+            };
+            if *changed {
+                dropped.push(stored.hash());
+            }
+            store.append(&stored).unwrap();
+        }
+        dropped.sort_unstable();
+        let expected = deliver(&records, &genuine, &[], |_| {});
+        let held = snapshot(&expected).held;
+        let mut set_aside: Vec<&Record> = genuine
+            .iter()
+            .map(|i| &records[*i])
+            .filter(|r| !held.contains(&r.hash()))
+            .collect();
+        set_aside.sort_by_key(|r| (r.device_id(), r.seq(), r.hash()));
+        let report = OpenReport {
+            dropped,
+            set_aside: set_aside.iter().map(|r| r.hash()).collect(),
+        };
+        for t in [1, threads] {
+            let (ix, got) =
+                Index::open_with_threads(FolderKey::from(write_key()), OWN, store.clone(), t)
+                    .unwrap();
+            prop_assert_eq!(&got, &report);
+            prop_assert_eq!(
+                snapshot(&ix),
+                with_set_aside(snapshot(&expected), &report.set_aside)
+            );
+        }
+        if changes.iter().all(|(changed, _)| !changed) {
+            prop_assert!(report.is_clean());
+            prop_assert_eq!(held.len(), records.len());
+        }
+        // The originals of the changed records come back, as index sync
+        // brings them (a gap comes again later): every record set aside lands
+        // on the way, and the index is the one accepting every record builds,
+        // as a reopen of its store gives, whose report names only the bodies
+        // changed under new hashes.
+        let (mut ix, _) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
+        let mut queue: Vec<usize> = (0..records.len()).filter(|i| changes[*i].0).collect();
+        let mut flipped_bodies: Vec<RecordHash> = queue
+            .iter()
+            .filter(|i| !changes[**i].1)
+            .map(|i| flipped_body(&records[*i]).hash())
+            .collect();
+        flipped_bodies.sort_unstable();
+        loop {
+            let before = queue.len();
+            queue.retain(|i| {
+                let o = ix.accept(records[*i].clone(), Arrival::Push).unwrap();
+                o.judgement == Judgement::PushGap
+            });
+            if queue.is_empty() || queue.len() == before {
+                break;
+            }
+        }
+        let all: Vec<usize> = (0..records.len()).collect();
+        let everything = snapshot(&deliver(&records, &all, &[], |_| {}));
+        prop_assert_eq!(&snapshot(&ix), &everything);
+        let (reopened, again) =
+            Index::open(FolderKey::from(write_key()), OWN, ix.into_store()).unwrap();
+        prop_assert_eq!(&snapshot(&reopened), &everything);
+        prop_assert_eq!(again.dropped, flipped_bodies);
+        prop_assert_eq!(again.set_aside, Vec::<RecordHash>::new());
     }
 }
 

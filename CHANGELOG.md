@@ -6,6 +6,142 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The index checks every stored record again when a folder opens (the owner's decision of
+  2026-10-25, option A of the phase 1 store question; the plan's decision "Index check at open").
+  `Index::open` gives each record that `Store::load` returns the checks a record from a peer gets
+  before it is stored, through the same functions: step 1 against the folder (`Record::parse`, which
+  the connection's `Record::from_bytes` calls; the suite and folder ID included) and the signature
+  (`Record::verify`, which `judge` calls: Ed25519 `verify_strict` under the folder's verification
+  key), at every tier, a sealed holder's included. The signatures are verified on
+  `std::thread::available_parallelism` threads: the parsed records are split into one contiguous
+  slice per thread under `std::thread::scope` with `Builder::spawn_scoped`, each thread borrowing
+  its slice (nothing is cloned), the calling thread taking the first, and the verdicts joined in
+  input order, so the result is the same on any number of threads; a slice whose thread cannot be
+  spawned (`wasm32-unknown-unknown` has none) is verified on the calling thread, as everything is
+  when parallelism is 1, and the same fallback takes a slice whose thread panicked, though
+  verification has no panic path (`crates/index/src/verify.rs`). The open blocks its thread for the
+  whole check. A record that fails is dropped: nothing of it is applied, counted in a cursor or
+  digest, or served. Since a writer's records are held contiguously from `seq` 1, a record that
+  passes but lies above a `seq` at which its writer has no stored record that passes is set aside:
+  kept in memory, not held, and landed, without a second append, as soon as a record at that `seq`
+  lands, from a peer or written here, so once every gap below it is filled (`Outcome::landed` names
+  them; they count as newly accepted and are pushed to every connection where the folder is open,
+  the one the filling record came in on included), each at one digest step; so the index stays what
+  a reopen of the store gives, and this device, when its own record is the one missing, reuses only
+  that `seq`. The other records that pass are replayed exactly as before (canonical order, one
+  digest step each, seals opened again), so a store of genuine records opens to the index that
+  accepting them builds. A dropped or missing genuine record comes back by normal index sync because
+  the cursors and digests are rebuilt from the records held: one missing at the top of a writer's
+  sequence leaves the cursor below it, so a responder serves it by case (a), (b) or (c), and a
+  concurrent version missing at or below the cursor makes this device's digest differ from that of
+  every peer that holds it, so the comparison resends the writer in full (case (c) and the marks).
+  `Store::append` of a record whose hash the store holds keeps the envelope given in place of the
+  one it had, so a good copy that arrives replaces one whose signature bytes changed at rest, and
+  the next open is clean; `MemoryStore` already did. API: `Index::open` returns `Result<(Index<S>,
+  OpenReport), OpenError>`; the new `OpenReport`, `#[non_exhaustive]`, has `dropped` (record hashes
+  of the bodies as stored, ascending, each once; a failing copy beside a passing copy of the same
+  hash is dropped without being listed) and `set_aside` (record hashes in canonical order) and
+  `is_clean()` (nothing dropped or set aside); `Outcome` gains `landed`, its `fault`, `waits`,
+  `own_ahead` and `rows()` describe the record passed in alone (each landed record's state shows
+  through `Index::kept` and `Index::is_waiting`), and `own_ahead` is also set when this device's own
+  records land above a record of its own, so that the informational issue of §4.5 is raised on that
+  path; `OpenError::Unreadable` and `OpenError::Gap` are removed, since a record that fails step 1
+  is now dropped and a gap sets records aside, which leaves `OpenError::Store`; the crate-private
+  `Index::open_with_threads` takes the thread count, for tests. No new dependency and no unsafe
+  code. Docs: `store.rs` ("The store is checked when the index opens", and the `append` contract),
+  `lib.rs`, `index.rs`, the README's index row, and `rules.rs` in the protocol crate, whose module
+  doc now says that `Cause` names every §5 row but the two about this device's own index store.
+  - Spec changes in this commit: `threat-model.md` TM-9 (the index store is trusted to keep records,
+    not for their authenticity; every record is verified at open, a failure dropped and reported,
+    the records above a gap set aside and landed when it fills, cursors and digests rebuilt from the
+    records held, so index sync fetches the rest again; the measured cost with its caveats; the
+    keyed checksum as the fallback only; the key store stays trusted; the engine's Checking state
+    and issue marked "when the engine lands"), §3.12 (the index store is out of scope only for what
+    it keeps: it can lose or withhold records, not forge them, with the residuals: a record no peer
+    holds stays missing and the records above it, of any writer, stay set aside and reported at
+    every open; withholding this device's own records makes it reuse their sequence numbers, as
+    after a restored backup, `protocol.md` §4.5; records only this device held are lost), TM-10 (the
+    stored-record case involves no connection), TM-17 (a cursor falls only when the device's own
+    store loses or corrupts records at rest) and TM-22 (the check at open is no peer's to trigger, a
+    store failure's resume does not reopen the index, and a write holder that floods records
+    lengthens every later open by one verification per record); `protocol.md` introduction (the
+    stored-record case), §4.4 (the rebuild checks first and sets aside above a gap; step 4's note on
+    the flood cost and the store-failure resume; "Rollback": a lost record leaves the ones above it
+    set aside; a new paragraph "Opening a folder": dropped and set-aside records, landing, why sync
+    refetches, same-hash replacement, the stated residuals, and for the engine when it lands:
+    Checking in its own folder state, the open off any async executor, one issue with the counts and
+    at most 16 hashes (a fixed engine constant), a store where nothing passes (an empty index, no
+    record set aside and some dropped) treated as misconfigured and never scanned into an empty
+    index, a fresh store after re-keying, and a phase 1 store that drops and reports undecodable
+    bytes, `Store::load` needing a way to report them), §4.5 "Pushes" (landed records count as newly
+    accepted and are pushed to every connection where the folder is open, the one the filling record
+    came in on included) and "Durability before transmission" (own records that opening dropped or
+    set aside move the counter when they come back) and §5 (the "nothing is silently skipped"
+    paragraph names the two store rows that involve no connection, and a new row, "Stored record
+    fails its check" when the folder opens, which covers a record above a gap too). The phase 1 open
+    question is gone from TM-9, §3.12 and the crate docs, which record the decision.
+  - Measured (scratch release build, not committed): 100 000 records of 100 writers, on an Intel
+    Core i5-1145G7 laptop processor with 4 cores and 8 threads (`available_parallelism` 8), three
+    runs each: open on 1 thread 5.6 to 6.1 s, of which the checks 4.8 to 5.6 s; on 8 threads 2.5 to
+    3.3 s, of which the checks 1.83 to 1.86 s; open before this change, without the checks, 0.52 to
+    0.79 s. The machine was shared with other builds and its clock moved between 1.3 and 2.5 GHz, so
+    the figures are ranges; the checks gain about 2.7 times on 8 threads, which 4 physical cores
+    bound. Tests do not depend on time.
+  - Tests (`crates/index/src/tests/open.rs`, new): a store with one record whose signature and one
+    whose body (in `sealed`, so it still parses) changed by one bit opens dropping exactly those,
+    setting aside the record above the gap, and equals the index accepting the rest builds, at one
+    digest step per record held; read and sealed holders report the same; a record of another folder
+    (failing step 1) and this folder's record signed by another folder's key are dropped; a bad copy
+    beside a good one drops nothing, and a bad one loaded twice is named once; a dropped record
+    arriving later by `accept` is `Next`, lands the record set aside above it at one step and
+    without a second append, and a body changed under a new hash is reported again at the next open;
+    a good copy arriving later replaces the bad one in the store, so the next open is clean; a
+    record that another write holder signs at the gap lands the three records above it, which a push
+    had found to be a gap, at one step each, with the outcome's flags the filler's and each landed
+    record applied and not waiting, and the index equals a reopen's; this device writing at its lost
+    `seq` lands the record above it, setting `own_ahead` and the own-sequence-ahead row, and writes
+    next at `seq` 4, not 3, and equals a reopen's; index sync through real requests and pages brings
+    back what was dropped or set aside; a dropped concurrent version is found by the digest; a
+    dropped record of this device lowers its next `seq` until it returns ahead of the counter and
+    lands the one above; 1 thread and 0, 2, 3, 4, 7, 47, 48, 64 and 1 000 threads, and `open`
+    itself, give the same index, report and next `seq` on 48 records with concurrent versions,
+    waiting and opaque records and corruption; an empty store opens clean on any thread count.
+    Property test (`properties.rs`): over random histories, a store with random records changed at
+    rest in the signature or the body opens to exactly the index accepting the genuine ones builds,
+    with exactly the changed ones dropped and the right ones set aside, on 1 thread and on 2 to 8
+    alike, and clean when none changed; when the originals of the changed records then come back,
+    every record set aside lands and the index, and a reopen of its store, equal the index accepting
+    every record builds, the reopen naming only the bodies changed under new hashes. `behaviour.rs`:
+    `opening_refuses_a_corrupt_store_and_tolerates_repeats` becomes
+    `opening_sets_aside_a_gap_drops_a_foreign_record_and_tolerates_repeats` (its gap and
+    another-folder cases now open and report instead of failing; its repeats case is unchanged), the
+    errors test loses the two removed variants, and the memory-store test shows a copy under the
+    same hash replacing the envelope kept. The test snapshot now includes the records set aside, and
+    every other open in the tests goes through `kit::reopen`, which asserts a clean report, so the
+    existing reopen, dedup and bounded-work tests hold as before. With the signature check bypassed,
+    thirteen of the open and property tests fail; with set-aside records never landed, six fail;
+    without `own_ahead` set for a landing of this device's own records, one fails.
+  - Decisions for the plan: a record that fails step 1 at open is dropped like one whose signature
+    fails, not an error; a writer's records above a gap are set aside and reported apart from the
+    dropped ones, kept in memory and landed when a record at the gap lands, and a gap, whether a
+    dropped record left it or the store lost a record, no longer fails the open, so one corrupt
+    record cannot make a folder unopenable; the report is returned beside the index rather than kept
+    in it, and `Outcome::landed` names the records a landing brought in, which count as newly
+    accepted and are pushed to every connection where the folder is open, the one the filling record
+    came in on included; the engine's issue names at most 16 record hashes; a record is named by the
+    hash of its body as stored, and a failing copy beside a passing one is not named; a store keeps
+    the envelope appended last under a hash; a record changed at rest under a new hash stays in the
+    store (no store removes a record, TM-17) and is reported at every open until phase 1's store or
+    `doctor` repairs it; a record of this device's own that opening dropped lowers its next `seq` to
+    that one `seq`, a write there makes a concurrent version as after a restored backup, and the
+    records set aside above it land with that write; a cursor can fall across a restart only through
+    this device's own store at rest; a phase 1 store that keeps bytes drops and reports bytes that
+    no longer decode, never failing the load or losing them silently; when nothing in a store passes
+    the engine treats the folder as misconfigured, and re-keying starts a fresh store; verification
+    spawns its threads for each open, with no pool and no minimum slice.
+  - Reviewed 2026-10-25 by a913a68c8b3102a14 (correctness), a9f55faa34f1b4904 (quality) and
+    aac254dea94bea21a (security); every finding fixed and confirmed clean (correctness confirmed
+    the last round, 9f28260). Author ad8aff4742d87ddf7; the merge agent wrote this line.
 - The browser client's domain is licketysync.app instead of licketysync.dev (owner's decision of
   2026-10-25: "Switch to licketysync.app for the browser client. Both licketysync.app and
   licketysync.com have been verified for GitHub Pages."). The invite link people click starts with

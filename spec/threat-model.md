@@ -372,9 +372,18 @@ These are stated so that nobody mistakes silence for a promise.
 - **The operating system and the network the program runs on.** A kernel, a keystore, a random
   number generator or a file system that lies is not defended against. Malware running as the user
   reads what the user reads, keys included.
-- **The device's own index store at rest**, and any backup of it restored into it: it is trusted like
-  the key store, and its records are not verified again when the index opens (TM-9 says what a
-  corrupted or edited store would do; phase 1, which puts it on disk, decides how it checks itself).
+- **The device's own index store at rest**, and any backup of it restored into it, for what it keeps
+  and nothing more: every record in it is verified again when the folder opens, and one that fails
+  is dropped and reported (TM-9), so corruption or tampering at rest cannot make the device apply or
+  serve a change no write holder signed. What a store changed at rest can still do is lose or
+  withhold records, as an older backup would. The device fetches them again from its peers, with
+  these stated residuals: a record that no peer holds stays missing, and the records of its writer
+  above it, whatever the writer, stay set aside, intact, and reported at every open until a record
+  at that `seq` is held; withholding this device's own records makes it reuse their sequence
+  numbers, which peers keep as concurrent versions, as after a restored backup (`protocol.md` §4.5,
+  "Durability before transmission"), and its records set aside above land once it writes at the gap;
+  and records of any writer that only this device held are lost. **The key store** stays trusted,
+  since whatever can change it can replace the folder's keys.
 - **Denial of service by traffic volume** that a home connection would already fail under. The
   program bounds what it allocates and accepts; it cannot keep a saturated link usable.
 - **Multi-file atomicity.** A git repository, an SQLite database, a password manager's vault or any
@@ -480,36 +489,55 @@ make. Nothing a peer sends can add, replace or change a folder's keys, because n
 material: keys move only as key strings outside the protocol and, between a person's linked devices,
 over an authenticated channel (`keys.md` §8.3); a record handed over by a sealed peer or relay is
 data to be verified, never a reason to act. A device's own index store, and any backup of it
-restored into it, is trusted like its key store: a record is verified before it is stored and not
-again when the index reopens from the store. A store corrupted or edited at rest would make the
-device apply a change no write holder signed, serve records its peers refuse as forged (each such
-connection closing with an issue naming this device), or count a junk record in a writer's digest,
-so that every exchange resends that writer in full; phase 1, which puts the index on disk, decides
-between verifying every stored record when the index opens (about nine times slower to open: some
-7 s per 100 000 records, measured on 2026-10-22) and a labelled keyed checksum per stored record (a
-question for the owner; section 3.12). Stops key insertion, where a storage party introduces or
-replaces key material and the client re-encrypts everything under it (Nextcloud 2024, Albrecht et
-al.), and forged changes. Enforced by `keys` (signing and verification) and `index` (verifies before
-storing); `engine` applies only stored records.
+restored into it, is trusted to keep its records but not for their authenticity (the owner's
+decision of 2026-10-25): a record is verified before it is stored and again every time its folder
+opens, when every stored record gets step 1 against the folder and its signature under the folder's
+verification key, at every tier, the signatures spread across the processor's cores (`protocol.md`
+§4.4, "Opening a folder"); the engine (when it lands) shows the folder as Checking meanwhile. A
+record that fails, because it was corrupted or edited at rest or is not this folder's, is dropped:
+it is not applied, counted in a cursor or digest, or served, and the open reports it by record hash,
+so that the engine's folder state shows the problem and an issue (when the engine lands) gives the
+count and names at most 16 of the records by hash (`protocol.md` §5). The records of its writer
+above the gap it leaves, as above a record the store lost, are set aside: kept but not held,
+reported, and landed without a second append once every gap below them is filled. The cursors and
+digests are rebuilt from the records held, so index sync fetches every genuine record dropped or
+missing again from the peers that hold it. A store changed at rest can therefore at worst lose or
+withhold records, with the residuals section 3.12 states; it can no longer make the device apply a
+change no write holder signed, serve records its peers refuse as forged, or count a junk record in a
+writer's digest. The check costs one Ed25519 verification per stored record: opening 100 000 records
+of 100 writers took 5.6 to 6.1 s on one thread and 2.5 to 3.3 s on all eight threads of a four-core
+laptop processor, against 0.5 to 0.8 s without the check (release build, measured 2026-10-25 on a
+machine shared with other builds, whose clock moved between 1.3 and 2.5 GHz, so the figures are
+ranges). A labelled keyed checksum per stored record, which would need a per-device secret, be
+forgeable by anything that reads it and be lost on reinstall, is adopted instead only if
+measurements on a phone or NAS show start-up too slow. The key store remains trusted (section 3.12).
+Stops key insertion, where a storage party introduces or replaces key material and the client
+re-encrypts everything under it (Nextcloud 2024, Albrecht et al.), and forged changes, including
+changes written into a device's own index store at rest. Enforced by `keys` (signing and
+verification) and `index` (verifies before storing and again when the folder opens); `engine`
+applies only stored records and, when it lands, shows the folder as Checking while its index opens.
 
 **TM-10. Fail closed.** Any decryption failure, signature failure, hash mismatch or malformed record
-ends in exactly one of three outcomes, none of them silent. The connection that delivered it is
-closed, with an issue naming the peer and the cause, for what only the sender can be blamed for: bytes
-that do not parse or do not verify, a broken order or bound. The item is set aside and the connection
-kept for differences in what two peers hold (a gap, a duplicate, a record waiting for a version it
-names, a proof for a folder that is not here, a chunk the holder lacks), which the exchange then
-repairs. An issue names the record (by hash, and by path where its seal opened; never a device,
-since nothing proves which device wrote it, ruling S-4), the record is kept opaque or the chunk
-marked corrupt, applied by no one, and the connection kept, for a failure inside what the folder key
-signed (a seal that will not open, a chunk
-that fails its plaintext hash), because the body is what a write holder signed and the sender, perhaps
-an honest relay, merely carried it. One refusal is deliberately uninformative: a folder proof that
-fails for any reason gets the same uniform REJECTED and the connection is kept, so that a probe learns
-nothing about which folders a device holds. Nothing is skipped, defaulted or retried with weaker
-checks, and no key has a default value; `protocol.md`'s rules table is the complete record of which
-cause has which outcome (decision 2026-10-15: refines the plan's "drops the connection": a failure
-inside a validly signed body keeps the connection, because the sender may be an honest relay). Stops
-the "ghost key", where a missing key became an all-zero default and failures were skipped silently
+that arrives on a connection ends in exactly one of three outcomes, none of them silent. The
+connection that delivered it is closed, with an issue naming the peer and the cause, for what only
+the sender can be blamed for: bytes that do not parse or do not verify, a broken order or bound. The
+item is set aside and the connection kept for differences in what two peers hold (a gap, a
+duplicate, a record waiting for a version it names, a proof for a folder that is not here, a chunk
+the holder lacks), which the exchange then repairs. An issue names the record (by hash, and by path
+where its seal opened; never a device, since nothing proves which device wrote it, ruling S-4), the
+record is kept opaque or the chunk marked corrupt, applied by no one, and the connection kept, for a
+failure inside what the folder key signed (a seal that will not open, a chunk that fails its
+plaintext hash), because the body is what a write holder signed and the sender, perhaps an honest
+relay, merely carried it. A record in the device's own index store that fails step 1 or its
+signature when its folder opens involves no connection: it is dropped and reported, never applied or
+served, and the records of its writer above it are set aside (TM-9; `protocol.md` §5, "Stored record
+fails its check"). One refusal is deliberately uninformative: a folder proof that fails for any
+reason gets the same uniform REJECTED and the connection is kept, so that a probe learns nothing
+about which folders a device holds. Nothing is skipped, defaulted or retried with weaker checks, and
+no key has a default value; `protocol.md`'s rules table is the complete record of which cause has
+which outcome (decision 2026-10-15: refines the plan's "drops the connection": a failure inside a
+validly signed body keeps the connection, because the sender may be an honest relay). Stops the
+"ghost key", where a missing key became an all-zero default and failures were skipped silently
 (Nextcloud 2024). Enforced by `keys`, `protocol`, `index` and `engine`: every verifying function
 returns a typed error and every caller propagates it to the connection; `clippy::unwrap_used` and
 `expect_used` are denied.
@@ -575,10 +603,12 @@ went with per-person keys.
 
 **TM-17. Peers persist what they have seen and refuse regressions.** Each peer stores, per folder
 and per writer, every record it has accepted and its cursor, the highest sequence number it holds;
-the cursor never decreases and no record is removed on another peer's say-so, a sealed peer's or
+the cursor never decreases, short of records the device's own store loses or corrupts at rest (the
+next open drops a corrupted record and sets aside those above a lost or dropped one, and index sync
+fetches them again, TM-9), and no record is removed on another peer's say-so, a sealed peer's or
 relay's included (tombstone expiry, which hides a path and keeps its records, is the index's own
-rule). A peer that offers lower cursors is behind, and nothing is asked of it. The limit is stated: a
-peer with no persisted state for a writer, as on a first sync, trusts what the first peer it meets
+rule). A peer that offers lower cursors is behind, and nothing is asked of it. The limit is stated:
+a peer with no persisted state for a writer, as on a first sync, trusts what the first peer it meets
 shows it, and a stale or withheld copy is found when a fresher peer is met (TM-41). Stops rollback,
 where a store serves an older snapshot as current (Tahoe-LAFS known issues; Syncthing's
 untrusted-device spec is silent on it). Enforced by `index`.
@@ -623,14 +653,16 @@ most `MAX_CURSORS_PER_REQUEST` writers and a requester covers more with a round 
 under a flood; QUIC's three-to-one anti-amplification limit stays at its default; and the advisory
 feed in CI (cargo-audit, daily) catches the next such advisory in a dependency. Stops resource
 exhaustion through unbounded streams, connections and registrations, and amplification through QUIC
-(go-libp2p and rust-libp2p 2022; rendezvous 2026). The stated costs: any Hello that passes its checks
-costs one Ed25519 signature (the DeviceProof sent in answer) and one verification; a FolderProof
-from a peer with no key to the folder costs a lookup in the connection's hint table and nothing else,
-so an outsider cannot make a device verify anything; once a folder is open, each record received
-costs one BLAKE3 hash of its body, and an exact duplicate or a gap on a push stops there, unverified
-(ruling DUP), so every signature a device verifies either stores a record it did not hold or closes
-the connection (or, when the device's own index store cannot take the record, pauses the folder
-until it can, `protocol.md` section 5), and a peer of any tier can make it verify only as many
+(go-libp2p and rust-libp2p 2022; rendezvous 2026). The stated costs: any Hello that passes its
+checks costs one Ed25519 signature (the DeviceProof sent in answer) and one verification; a
+FolderProof from a peer with no key to the folder costs a lookup in the connection's hint table and
+nothing else, so an outsider cannot make a device verify anything; once a folder is open, each
+record received costs one BLAKE3 hash of its body, and an exact duplicate or a gap on a push stops
+there, unverified (ruling DUP), so every signature a device verifies either stores a record it did
+not hold or closes the connection (or, when the device's own index store cannot take the record,
+pauses the folder until it can, `protocol.md` section 5; the check of its own store when a folder
+opens, one verification per stored record, TM-9, is no peer's to trigger, and resuming after a store
+failure does not reopen the index), and a peer of any tier can make it verify only as many
 signatures as it brings new records, plus the one forged record that ends the connection; serving an
 index request reads cached digests and recomputes none; chunk requests are bounded by
 `max_requests_in_flight`, a queued request holds only its hash and the chunk is read from storage
@@ -641,8 +673,9 @@ reading them slowly, for as long as it keeps the connection alive (a reader that
 closed by `IDLE_TIMEOUT`), so what bounds the total is the phase 1 connection limit; and a write
 holder can make every peer store and compare any number of writers, and recompute cached digests and
 resend a writer's history for each concurrent version it signs low in that history (section 3.6),
-which costs storage, time and bandwidth, not per-connection memory. Enforced by `net`, `protocol`
-and `index`; the flood test is in `sim`.
+which costs storage, time and bandwidth, not per-connection memory, and lengthens every later open
+of the folder on every peer by one signature verification per record it signed, the same cost class.
+Enforced by `net`, `protocol` and `index`; the flood test is in `sim`.
 
 **TM-23. No `unwrap`, `expect`, `panic` or unchecked index on untrusted input.**
 `clippy::unwrap_used`, `expect_used` and `panic` are denied workspace-wide, `indexing_slicing` warns

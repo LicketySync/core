@@ -19,7 +19,9 @@
 //!   cases (a) to (d).
 //! - [`store`]: what is persisted (the records, as received) behind the
 //!   [`Store`] trait, one atomic append per record, and the in-memory
-//!   [`MemoryStore`] of phase 0; the store is trusted like the key store.
+//!   [`MemoryStore`] of phase 0; the store is trusted to keep records, not
+//!   for their authenticity, which [`Index::open`] checks again
+//!   ([`OpenReport`]).
 //!
 //! What stays with the protocol crate: parsing (step 1), the order of steps 2
 //! to 5 ([`judge`](licketysync_protocol::record::judge)), opening a seal, the
@@ -30,23 +32,27 @@
 //! Every record from a peer is untrusted: it is stored only after its
 //! signature verified under the folder key (TM-9), nothing it carries is used
 //! as an index or a length, and every structure grows only with records
-//! actually held. The store, this device's own state, is trusted and not
-//! verified again when the index opens (TM-9, [`store`]). Ordering decisions
-//! follow `supersedes` and canonical order alone, never a clock (TM-40); the
-//! same set of held records gives the same cursors, digests, waiting records,
-//! heads and versions a write names in any arrival order and after a restart
-//! (TM-17, TM-41).
+//! actually held (or, when the index opens, set aside from the store). The
+//! store, this device's own state, is not trusted for authenticity: when the
+//! index opens, every stored record passes step 1 and its signature again,
+//! on every core, and one that fails is dropped and reported, never applied
+//! or served (TM-9, the owner's decision of 2026-10-25; [`store`]). Ordering
+//! decisions follow `supersedes` and canonical order alone, never a clock
+//! (TM-40); the same set of held records gives the same cursors, digests,
+//! waiting records, heads and versions a write names in any arrival order and
+//! after a restart (TM-17, TM-41).
 
 pub mod heads;
 mod index;
 pub mod serve;
 pub mod store;
+mod verify;
 
 #[cfg(test)]
 mod tests;
 
 pub use heads::{Heads, Version};
-pub use index::{AcceptError, Index, Kept, OpenError, Outcome, WriteError};
+pub use index::{AcceptError, Index, Kept, OpenError, OpenReport, Outcome, WriteError};
 pub use serve::{Reply, ReplyPage};
 pub use store::{MemoryStore, Store, StoreError};
 

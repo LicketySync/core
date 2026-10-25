@@ -2,23 +2,28 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The complete mapping of `protocol.md` section 5: every failure has exactly
-//! one of three outcomes (TM-10). *Close* is for what only the sender can be
-//! blamed for: bytes that do not parse or do not verify, a broken order or
-//! bound. *Set aside and keep* is for differences in what two peers hold.
-//! *Issue against the record* is for what a valid signature covers: the body
-//! is what a write holder signed and the sender merely carried it, so the
-//! issue names the record, never a device (ruling S-4), and the connection
-//! stays open. [`Cause`] names every row of the table and [`Cause::outcome`]
-//! is the table; [`Cause::report`] says what each row leaves behind, since
-//! nothing is dropped without trace. The connection acts on the outcomes it
-//! can see itself; the index judges the records of each page and hands its
+//! The mapping of `protocol.md` section 5 for what arrives on a connection:
+//! every such failure has exactly one of three outcomes (TM-10). *Close* is
+//! for what only the sender can be blamed for: bytes that do not parse or do
+//! not verify, a broken order or bound. *Set aside and keep* is for
+//! differences in what two peers hold. *Issue against the record* is for
+//! what a valid signature covers: the body is what a write holder signed and
+//! the sender merely carried it, so the issue names the record, never a
+//! device (ruling S-4), and the connection stays open. [`Cause`] names every
+//! row of the table but the two about this device's own index store, which
+//! are the index's and the engine's: "Store failure", for a record that
+//! arrived on a connection and that the store cannot take, and "Stored
+//! record fails its check" when a folder opens, which involves no connection
+//! (TM-9). [`Cause::outcome`] is the table for the rows it names;
+//! [`Cause::report`] says what each row leaves behind, since nothing is
+//! dropped without trace. The connection acts on the outcomes it can see
+//! itself; the index judges the records of each page and hands its
 //! judgements to it through [`crate::connection::Connection::judged`].
 
 use crate::messages::CloseReason;
 
 /// Why something failed or was set aside: one variant per row of the
-/// section 5 table.
+/// section 5 table, but the two rows about this device's own index store.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Cause {
@@ -157,7 +162,8 @@ pub enum Report {
 }
 
 impl Cause {
-    /// Every row, in the order of section 5's table.
+    /// Every row it names, in the order of section 5's table: all but the
+    /// two rows about this device's own index store.
     pub const ALL: [Self; 25] = [
         Self::Malformed,
         Self::FrameOverLimit,

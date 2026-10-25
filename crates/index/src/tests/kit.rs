@@ -4,9 +4,11 @@
 
 //! Fixtures: the keys crate's fixed folder, records built from a small
 //! description (including the writer faults a writer's `Draft` refuses to
-//! sign), a store that fails on demand, a snapshot of everything the index
-//! derives, the display order as the spec words it, and an index-level
-//! exchange between two indexes through real requests, replies and pages.
+//! sign), records changed at rest or signed by another folder's key, an open
+//! that asserts a clean report, a store that fails on demand, a snapshot of
+//! everything the index derives, the display order as the spec words it, and
+//! an index-level exchange between two indexes through real requests,
+//! replies and pages.
 
 use std::collections::BTreeSet;
 
@@ -25,7 +27,7 @@ use licketysync_protocol::messages::{ChunkRef, IndexRecord, SealedMeta};
 use licketysync_protocol::record::{Arrival, Chunk, Draft, Kind, Meta, Record};
 use prost::Message as _;
 
-use crate::{Index, MemoryStore, Outcome, Reply, Store, StoreError, Version};
+use crate::{Index, MemoryStore, OpenReport, Outcome, Reply, Store, StoreError, Version};
 
 /// `n, n+1, … n+31`.
 pub(crate) fn fixed32(start: u8) -> [u8; 32] {
@@ -65,25 +67,46 @@ pub(crate) fn index() -> Index<MemoryStore> {
 }
 
 pub(crate) fn index_as(own: DeviceId) -> Index<MemoryStore> {
-    Index::open(FolderKey::from(write_key()), own, MemoryStore::new()).unwrap()
+    reopen(FolderKey::from(write_key()), own, MemoryStore::new())
 }
 
 pub(crate) fn read_index() -> Index<MemoryStore> {
-    Index::open(
+    reopen(
         FolderKey::from(write_key().read_key()),
         OWN,
         MemoryStore::new(),
     )
-    .unwrap()
 }
 
 pub(crate) fn sealed_index() -> Index<MemoryStore> {
-    Index::open(
+    reopen(
         FolderKey::from(write_key().sealed_key()),
         OWN,
         MemoryStore::new(),
     )
-    .unwrap()
+}
+
+/// Opens an index over a store that holds only genuine records of the
+/// folder, contiguous per writer: nothing is dropped or set aside.
+pub(crate) fn reopen<S: Store>(key: FolderKey, own: DeviceId, store: S) -> Index<S> {
+    let (index, report) = Index::open(key, own, store).unwrap();
+    assert_eq!(report, OpenReport::default(), "a clean store opens clean");
+    assert!(report.is_clean());
+    index
+}
+
+/// `r` as stored after one bit of its body flipped at rest: the last byte,
+/// which lies in `sealed`, so the body still passes step 1 and only the
+/// signature can tell. Its record hash is no longer `r`'s.
+pub(crate) fn flipped_body(r: &Record) -> Record {
+    let mut body = r.signed().body().to_vec();
+    *body.last_mut().unwrap() ^= 1;
+    reparse(&body, r.signed().signature().as_bytes())
+}
+
+/// An envelope with `body` and a signature by another folder's key.
+pub(crate) fn signed_by_other_key(body: &[u8]) -> SignedRecord {
+    other_key().sign_index_record(body.to_vec())
 }
 
 /// A writer fault a record is built with, bypassing the writer's checks.
@@ -336,6 +359,15 @@ pub(crate) struct Snapshot {
     /// What a write at each path names besides its heads.
     pub(crate) renamed_away: Vec<(String, Vec<RecordHash>)>,
     pub(crate) opaque: BTreeSet<RecordHash>,
+    /// The records opening set aside that have not landed.
+    pub(crate) set_aside: Vec<RecordHash>,
+}
+
+/// `s` with `set_aside` as the records set aside: what an index opened over
+/// a store with gaps holds besides what accepting its other records builds.
+pub(crate) fn with_set_aside(mut s: Snapshot, set_aside: &[RecordHash]) -> Snapshot {
+    s.set_aside = set_aside.to_vec();
+    s
 }
 
 pub(crate) fn snapshot<S>(index: &Index<S>) -> Snapshot {
@@ -368,6 +400,7 @@ pub(crate) fn snapshot<S>(index: &Index<S>) -> Snapshot {
         held,
         writers,
         opaque,
+        set_aside: index.set_aside(),
     }
 }
 
@@ -435,7 +468,8 @@ pub(crate) fn converge(a: &mut Index<MemoryStore>, b: &mut Index<MemoryStore>) {
     panic!("the indexes did not converge");
 }
 
-/// A store whose `append` or `load` fails on demand.
+/// A store whose `append` or `load` fails on demand, and that lists what was
+/// appended to it.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Flaky {
     pub(crate) inner: MemoryStore,
@@ -443,6 +477,8 @@ pub(crate) struct Flaky {
     pub(crate) fail_load: bool,
     /// Records `load` returns besides the inner store's.
     pub(crate) extra: Vec<SignedRecord>,
+    /// The hashes of the records appended, in order.
+    pub(crate) appended: Vec<RecordHash>,
 }
 
 impl Store for Flaky {
@@ -459,6 +495,7 @@ impl Store for Flaky {
         if self.fail_append {
             return Err(StoreError::Full);
         }
+        self.appended.push(record.hash());
         self.inner.append(record)
     }
 }
