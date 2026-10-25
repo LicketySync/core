@@ -6,10 +6,125 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
-- The Rust toolchain pinned in CI: 1.99.0, and nightly-2026-10-14 for the jobs that need nightly, on
-  the coordinator's ruling of 2026-10-25 that the owner's "CI tools - pin." covers the toolchain
-  (TM-8, TM-29). Until now each `dtolnay/rust-toolchain` step installed the day's stable or nightly,
-  and a release tag built with whatever stable was current. The 16 steps now name
+- The pin-all series brought under the owner's "Stay current" rule of 2026-10-25, and its reviews'
+  findings fixed (TM-8, TM-29). The owner: "We'd like to always use the latest version for tooling,
+  libraries, CI, etc. Upgrade to anything that's been released for over 1 week (avoiding supply
+  chain attacks) or that has critical vulnerabilities fixed." (CLAUDE.md, "Stay current"). Every
+  pin is now the newest release that has been out for at least 7 days on 2026-10-25 (published on
+  or before 2026-10-18T20:55Z), dates read with `gh api .../releases` and the crates.io API under a
+  User-Agent with no personal data. Moved back, since the pinned release was younger: install-action
+  `v2.87.31` (2026-10-23) to `v2.87.29` (`8cca0918f8471c33515202b73f56ab27f2bed283`, 2026-10-16),
+  in core and in site; rust-cache `v2.9.3` (2026-10-20) to `v2.9.2`
+  (`6323deb102c322ba6fcbdcafc7e3dddab59af2b6`, 2026-08-06, an annotated tag dereferenced); and
+  codeql-action `v4.39.1` (2026-10-21) to `v4.39.0` (`6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee`,
+  2026-10-15, annotated) for `init`, `analyze` and `upload-sarif`, whose `action.yml` files differ
+  between the two only in one input's description. None of the three younger releases fixes a
+  vulnerability (their notes: tool-manifest updates; a cache-cleanup fix and a log level; a CodeQL
+  bundle update). Unchanged, each the newest and old enough: checkout `v7.0.1` (2026-07-20),
+  upload-artifact `v7.0.2` and download-artifact `v8.0.2` (2026-10-07), attest-build-provenance
+  `v4.2.2` (2026-08-06), configure-pages `v6.0.0` (2026-03-25), upload-pages-artifact `v5.0.0`
+  (2026-04-10), deploy-pages `v5.0.1` (2026-09-01), codecov-action `v7.1.1` (2026-09-17),
+  scorecard-action `v2.5.0` (2026-10-12), rust-toolchain `v1` (its commit of 2026-10-16) and
+  clusterfuzzlite `v1` (2023-08-09). The tools stay where they were, each the newest crates.io or
+  GitHub release that is old enough: cargo-nextest 0.9.148 (2026-10-08), cargo-llvm-cov 0.9.1
+  (2026-09-06), cargo-udeps 0.1.61 (2026-04-29), cargo-deny 0.20.2 (2026-07-09), cargo-audit
+  0.22.2 (2026-06-05), cargo-machete 0.9.2 (2026-04-15), cargo-vet 0.10.2 (2026-01-13),
+  cargo-mutants 27.1.0 (2026-06-02), cargo-fuzz 0.13.2 (2026-06-09), cargo-careful 0.4.10
+  (2026-04-01), cargo-geiger 0.14.0 (2026-10-12), cargo-auditable 0.7.7 (2026-10-02),
+  cargo-cyclonedx 0.5.9 (2026-03-19), cargo-semver-checks 0.51.0 (2026-10-03), typos-cli 1.51.1
+  (2026-10-06), semgrep 1.181.0 (2026-10-14), gitleaks 8.30.1 (2026-03-21), the Codecov CLI v11.3.1
+  (2026-07-09) and zola 0.23.6 (2026-09-12). Three younger releases were read and passed over:
+  cargo-nextest 0.9.149 (2026-10-20), whose security fix is in `cargo nextest self update` alone,
+  which nothing here runs, with no advisory published; cargo-vet 0.10.3 (2026-10-22), whose notes
+  say its own dependencies were updated for RUSTSEC advisories, naming none as critical or high;
+  and semgrep 1.182.0 (2026-10-20), features only. Rust: stable 1.99.1 (released 2026-10-15; the
+  security review's S1) and nightly-2026-10-18 (rustc 1.101.0-nightly, 8006091eb 2026-10-17), the
+  newest dated nightly at least 7 days old, whose manifest has miri and rust-src. On the dev
+  machine, with that nightly and both components installed, cargo-udeps passes, `cargo fuzz build`
+  builds all 17 targets, a 5-second `cargo fuzz run frame_decode` runs clean, `cargo careful test
+  --workspace` passes and `cargo miri --version` answers.
+  - One source of truth (quality SF2, as ruled): the new `ci/pins.env` holds every tool and
+    toolchain version as `KEY=value` (`RUST_STABLE`, `RUST_NIGHTLY`, a key per cargo tool, `TYPOS`,
+    `SEMGREP` and `SEMGREP_IMAGE_DIGEST`, `GITLEAKS` and `GITLEAKS_LINUX_X64_SHA256`,
+    `CODECOV_CLI`). `gate.sh`, `ci/toolchains.sh`, `ci/gitleaks-install.sh` and `bootstrap.sh`
+    source it, each refusing first any line that is not a comment or `KEY=value` (so it cannot run a
+    command), and `ci/gitleaks.sh` reads its `GITLEAKS` for the warning it gives when the installed
+    gitleaks is another. `gate.sh` checks each workflow copy against it: `need_tool` for every cargo
+    tool and typos (the installed version and the workflows' install lines), `need_installs` for
+    cargo-auditable and cargo-cyclonedx in `release.yml`, and `need_line` for the `cargo-geiger`
+    line of `ci/geiger-baseline.txt`, the semgrep image and the Codecov CLI version in `ci.yml`.
+    Comments name keys, not versions: the workflows', `gate.sh`'s, `ci/gitleaks-install.sh`'s and
+    the geiger baseline's header, and `ci/test-geiger.sh`'s and `ci/test-pinned-actions.sh`'s
+    fixtures use versions no tool has (9.8.7, v1.2.3), so that `git grep -n -F <old version>` finds
+    only the copies and the CHANGELOG (and text about other software). `CONTRIBUTING.md` ("Pins and
+    the weekly refresh") states the procedure once: edit `pins.env`, edit the workflow copies
+    `gate.sh` names, then grep until only the CHANGELOG matches.
+  - Toolchain coverage (quality SF3, security N3): the check moves from `gate.sh` into
+    `ci/toolchains.sh`, run by `gate.sh` before its first step and by CI's `ci-scripts` job, with
+    26 cases in `ci/test-toolchains.sh`. Besides the names, it now fails a job whose `run:` steps
+    call cargo, rustc or rustup, or a `ci/` script that does, with no `RUSTUP_TOOLCHAIN` for the job
+    or the workflow. CodeQL's Rust extractor honours no `RUSTUP_TOOLCHAIN` of ours: it sets its own
+    (`get_extra_env` in `rust/extractor/src/config.rs` of github/codeql, to `FIXED_RUST_TOOLCHAIN`,
+    1.98.1 in `codeql-cli/v2.27.2`, the bundle that codeql-action `v4.39.0`'s `defaults.json`
+    names), so `codeql.yml` sets none and its toolchain moves only with the codeql-action pin; and
+    ClusterFuzzLite builds in its own image. The pinning claims in `ci.yml`'s header and
+    `CONTRIBUTING.md` say so.
+  - `ci/pinned-actions.sh` (security N1) refuses any line that writes a `uses` key in a form it
+    does not read: a space before the colon, a quoted key, a key with an escape, a flow mapping, an
+    explicit `?` key, an anchored or tagged key; and it refuses local actions (`./...`). Its error
+    names the form wanted, the `gh api` command that finds a tag's commit, and where the rule is.
+    `ci/test-pinned-actions.sh` has 46 cases, each named for its result; 15 of them fail against
+    the script before this change. Remaining limits, in its header: it reads lines, so `uses`-like
+    text in a script or a trailing comment is refused too, and a value on the next line is
+    refused.
+  - typos (security N2) is installed by install-action as `typos@1.51.1` with `fallback: none`,
+    which checks the archive's SHA-256 (the manifest's
+    `93c301fd4120ff076e2cc2a6d6a61cab4a4bdb81899287c0938b452e56d1f454` for x86_64 musl equals the
+    GitHub release asset's digest), then `run: typos`; `crate-ci/typos`, which downloaded its
+    release unchecked, is gone, and `gate.sh` checks typos with `need_tool typos-cli`. The semgrep
+    image (security N4) is pulled by digest,
+    `semgrep/semgrep:1.181.0@sha256:81474464c1f07483ba0682a44787fd93c91397419762a04abe2bafaae396304b`
+    (Docker Hub's API and the registry's `Docker-Content-Digest` agree; the tag was last pushed on
+    2026-10-14).
+  - `installs()` reads install-action's aliases, `nextest` and `typos`, as cargo-nextest and
+    typos-cli, so a workflow that spells one that way, or uses `taiki-e/install-action@nextest`,
+    fails the gate (correctness NIT 1); `need_tool` reads typos's version from `typos --version`.
+  - `fuzz/Cargo.lock` is committed: 58 packages, made from the root lockfile so that the crates the
+    two share keep its versions, plus arbitrary 1.5.0 (2026-10-06), jobserver 0.1.35 (2026-07-06)
+    and libfuzzer-sys 0.4.13 (2026-06-04). cargo-fuzz has no `--locked`, so `cargo fetch --locked
+    --manifest-path fuzz/Cargo.toml` runs before the fuzz targets are listed and before each fuzz
+    run in `nightly.yml`, in CI's `deps` job, and in `gate.sh`.
+  - `.github/dependabot.yml` in core (cargo and github-actions), site and web: `cooldown:
+    default-days: 7`. GitHub's Dependabot options reference: "The `cooldown` option is only
+    available for _version_ updates, not _security_ updates."
+  - `CONTRIBUTING.md`'s pins section is rewritten: the keys, the toolchains (an override holds per
+    directory, so per worktree), which release qualifies, the one procedure for moving a pin, and
+    the weekly refresh, which covers every `pins.env` key, cargo-geiger with its baseline, site's
+    zola, the two actions with a single `v1` tag, and transitive crates with `cargo update` here
+    and in `fuzz/` (quality SF1). The rule's pointers all lead to `ci.yml`'s header, and the
+    comments say that Dependabot rewrites the tag comment when it moves the pin. `bootstrap.sh`
+    (outside the repositories) sources `core/ci/pins.env`, installs every pinned tool,
+    cargo-auditable, cargo-cyclonedx and cargo-semver-checks included, installs `RUST_STABLE` by
+    name and sets it for `core/` when stable is another, and installs the dated nightly with miri
+    and rust-src.
+  - Residuals, as `CONTRIBUTING.md` lists them: the container images that pinned actions name by
+    tag (scorecard-action's on ghcr.io, ClusterFuzzLite's on gcr.io); the toolchains that actions
+    choose for themselves (CodeQL's extractor, ClusterFuzzLite's image); GitHub's runner images;
+    and the line-based reading of `ci/pinned-actions.sh` and `ci/toolchains.sh`, whose headers
+    list what they cannot see. `fuzz/` is a workspace of its own, so cargo-deny, cargo-vet and
+    Dependabot do not read its lockfile; the weekly refresh updates it.
+  - Tests that fail without the change: 15 of `ci/test-pinned-actions.sh`'s cases against the
+    script before it; `ci/toolchains.sh` on the workflows before it (`value 1.99.0`, and the steps
+    and jobs on it); and the gate's new copy checks against the workflows before it (`ci.yml`
+    installed typos through `crate-ci/typos`, and its semgrep image had no digest).
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security) over three rounds; every finding fixed and confirmed clean on
+    5753ddd. Author ac59cb154860b67dc; the merge agent wrote this line.
+- The Rust toolchain pinned in CI: 1.99.0, and nightly-2026-10-14 for the jobs that need nightly
+  (the entry above moves them to 1.99.1 and nightly-2026-10-18 and gives the check a script of its
+  own), on the coordinator's ruling of 2026-10-25 that the owner's "CI tools - pin." covers the
+  toolchain (TM-8, TM-29). Until now each `dtolnay/rust-toolchain` step installed the day's stable
+  or nightly, and a release tag built with whatever stable was current. The 16 steps now name
   `toolchain: 1.99.0` (12) or `toolchain: nightly-2026-10-14` (4: `ci.yml`'s `udeps`,
   `nightly.yml`'s `fuzz`, `careful` and `miri`). That alone would pin nothing: the action makes its
   toolchain rustup's default, and in the checkout `rust-toolchain.toml`'s `channel = "stable"`
@@ -27,7 +142,7 @@ paths or the API also names the security-reviewer pass.
   needs no separately named toolchain: its stable is 1.99.0 (b940084d7 2026-09-28) and
   nightly-2026-10-14 (rustc 1.101.0-nightly, 822182db4 2026-10-13) is installed. With that nightly,
   `cargo +nightly-2026-10-14 udeps --workspace --all-targets` passes ("All deps seem to have been
-  used."), `cargo fuzz build` builds all 19 targets, and a 5-second `cargo fuzz run frame_decode`
+  used."), `cargo fuzz build` builds all 17 targets, and a 5-second `cargo fuzz run frame_decode`
   runs clean. Its channel manifest lists `rust-src` and `miri-preview` (`miri`) as available for
   x86_64 Linux, which the `careful` and `miri` jobs install; neither job ran locally, since the dev
   machine's copy of that nightly lacks both components and adding them downloads them. `gate.sh`
@@ -65,8 +180,9 @@ paths or the API also names the security-reviewer pass.
   with `git/tags/<sha>`, and is the action's newest release in the major the workflow used; after
   the edit, every one of the 81 `uses:` lines (72 in core, 5 in site, 4 in web) was resolved again
   the same way and names its tag's commit. Where an action was on a major tag, the commit pinned is
-  the one that tag named that day, so the same code runs as before, except for codeql-action's v4
-  and the refs that were branches:
+  the one that tag named that day, so the same code runs as before, except for codeql-action's v4,
+  site's install-action (moved from `v2.87.30` to `v2.87.31`) and the refs that were branches (the
+  entry two above moves several of these pins back to the newest release at least 7 days old):
   - `actions/checkout` `3d3c42e5aac5ba805825da76410c181273ba90b1` (`v7.0.1`), in every job (it was
     already pinned in `codecov` and `scorecard`).
   - `actions/upload-artifact` `cf430e030ddbb5b0abf93d22962f4752f3646cd9` (`v7.0.2`).
@@ -83,8 +199,8 @@ paths or the API also names the security-reviewer pass.
   - `dtolnay/rust-toolchain` `683b588c487a69d01f6c6ddf40f036ff682cc2c8` (`v1`, its only tag, on
     master's head; already pinned in `release.yml`), in all 16 steps that install Rust. The
     `@stable` and `@nightly` refs were branches, each master's head plus a default for `toolchain`
-    (`gh api repos/dtolnay/rust-toolchain/compare/<v1>...stable`), so every step now names
-    `toolchain: stable` or `toolchain: nightly`.
+    (`gh api repos/dtolnay/rust-toolchain/compare/<v1>...stable`), so every step now names its
+    `toolchain:`.
   - `Swatinem/rust-cache` `d1527c8f67ef9af357290475d4af4b0fab8f12e0` (`v2.9.3`).
   - `taiki-e/install-action` `1e29709c0ec63babbe8f266397a465f29a825f91` (`v2.87.31`), in every
     step; site's `pages.yml` bumped from `v2.87.30` (`a4d3f3f761dcd95cce1b72cb61cb6d1963438177`).
@@ -110,8 +226,9 @@ paths or the API also names the security-reviewer pass.
   (cd1d6d546 2026-10-07)`). A new check stops the gate unless `typos --version` is `typos-cli
   1.51.1` and `ci.yml` runs typos as exactly one step `uses: crate-ci/typos@<40 hex digits> #
   v1.51.1`. `bootstrap.sh` (outside the repositories) installs the four at those versions. The Rust
-  toolchain itself is pinned by the entry above. The rule is stated once in full in `ci.yml`'s header (the `codecov` job's paragraph,
-  which said "pinning every action is a pending decision", is gone), and `release.yml`,
+  toolchain itself is pinned by the entry above. The rule is stated once in full in `ci.yml`'s
+  header (the `codecov` job's paragraph, which said "pinning every action is a pending decision",
+  is gone), and `release.yml`,
   `scorecard.yml`, `codeql.yml` and site's and web's `pages.yml` point to it. New
   `ci/pinned-actions.sh` checks the rule's form in a workflow directory: each `uses:` names a full
   40-digit lowercase SHA with a `# v<version>` comment (`v1`, `v2.9` or `v7.0.1`); a local action,

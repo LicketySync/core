@@ -11,13 +11,14 @@
 # compiler and switch code on what it supports. A crate with no line, or a line
 # for a crate that is gone, fails too.
 #
-# The counts hold for cargo-geiger 0.14.0 (the `cargo-geiger` line; CI installs
-# that version and ci/geiger.sh refuses any other) on x86_64 Linux (CI's
+# The counts hold for the cargo-geiger the `cargo-geiger` line names, which is
+# CARGO_GEIGER in ci/pins.env (gate.sh checks that this line agrees; CI installs
+# that version and ci/geiger.sh refuses any other), on x86_64 Linux (CI's
 # ubuntu-latest and the dev machine; other targets build other code). To move
 # to another cargo-geiger: install it (cargo install cargo-geiger --version <v>
-# --locked --features vendored-openssl), change the version here, in ci.yml and
-# in bootstrap.sh, run ci/geiger.sh, write the lines it prints, and review it
-# as one change.
+# --locked --features vendored-openssl), change CARGO_GEIGER, this line and
+# ci.yml's install line, run ci/geiger.sh, write the lines it prints, and review
+# it as one change.
 #
 # `generated <package> <file>` lines: Rust that a dependency's build script
 # writes into its OUT_DIR and compiles in with include!, which cargo-geiger never

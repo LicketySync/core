@@ -14,11 +14,11 @@
 # permission to a job of its own. Until 2026-10-25 the one job held contents,
 # id-token and attestations write for every step.
 #
-# Pinning rule (the owner's decision of 2026-10-25): every action in every
-# workflow pins by full commit SHA, GitHub's own included, since a tag can be
-# moved, with the release tag on that commit in a comment, and every tool a
-# workflow installs pins to an exact version (ci.yml states the rule in full,
-# and scorecard.yml too; ci/pinned-actions.sh checks the action pins).
+# Pinning rule (the owner's decisions of 2026-10-25; in full in ci.yml's
+# header): every action pins by full commit SHA, GitHub's own included, since a
+# tag can be moved, with the release tag on that commit in a comment, which
+# Dependabot rewrites when it moves the pin; every tool and the Rust toolchain
+# pin to their ci/pins.env versions.
 #
 # Verifying a release: an attestation is trusted only as this workflow's, run
 # for a v* tag on GitHub's own runners.
@@ -43,9 +43,9 @@ on:
 permissions:
   contents: read
 
-# The pinned Rust toolchain (ci.yml's header says why RUSTUP_TOOLCHAIN).
+# RUST_STABLE (ci/pins.env; ci.yml's header says why RUSTUP_TOOLCHAIN).
 env:
-  RUSTUP_TOOLCHAIN: 1.99.0
+  RUSTUP_TOOLCHAIN: 1.99.1
 
 jobs:
   build:
@@ -73,19 +73,21 @@ jobs:
       # The comment after a commit pin names the release the commit is, for
       # the reader and for Dependabot. v1 is rust-toolchain's master's head on
       # 2026-10-25; its `stable` branch is that commit with `toolchain`
-      # defaulting to stable, so the toolchain is named here instead: 1.99.0,
-      # the workflow's RUSTUP_TOOLCHAIN, so that a tag builds with the same
-      # Rust whatever stable is that day (ci.yml's header says why both).
+      # defaulting to stable, so the toolchain is named here instead:
+      # RUST_STABLE, the workflow's RUSTUP_TOOLCHAIN, so that a tag builds with
+      # the same Rust whatever stable is that day (ci.yml's header says why
+      # both).
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
+          toolchain: 1.99.1
           targets: ${{ matrix.target }}
-      # Exact versions, so that no new release changes what a tag builds; the
-      # weekly Dependabot review checks them for new releases (CONTRIBUTING.md).
+      # CARGO_AUDITABLE and CARGO_CYCLONEDX (ci/pins.env), so that no new
+      # release changes what a tag builds; the weekly refresh moves them
+      # (CONTRIBUTING.md).
       # install-action checks each download's SHA-256 against its manifest, and
       # `fallback: none` makes a version missing from it fail here instead of
       # going to cargo-binstall (see the note in ci.yml's deps job).
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-auditable@0.7.7,cargo-cyclonedx@0.5.9
           fallback: none

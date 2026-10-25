@@ -3,33 +3,36 @@
 # table says run "every push"; nightly.yml, and the weekly mutants.yml and
 # scorecard.yml, hold the rest.
 #
-# Pinning rule (the owner's decision of 2026-10-25, "CI tools - pin."): every
-# action in every workflow, GitHub's own included, is pinned by full commit
-# SHA, since a tag can be moved, and the comment after the pin names the
-# release tag on that commit, which Dependabot reads to keep the pin current
-# (release.yml and scorecard.yml state the same rule; ci/pinned-actions.sh,
-# run below and by gate.sh, checks the form). Every tool a workflow installs
-# is pinned to an exact version: gate.sh stops when a cargo tool it runs or
-# reproduces, or typos, is installed in a workflow at any other version than
-# the gate's, and CONTRIBUTING.md lists the pins Dependabot cannot see.
+# Pinning rule (the owner's decisions of 2026-10-25, "CI tools - pin." and
+# "Stay current", in CLAUDE.md): every action in every workflow of core, site
+# and web, GitHub's own included, is pinned by full commit SHA, since a tag can
+# be moved, with a comment after the pin naming the release tag on that commit,
+# which Dependabot rewrites when it moves the pin (ci/pinned-actions.sh, run
+# below and by gate.sh, checks the form). Every tool and Rust toolchain a
+# workflow installs is pinned to an exact version, written once, in
+# ci/pins.env: each copy in a workflow is that key's value, and gate.sh stops
+# when one differs. A pin is the newest release that has been out for at least
+# 7 days, or a newer one at once when it fixes a critical or high
+# vulnerability; Dependabot waits the same 7 days (.github/dependabot.yml),
+# except for security updates, and the weekly refresh moves what it cannot see
+# (CONTRIBUTING.md, "Pins and the weekly refresh").
+#
 # dtolnay/rust-toolchain has one tag, v1, on its master branch, where
 # `toolchain` has no default; its stable and nightly branches, used until
-# 2026-10-25, are that commit with a default.
-#
-# The Rust toolchain is pinned too (the coordinator's ruling of 2026-10-25 that
-# the owner's decision covers it): 1.99.0, and nightly-2026-10-14 for the jobs
-# that need nightly (cargo-udeps here; fuzzing, cargo-careful and Miri in
-# nightly.yml), each named both in its rust-toolchain step and in
-# RUSTUP_TOOLCHAIN, set for the workflow below and again in each nightly job.
-# RUSTUP_TOOLCHAIN is what pins it: rust-toolchain.toml's `channel =
-# "stable"` outranks the default that rust-toolchain sets, so without it every
-# cargo command in the checkout would run the runner's stable of the day.
+# 2026-10-25, are that commit with a default. Each step installs RUST_STABLE,
+# or RUST_NIGHTLY in the jobs that need nightly (cargo-udeps here; fuzzing,
+# cargo-careful and Miri in nightly.yml), and RUSTUP_TOOLCHAIN, set for the
+# workflow below and again in each nightly job, names the same. RUSTUP_TOOLCHAIN
+# is what pins the toolchain: rust-toolchain.toml's `channel = "stable"`
+# outranks the default that rust-toolchain sets, so without it every cargo
+# command in the checkout would run the runner's stable of the day.
 # rust-toolchain.toml stays on stable, so that the dev machine needs no
-# separately named toolchain; gate.sh stops unless that stable is 1.99.0, the
-# dated nightly is installed, and every workflow names these two and no other
-# (each rust-toolchain step's toolchain the one RUSTUP_TOOLCHAIN gives its
-# job). A bump is one reviewed change to gate.sh and the workflows, with
-# bootstrap.sh and CONTRIBUTING.md.
+# separately named toolchain; gate.sh stops unless that stable is RUST_STABLE
+# and RUST_NIGHTLY is installed, and ci/toolchains.sh (run below and by gate.sh)
+# checks every workflow. Two toolchains are not ours to pin: CodeQL's Rust
+# extractor sets RUSTUP_TOOLCHAIN itself, to the release its CodeQL bundle names
+# (the pinned codeql-action's default bundle, so it moves only with that pin),
+# and ClusterFuzzLite builds in its own image.
 name: CI
 
 on:
@@ -49,8 +52,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  # The pinned stable (the note at the top); the udeps job sets the nightly.
-  RUSTUP_TOOLCHAIN: 1.99.0
+  # RUST_STABLE (the note at the top); the udeps job sets RUST_NIGHTLY.
+  RUSTUP_TOOLCHAIN: 1.99.1
 
 jobs:
   fmt:
@@ -60,7 +63,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
+          toolchain: 1.99.1
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -71,9 +74,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
+          toolchain: 1.99.1
           components: clippy
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
@@ -89,12 +92,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # cargo-nextest, and in the jobs below cargo-llvm-cov and cargo-udeps, at
-      # the exact versions gate.sh requires, with no fallback (see the note in
-      # the deps job).
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      # their ci/pins.env versions, with no fallback (see the note in the deps
+      # job).
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9.148
           fallback: none
@@ -108,10 +111,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
+          toolchain: 1.99.1
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-llvm-cov@0.9.1,cargo-nextest@0.9.148
           fallback: none
@@ -148,8 +151,8 @@ jobs:
   # credentials. Inputs: files and disable_search, that one report and nothing
   # else; plugins: noop, no coverage tool of the CLI's runs; cleanup, the CLI
   # is downloaded into a temporary directory, not the checkout; disable_telem,
-  # the CLI sends nothing to its error reporting; version, the CLI pinned (the
-  # weekly Dependabot review checks it, CONTRIBUTING.md); fail_ci_if_error,
+  # the CLI sends nothing to its error reporting; version, the CLI pinned
+  # (CODECOV_CLI in ci/pins.env; the weekly refresh moves it); fail_ci_if_error,
   # since without it the action's uploader script (dist/codecov.sh) only logs a
   # failed GPG signature or SHA-256 check of the CLI and runs it anyway. The
   # GPG key it checks against is still fetched at run time, from Keybase.
@@ -208,8 +211,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo doc --workspace --no-deps --document-private-items
 
   deps:
@@ -219,24 +222,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      # Each tool at the exact version gate.sh requires (bootstrap.sh installs
-      # them; gate.sh stops when this file or nightly.yml installs one any other
-      # way), so that no new release changes what passes without a commit. A
-      # bump is one reviewed change to ci.yml, nightly.yml, gate.sh and
-      # bootstrap.sh. Dependabot cannot see these pins: each weekly Dependabot
-      # review checks the four for new releases. `fallback: none` makes a
-      # version missing from install-action's manifest fail here instead of
-      # going to cargo-binstall, which can fetch an unverified binary and is
-      # handed github.token.
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Each tool at its ci/pins.env version, which gate.sh requires too (it
+      # stops when a workflow installs one any other way), so that no new
+      # release changes what passes without a commit. Dependabot cannot see
+      # these pins; the weekly refresh moves them (CONTRIBUTING.md).
+      # `fallback: none` makes a version missing from install-action's manifest
+      # fail here instead of going to cargo-binstall, which can fetch an
+      # unverified binary and is handed github.token.
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-machete@0.9.2
           fallback: none
-      # cargo-vet from crates.io: 0.10.1 and 0.10.2 have no release binaries, so
-      # install-action's "latest" was 0.10.0, whose formatter rejects the
-      # supply-chain/imports.lock that 0.10.2 writes (run 39160240196).
+      # cargo-vet from crates.io, since not every release has release binaries:
+      # install-action once fell back to an older one, whose formatter rejected
+      # the supply-chain/imports.lock that the pinned one writes (run
+      # 39160240196).
       - run: cargo install cargo-vet --version 0.10.2 --locked
       - run: cargo deny check
       - run: cargo deny --config deny-production.toml check bans
@@ -244,25 +246,27 @@ jobs:
       - run: cargo machete
       - name: cargo vet (unaudited dependency changes)
         run: cargo vet --locked
+      # fuzz/Cargo.lock, which nightly.yml's fuzz jobs build from, is current.
+      - run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
 
   udeps:
     name: cargo-udeps (nightly)
     runs-on: ubuntu-latest
-    # The pinned nightly, for every cargo and rustc call in this job (the note at
-    # the top); the command names it too, as gate.sh's does.
+    # RUST_NIGHTLY, for every cargo and rustc call in this job (the note at the
+    # top); the command names it too, as gate.sh's does.
     env:
-      RUSTUP_TOOLCHAIN: nightly-2026-10-14
+      RUSTUP_TOOLCHAIN: nightly-2026-10-18
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: nightly-2026-10-14
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+          toolchain: nightly-2026-10-18
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-udeps@0.1.61
           fallback: none
-      - run: cargo +nightly-2026-10-14 udeps --workspace --all-targets
+      - run: cargo +nightly-2026-10-18 udeps --workspace --all-targets
 
   geiger:
     name: cargo-geiger (unsafe report; every count must equal ci/geiger-baseline.txt)
@@ -271,12 +275,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Built with vendored OpenSSL so the tool never depends on the runner's OpenSSL
       # (decision 2026-10-14); bootstrap.sh installs it the same way. The version
-      # is the one ci/geiger-baseline.txt names (counts differ between versions;
-      # ci/geiger.sh checks it); its header says how to move to another.
+      # is CARGO_GEIGER (ci/pins.env), which ci/geiger-baseline.txt names too,
+      # since counts differ between versions (ci/geiger.sh checks it); the
+      # baseline's header says how to move to another.
       - run: cargo install cargo-geiger --version 0.14.0 --locked --features vendored-openssl
       # ci/geiger.sh prints the report, accepts cargo-geiger's exit 1 only for
       # warnings about files it cannot or need not scan, and fails when any of a
@@ -289,9 +294,9 @@ jobs:
     name: Semgrep (community Rust rules + project rules)
     runs-on: ubuntu-latest
     container:
-      # The version gate.sh's semgrep runs (bootstrap.sh installs it); a bump is
-      # a reviewed change to both.
-      image: semgrep/semgrep:1.181.0
+      # SEMGREP by SEMGREP_IMAGE_DIGEST (ci/pins.env), so that a re-pushed tag
+      # changes nothing; gate.sh runs the same semgrep (bootstrap.sh installs it).
+      image: semgrep/semgrep:1.181.0@sha256:81474464c1f07483ba0682a44787fd93c91397419762a04abe2bafaae396304b
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The project rules' own cases first (.semgrep/tests/), so that a rule that
@@ -305,25 +310,29 @@ jobs:
       # under a second on the dev machine), so 60 s leaves a slow runner room.
       - run: semgrep scan --metrics=off --timeout 60 --config p/rust --config .semgrep --exclude .semgrep --error
 
-  # typos at the version gate.sh requires: the action's release commit names
-  # the typos it runs (action/entrypoint.sh downloads that release from
-  # GitHub, with no checksum), and gate.sh stops unless the comment after the
-  # pin names the same version. A Dependabot bump of this action moves gate.sh's
-  # version and bootstrap.sh's with it (CONTRIBUTING.md).
+  # typos at TYPOS (ci/pins.env), the version gate.sh runs, installed by
+  # install-action, which checks the archive's SHA-256 against its manifest,
+  # with no fallback (see the note in the deps job).
   typos:
     name: typos
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: typos@1.51.1
+          fallback: none
+      - run: typos
 
   # The gitleaks command-line tool (MIT), not gitleaks-action: the action needs
   # a licence key for a repository an organization owns, free but issued on
   # registration at gitleaks.io and kept as a repository secret, and from v2 on
-  # the action itself is no longer MIT-licensed. ci/gitleaks-install.sh pins
-  # the release by version and SHA-256 and says how to move it (Dependabot
-  # cannot see it); ci/gitleaks.sh holds the flags, .gitleaks.toml the
-  # allowlists, .gitleaksignore the one ignored finding.
+  # the action itself is no longer MIT-licensed. ci/gitleaks-install.sh
+  # installs GITLEAKS (ci/pins.env) after checking its SHA-256 and says how to
+  # move it (Dependabot cannot see it); ci/gitleaks.sh holds the flags,
+  # .gitleaks.toml the allowlists, .gitleaksignore the one ignored finding.
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
@@ -351,8 +360,8 @@ jobs:
       - run: ci/test-no-hostnames.sh
       - run: ci/no-hostnames.sh
 
-  # The pinning rule at the top of this file, checked in every workflow here;
-  # gate.sh runs the same two scripts.
+  # The action half of the pinning rule at the top of this file, checked in
+  # every workflow here; gate.sh runs the same two scripts.
   pinned-actions:
     name: every action pinned by commit
     runs-on: ubuntu-latest
@@ -366,15 +375,18 @@ jobs:
   # The scripts the scheduled workflows run (ci/mutants.sh in mutants.yml,
   # ci/fuzz-targets.sh in nightly.yml), tested on stand-ins for the tools on
   # every push, so that a change that breaks one fails here rather than at the
-  # next scheduled run; and the line-ending attributes of the test vectors and
+  # next scheduled run; the line-ending attributes of the test vectors and
   # fuzz seeds, checked on Linux with Windows' core.autocrlf=true (the Windows
-  # runner would check this script itself out with CRLF, which bash rejects).
-  # gate.sh runs the same three.
+  # runner would check this script itself out with CRLF, which bash rejects);
+  # and the toolchain half of the pinning rule, ci/toolchains.sh with its
+  # tests. gate.sh runs the same.
   ci-scripts:
-    name: tests of the mutants and fuzz-target scripts, and of .gitattributes
+    name: tests of the mutants and fuzz-target scripts and .gitattributes; the toolchain check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: ci/test-mutants.sh
       - run: ci/test-fuzz-targets.sh
       - run: ci/test-vector-line-endings.sh
+      - run: ci/test-toolchains.sh
+      - run: ci/toolchains.sh

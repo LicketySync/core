@@ -43,7 +43,7 @@ cppsrc="$never /reg/cc-1.8.0/src/detect_cpp_stdlib.cpp"
 gen_serde="$never /t/geiger/debug/build/serde_core-0123456789abcdef/out/private.rs"
 rsfile="$never /t/geiger/debug/build/x-0123456789abcdef/out/generated.rs"
 nometrics='WARNING: No metrics found for package: foo 1.0.0'
-version='cargo-geiger 0.14.0'
+version='cargo-geiger 9.8.7'
 keys='a 95 4352 23 2 63'
 t() { # totals line: t <functions> <expressions> <impls> <traits> <methods> (used)
   printf '%s/309     %s/11699   %s/36  %s/2     %s/216' "$@"
@@ -97,7 +97,7 @@ case_ "clean run at the baseline"               0 "$keys" a 0 "    Checking a v0
 has_ stdout "== a: at the baseline ($keys)"
 case_ "README, C and C++ files, count matches"  0 "$keys" a 1 "$readme"$'\n'"$csrc"$'\n'"$cppsrc"$'\n'"error: Found 3 warnings" "$at"
 case_ "coloured count line"                     0 "$keys" a 1 "$readme"$'\n\e[1m\e[91merror\e[0m: Found 1 warnings' "$at"
-# what cargo-geiger 0.14.0 printed for the keys crate on 2026-10-18, abridged
+# what cargo-geiger printed for the keys crate on 2026-10-18, abridged
 case_ "real noise around the warnings"          0 "$keys" a 1 '    Blocking waiting for file lock on package cache
      Removed 6 files, 741B total
     Checking licketysync-keys v0.0.1 (/w/crates/keys)
@@ -164,16 +164,16 @@ case_ "a listed crate that is gone"             1 $'a 0 0 0 0 0\ngone 0 0 0 0 0'
 case_ "baseline line with two counts"           1 "a 95 4352" a 0 "" "$(t 0 0 0 0 0)"
 case_ "crate listed twice"                      1 $'a 0 0 0 0 0\na 5 5 5 5 5' a 0 "" "$(t 0 0 0 0 0)"
 # the tool itself
-stub_version='cargo-geiger 0.15.0'
+stub_version='cargo-geiger 9.9.0'
 case_ "another cargo-geiger version"            1 "a 0 0 0 0 0" a 0 "" "$(t 0 0 0 0 0)"
-has_ stderr "  cargo install cargo-geiger --version 0.14.0 --locked --features vendored-openssl"
+has_ stderr "  cargo install cargo-geiger --version 9.8.7 --locked --features vendored-openssl"
 stub_version=missing
 case_ "cargo-geiger not installed"              1 "a 0 0 0 0 0" a 0 "" "$(t 0 0 0 0 0)"
-has_ stderr "  cargo install cargo-geiger --version 0.14.0 --locked --features vendored-openssl"
+has_ stderr "  cargo install cargo-geiger --version 9.8.7 --locked --features vendored-openssl"
 unset stub_version
 base_version='# no version line'
 case_ "baseline without a version line"         1 "a 0 0 0 0 0" a 0 "" "$(t 0 0 0 0 0)"
-base_version=$'cargo-geiger 0.14.0\ncargo-geiger 0.13.0'
+base_version=$'cargo-geiger 9.8.7\ncargo-geiger 9.8.6'
 case_ "two version lines"                       1 "a 0 0 0 0 0" a 0 "" "$(t 0 0 0 0 0)"
 unset base_version
 # a missing baseline fails closed: built by hand because case_ always writes one

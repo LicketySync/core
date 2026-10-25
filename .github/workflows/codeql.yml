@@ -1,8 +1,9 @@
 # GitHub code scanning with CodeQL's Rust analysis. Free for public repositories.
-# Every action pinned by commit (the pinning rule in ci.yml). codeql-action is
-# v4: v3 is deprecated in December 2026 (codeql-action's changelog), and the
-# action.yml of init and of analyze declare the same inputs at v3.39.1 and
-# v4.39.1, only their runtime moving from Node 20 to Node 24.
+# Every action pinned by commit (the pinning rule in ci.yml's header).
+# codeql-action is v4: v3 is deprecated in December 2026 (codeql-action's
+# changelog), and init's and analyze's inputs are the same in v3 and v4, only
+# their runtime moving from Node 20 to Node 24. The Rust extractor chooses its
+# own Rust toolchain (ci.yml's header), so this workflow sets none.
 name: CodeQL
 
 on:
@@ -21,8 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           languages: rust
           queries: security-extended
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0

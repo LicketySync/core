@@ -57,8 +57,9 @@ agrees it is not one.
 
 ## Local checks
 
-`./gate.sh` runs, in order, every CI check that can fail and fits on one machine
-(it needs the network for the advisory database and Semgrep's community rules):
+`./gate.sh` first checks the pins (below) and runs `ci/toolchains.sh`, then
+runs, in order, every CI check that can fail and fits on one machine (it needs
+the network for the advisory database and Semgrep's community rules):
 
 ```sh
 cargo fmt --all --check
@@ -71,7 +72,8 @@ cargo deny --config deny-production.toml check bans
 cargo audit
 cargo machete
 cargo vet --locked
-cargo +nightly-2026-10-14 udeps --workspace --all-targets
+cargo +<RUST_NIGHTLY> udeps --workspace --all-targets
+cargo fetch --locked --manifest-path fuzz/Cargo.toml
 typos
 semgrep --test --metrics=off --config .semgrep/project.yml .semgrep/tests/project.rs
 semgrep scan --metrics=off --timeout 60 --config p/rust --config .semgrep --exclude .semgrep --error
@@ -82,6 +84,7 @@ ci/test-no-hostnames.sh
 ci/no-hostnames.sh
 ci/test-pinned-actions.sh
 ci/pinned-actions.sh
+ci/test-toolchains.sh
 ci/test-mutants.sh
 ci/test-fuzz-targets.sh
 cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-<crate> --ignore-filename-regex 'crates/(<the others>)/'   # once each for keys, protocol, index, engine
@@ -98,79 +101,105 @@ or updated dependency) writes that line in the same commit, so the reviewers
 see the change; the baseline's header says how, and how to move to another
 cargo-geiger.
 
-The Rust toolchains are the ones CI pins: stable 1.99.0, which
-`rust-toolchain.toml`'s `channel = "stable"` gives the checkout, and
-nightly-2026-10-14 (`rustup toolchain install nightly-2026-10-14`), for
-cargo-udeps and to reproduce what `nightly.yml`'s fuzzing, cargo-careful and
-Miri jobs report. `gate.sh` stops unless `rustc --version` in the checkout is
-1.99.0 and the dated nightly is installed, and prints what to run; it never
-downloads a toolchain. When stable moves past 1.99.0, either the pin moves or
-`rustup toolchain install 1.99.0` and `rustup override set 1.99.0` keep the
-checkout on it.
-
-The tools beyond cargo's: cargo-nextest 0.9.148, cargo-llvm-cov 0.9.1,
-cargo-udeps 0.1.61, cargo-deny 0.20.2, cargo-audit 0.22.2, cargo-machete
-0.9.2 and cargo-vet 0.10.2, the versions CI pins, are required (`cargo
-install --locked <tool> --version <version>`), and so are typos 1.51.1, the
-release of `crate-ci/typos` that `ci.yml` pins (`cargo install --locked
-typos-cli --version 1.51.1`), and semgrep 1.181.0, the version CI's image
-pins (`pipx install semgrep==1.181.0`). So are cargo-mutants 27.1.0 (the
-weekly `mutants.yml`), cargo-fuzz 0.13.2 and cargo-careful 0.4.10
-(`nightly.yml`), so that a surviving mutant, a fuzz crash or a careful
-finding reproduces locally with the same tool (`ci/mutants.sh <k>/<n>
-<budget>` runs one shard of the mutants as the weekly job does). `gate.sh`
-checks all twelve and both toolchains before its first step. It stops when
-the workflow that installs one of the ten cargo tools (`ci.yml`,
-`nightly.yml`, `mutants.yml`) installs it any other way, when `ci.yml` runs
-typos other than as one `crate-ci/typos` step pinned by commit with
-`# v1.51.1` after it, and when a workflow names any other Rust toolchain or a
-`dtolnay/rust-toolchain` step installs another than the `RUSTUP_TOOLCHAIN`
-its job runs with. gitleaks is
-optional (`ci/gitleaks-install.sh ~/.local/bin` installs the release CI
-pins). CI adds the full-history gitleaks scan, the other operating systems,
-CodeQL and, once configured, ClusterFuzzLite.
-`bootstrap.sh` in the parent directory installs the tools the gate needs, the
-pinned versions included.
-
-Every action in every workflow of core, site and web is pinned by full commit
-SHA, with the release tag on that commit in a comment (the pinning rule in
-`ci.yml`, the owner's decision of 2026-10-25). `ci/pinned-actions.sh` checks
-the form here, and on site's or web's workflows when given their
-`.github/workflows`; whether the tag names that commit is checked by hand
-(`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, dereferencing an annotated
-tag with `git/tags/<sha>`). Dependabot's weekly pull requests move these pins
-and their comments together. When one moves `crate-ci/typos`, the reviewing
-agent also moves `gate.sh`'s `typos_version`, `bootstrap.sh` and this file
-to that release's typos on the pull request's branch, as for the geiger
-baseline, so the merged diff carries both, and installs it locally.
-
-Dependabot cannot see the following pins, so the agent at each weekly
-Dependabot review checks them for new releases; a bump is one reviewed change:
-
-- the ten cargo tools above, in the workflows that install them, `gate.sh`
-  and `bootstrap.sh`;
-- the Rust toolchains, stable 1.99.0 (a new stable every six weeks) and
-  nightly-2026-10-14 (moved when a tool or a fix needs a newer nightly): a
-  bump is one reviewed change to `gate.sh`'s `rust_stable` or `rust_nightly`
-  and every workflow's `toolchain:`, `RUSTUP_TOOLCHAIN` and `+nightly-...`,
-  with `bootstrap.sh` and this file, after the gate passes on the new
-  toolchain;
-- `release.yml`'s cargo-auditable 0.7.7 and cargo-cyclonedx 0.5.9;
-- site's `pages.yml`'s zola 0.23.6;
-- the Codecov CLI version that `ci.yml`'s `codecov` job pins (v11.3.1); the
-  same review reads the result of the last `codecov` job on `main`, since that
-  job may fail without turning the run red, so a broken upload shows only
-  there;
-- the commit pins of `dtolnay/rust-toolchain` (every job that installs Rust)
-  and `google/clusterfuzzlite` (`clusterfuzzlite.yml`): each has a single
-  tag, `v1`, and no version releases, so Dependabot has no newer release to
-  move to; a bump pins the commit `v1` names that day.
-
-One thing stays unpinned, as a residual: the container images that pinned
-actions name by tag (scorecard-action's, ClusterFuzzLite's).
-
 When `cargo vet --locked` fails after a dependency change: run `cargo vet` (it
 refreshes `supply-chain/imports.lock` from the Mozilla and Google audits), then
 `cargo vet suggest`, and either `cargo vet certify` after actually reading the
 crate or `cargo vet add-exemption` with a reason; commit `supply-chain/` with the
 change.
+
+## Pins and the weekly refresh
+
+Every version a workflow, `gate.sh` or `bootstrap.sh` uses is written once, in
+`ci/pins.env`, under a key named after the tool (`CARGO_NEXTEST`, `TYPOS`,
+`SEMGREP`, `GITLEAKS`, ...) or the toolchain (`RUST_STABLE`, `RUST_NIGHTLY`);
+the pinning rule is in `.github/workflows/ci.yml`'s header. `gate.sh` stops
+before its first step when an installed tool or toolchain is not its
+`pins.env` version, printing the command that installs it, or when a copy in a
+workflow or in `ci/geiger-baseline.txt` differs, naming the file and the line
+it expects; `bootstrap.sh` installs every version from the file.
+
+The tools beyond cargo's, all required: the cargo tools of `pins.env`
+(`cargo install --locked <crate> --version <version>`; cargo-geiger and
+cargo-udeps with `--features vendored-openssl`), typos (crate `typos-cli`) and
+semgrep (`pipx install semgrep==<SEMGREP>`). cargo-mutants (the weekly
+`mutants.yml`), cargo-fuzz and cargo-careful (`nightly.yml`) are not run by
+the gate but are pinned the same way, so that a surviving mutant, a fuzz crash
+or a careful finding reproduces locally with the same tool (`ci/mutants.sh
+<k>/<n> <budget>` runs one shard of the mutants as the weekly job does).
+gitleaks is optional (`ci/gitleaks-install.sh ~/.local/bin` installs the
+release CI pins). CI adds the full-history gitleaks scan, the other operating
+systems, CodeQL and, once configured, ClusterFuzzLite.
+
+The Rust toolchains: `RUST_STABLE`, which `rust-toolchain.toml`'s
+`channel = "stable"` must give the checkout, and `RUST_NIGHTLY`, a dated
+nightly installed by name with miri and rust-src, for cargo-udeps and to
+reproduce what `nightly.yml`'s fuzzing, cargo-careful and Miri jobs report.
+`gate.sh` never downloads a toolchain. When stable moves past `RUST_STABLE`,
+either the pin moves or `rustup toolchain install <RUST_STABLE>` and
+`rustup override set <RUST_STABLE>` keep a checkout on it; an override holds
+for one directory, so each worktree needs its own.
+
+Every action in every workflow of core, site and web is pinned by full commit
+SHA, with the release tag on that commit in a comment, which Dependabot
+rewrites when it moves the pin. `ci/pinned-actions.sh` checks the form here,
+and on site's or web's workflows when given their `.github/workflows`; whether
+the tag names that commit is checked by hand
+(`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, an annotated tag then
+`git/tags/<sha>`). Dependabot opens its weekly pull requests only for releases
+at least 7 days old (`cooldown` in `.github/dependabot.yml`; security updates
+come at once).
+
+**Which release.** The owner's "Stay current" rule (CLAUDE.md): every pin is
+the newest release that has been out for at least 7 days, or a newer one at
+once when it fixes a critical or high vulnerability. A crate's date is its
+crates.io publish date; an action's, tool's or image's, its GitHub release's
+`published_at` (`gh api repos/<owner>/<repo>/releases/tags/<tag>`) or the
+image tag's push date; a stable Rust's, its release day (`rustup check` shows
+the newest); a nightly's, its date. Any request to these services carries a
+User-Agent with no personal data, such as
+`licketysync-ci-check (+https://github.com/LicketySync)`.
+
+**Moving a pin**, the one procedure for every key: edit `ci/pins.env`; edit
+the workflow copies, running `./gate.sh` until it no longer stops at one (each
+stop names the file and the line it wants); then `git grep -n -F <old version>`
+until only the CHANGELOG matches, apart from text about other software;
+install the new version locally (the gate prints the command); and review it
+as one change, with its CHANGELOG entry. Some keys need one more step:
+`CARGO_GEIGER` moves only with `ci/geiger-baseline.txt`'s counts, re-measured
+as the baseline's header says; `SEMGREP_IMAGE_DIGEST` is the new tag's index
+digest on Docker Hub; `GITLEAKS_LINUX_X64_SHA256` is the linux_x64 line of the
+release's checksums file (`ci/gitleaks-install.sh` says how to read it);
+`RUST_NIGHTLY` must be a date whose nightly has miri and rust-src.
+
+**The weekly refresh.** At each weekly Dependabot review the agent applies the
+rule to what Dependabot cannot see, and lands what it finds as one reviewed
+change:
+
+- every key in `ci/pins.env`: the Rust stable and dated nightly, the cargo
+  tools, typos, semgrep and its image digest, gitleaks and its SHA-256, and
+  the Codecov CLI;
+- cargo-geiger, which moves only with the baseline's counts;
+- site's zola, in its `pages.yml` (site has no `pins.env`);
+- the commit pins of `dtolnay/rust-toolchain` and `google/clusterfuzzlite`:
+  each has a single tag, `v1`, and no version releases, so Dependabot has no
+  newer release to move to; a bump pins the commit `v1` names that day;
+- transitive crates, which Dependabot skips: `cargo update` here and in
+  `fuzz/` (whose `Cargo.lock` the fuzz jobs build from with `--locked`
+  checked), taking back with `cargo update --precise` any version younger than
+  7 days, then `cargo deny`, `cargo audit`, `cargo vet` and the geiger
+  baseline as for any dependency change.
+
+The same review reads the result of the last `codecov` job on `main`, since
+that job may fail without turning the run red, so a broken upload shows only
+there. A Dependabot pull request that changes a requirement in a crate's
+`Cargo.toml` can leave `fuzz/Cargo.lock` behind; CI's deps job then fails, and
+the reviewing agent updates `fuzz/Cargo.lock` on the pull request's branch, as
+for the geiger baseline.
+
+What stays unpinned, as residuals: the container images that pinned actions
+name by tag (scorecard-action's on ghcr.io, ClusterFuzzLite's on gcr.io); the
+toolchains that actions choose for themselves (CodeQL's Rust extractor sets its
+own, which moves only with the codeql-action pin, and ClusterFuzzLite builds in
+its own image); and GitHub's runner images. `ci/pinned-actions.sh` and
+`ci/toolchains.sh` read lines, not YAML; their headers list what they cannot
+see.

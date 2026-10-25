@@ -10,14 +10,14 @@
 #            CI after history, for the files git takes for binary, which
 #            history, reading `git log -p`, never sees)
 # The binary defaults to `gitleaks` on PATH; CI passes the release
-# ci/gitleaks-install.sh verified. Another version than that script pins still
-# runs, with a warning that says how to install the pinned one. Exit 1 on a
+# ci/gitleaks-install.sh verified. Another version than GITLEAKS in ci/pins.env
+# still runs, with a warning that says how to install the pinned one. Exit 1 on a
 # finding or an error.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mode=${1:-}
 bin=${2:-gitleaks}
-pinned=$(sed -n 's/^version=//p' ci/gitleaks-install.sh)
+pinned=$(sed -n 's/^GITLEAKS=//p' ci/pins.env)
 if ! have=$("$bin" version 2> /dev/null); then
   echo "gitleaks is not installed; install the pinned release: ci/gitleaks-install.sh ~/.local/bin" >&2
   exit 1

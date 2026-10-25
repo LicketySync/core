@@ -3,14 +3,23 @@
 # a directory, after checking the tarball against the SHA-256 its release
 # publishes. CI's gitleaks job runs it; locally, `ci/gitleaks-install.sh
 # ~/.local/bin` makes gate.sh run gitleaks too. Linux x86_64 only.
-# Dependabot cannot see this pin. To move to release <v>: take the linux_x64
-# line of its checksums,
+# The release and its SHA-256 are GITLEAKS and GITLEAKS_LINUX_X64_SHA256 in
+# ci/pins.env; Dependabot cannot see them. To move to release <v>: take the
+# linux_x64 line of its checksums,
 #   gh release download v<v> -R gitleaks/gitleaks -p 'gitleaks_<v>_checksums.txt' -O - | grep linux_x64
-# and change both lines below in one reviewed commit.
+# and change both values in one reviewed commit (CONTRIBUTING.md, "Pins and the
+# weekly refresh").
 # Usage: ci/gitleaks-install.sh <directory>
 set -euo pipefail
-version=8.30.1
-sha256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+pins=$(dirname "$0")/pins.env
+if grep -nvE '^([[:space:]]*(#.*)?|[A-Z][A-Z0-9_]*=[A-Za-z0-9._:+-]+)$' "$pins" >&2; then
+  echo "$pins: the lines above are not comments or KEY=value" >&2
+  exit 1
+fi
+# shellcheck source=pins.env
+. "$pins"
+version=${GITLEAKS:?$pins sets no GITLEAKS}
+sha256=${GITLEAKS_LINUX_X64_SHA256:?$pins sets no GITLEAKS_LINUX_X64_SHA256}
 dest=${1:?usage: ci/gitleaks-install.sh <directory>}
 tarball="gitleaks_${version}_linux_x64.tar.gz"
 tmp=$(mktemp -d)
