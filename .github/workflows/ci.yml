@@ -27,7 +27,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -37,7 +37,7 @@ jobs:
     name: clippy (pedantic, -D warnings)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -54,7 +54,7 @@ jobs:
         # change so the wiring never rots, per the plan's Packaging section.
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
@@ -65,7 +65,7 @@ jobs:
     name: coverage (cargo-llvm-cov, 90% on keys/protocol/index/engine)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -92,7 +92,7 @@ jobs:
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps --document-private-items
@@ -101,7 +101,7 @@ jobs:
     name: cargo-deny, cargo-audit, cargo-machete, cargo-vet
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Each tool at the exact version gate.sh requires (bootstrap.sh installs
@@ -132,7 +132,7 @@ jobs:
     name: cargo-udeps (nightly)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-udeps
@@ -142,7 +142,7 @@ jobs:
     name: cargo-geiger (unsafe report; every count must equal ci/geiger-baseline.txt)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Built with vendored OpenSSL so the tool never depends on the runner's OpenSSL
@@ -165,7 +165,7 @@ jobs:
       # a reviewed change to both.
       image: semgrep/semgrep:1.181.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The project rules' own cases first (.semgrep/tests/), so that a rule that
       # stopped matching fails here rather than passing the scan silently. gate.sh
       # runs both commands as they are here.
@@ -181,7 +181,7 @@ jobs:
     name: typos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: crate-ci/typos@master
 
   # The gitleaks command-line tool (MIT), not gitleaks-action: the action needs
@@ -195,7 +195,7 @@ jobs:
     name: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Every commit of every branch, not only the ones this push brings.
           fetch-depth: 0
@@ -213,7 +213,7 @@ jobs:
     name: no hostnames outside the allow-list
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # ci/no-hostnames.sh is the check; gate.sh runs the same two scripts locally.
       - run: ci/test-no-hostnames.sh
       - run: ci/no-hostnames.sh
@@ -229,7 +229,7 @@ jobs:
     name: tests of the mutants and fuzz-target scripts, and of .gitattributes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: ci/test-mutants.sh
       - run: ci/test-fuzz-targets.sh
       - run: ci/test-vector-line-endings.sh
