@@ -71,7 +71,7 @@ cargo deny --config deny-production.toml check bans
 cargo audit
 cargo machete
 cargo vet --locked
-cargo +nightly udeps --workspace --all-targets
+cargo +nightly-2026-10-14 udeps --workspace --all-targets
 typos
 semgrep --test --metrics=off --config .semgrep/project.yml .semgrep/tests/project.rs
 semgrep scan --metrics=off --timeout 60 --config p/rust --config .semgrep --exclude .semgrep --error
@@ -98,6 +98,16 @@ or updated dependency) writes that line in the same commit, so the reviewers
 see the change; the baseline's header says how, and how to move to another
 cargo-geiger.
 
+The Rust toolchains are the ones CI pins: stable 1.99.0, which
+`rust-toolchain.toml`'s `channel = "stable"` gives the checkout, and
+nightly-2026-10-14 (`rustup toolchain install nightly-2026-10-14`), for
+cargo-udeps and to reproduce what `nightly.yml`'s fuzzing, cargo-careful and
+Miri jobs report. `gate.sh` stops unless `rustc --version` in the checkout is
+1.99.0 and the dated nightly is installed, and prints what to run; it never
+downloads a toolchain. When stable moves past 1.99.0, either the pin moves or
+`rustup toolchain install 1.99.0` and `rustup override set 1.99.0` keep the
+checkout on it.
+
 The tools beyond cargo's: cargo-nextest 0.9.148, cargo-llvm-cov 0.9.1,
 cargo-udeps 0.1.61, cargo-deny 0.20.2, cargo-audit 0.22.2, cargo-machete
 0.9.2 and cargo-vet 0.10.2, the versions CI pins, are required (`cargo
@@ -109,10 +119,13 @@ weekly `mutants.yml`), cargo-fuzz 0.13.2 and cargo-careful 0.4.10
 (`nightly.yml`), so that a surviving mutant, a fuzz crash or a careful
 finding reproduces locally with the same tool (`ci/mutants.sh <k>/<n>
 <budget>` runs one shard of the mutants as the weekly job does). `gate.sh`
-checks all twelve before its first step. It stops when the workflow that
-installs one of the ten cargo tools (`ci.yml`, `nightly.yml`, `mutants.yml`)
-installs it any other way, and when `ci.yml` runs typos other than as one
-`crate-ci/typos` step pinned by commit with `# v1.51.1` after it. gitleaks is
+checks all twelve and both toolchains before its first step. It stops when
+the workflow that installs one of the ten cargo tools (`ci.yml`,
+`nightly.yml`, `mutants.yml`) installs it any other way, when `ci.yml` runs
+typos other than as one `crate-ci/typos` step pinned by commit with
+`# v1.51.1` after it, and when a workflow names any other Rust toolchain or a
+`dtolnay/rust-toolchain` step installs another than the `RUSTUP_TOOLCHAIN`
+its job runs with. gitleaks is
 optional (`ci/gitleaks-install.sh ~/.local/bin` installs the release CI
 pins). CI adds the full-history gitleaks scan, the other operating systems,
 CodeQL and, once configured, ClusterFuzzLite.
@@ -136,6 +149,12 @@ Dependabot review checks them for new releases; a bump is one reviewed change:
 
 - the ten cargo tools above, in the workflows that install them, `gate.sh`
   and `bootstrap.sh`;
+- the Rust toolchains, stable 1.99.0 (a new stable every six weeks) and
+  nightly-2026-10-14 (moved when a tool or a fix needs a newer nightly): a
+  bump is one reviewed change to `gate.sh`'s `rust_stable` or `rust_nightly`
+  and every workflow's `toolchain:`, `RUSTUP_TOOLCHAIN` and `+nightly-...`,
+  with `bootstrap.sh` and this file, after the gate passes on the new
+  toolchain;
 - `release.yml`'s cargo-auditable 0.7.7 and cargo-cyclonedx 0.5.9;
 - site's `pages.yml`'s zola 0.23.6;
 - the Codecov CLI version that `ci.yml`'s `codecov` job pins (v11.3.1); the
@@ -147,10 +166,8 @@ Dependabot review checks them for new releases; a bump is one reviewed change:
   tag, `v1`, and no version releases, so Dependabot has no newer release to
   move to; a bump pins the commit `v1` names that day.
 
-Two things stay unpinned, as residuals: the Rust toolchain, since stable
-follows `rust-toolchain.toml` and nightly is the day's (`ci.yml`'s header
-says why), and the container images that pinned actions name by tag
-(scorecard-action's, ClusterFuzzLite's).
+One thing stays unpinned, as a residual: the container images that pinned
+actions name by tag (scorecard-action's, ClusterFuzzLite's).
 
 When `cargo vet --locked` fails after a dependency change: run `cargo vet` (it
 refreshes `supply-chain/imports.lock` from the Mozilla and Google audits), then

@@ -43,6 +43,10 @@ on:
 permissions:
   contents: read
 
+# The pinned Rust toolchain (ci.yml's header says why RUSTUP_TOOLCHAIN).
+env:
+  RUSTUP_TOOLCHAIN: 1.99.0
+
 jobs:
   build:
     name: build (${{ matrix.target }})
@@ -69,13 +73,12 @@ jobs:
       # The comment after a commit pin names the release the commit is, for
       # the reader and for Dependabot. v1 is rust-toolchain's master's head on
       # 2026-10-25; its `stable` branch is that commit with `toolchain`
-      # defaulting to stable, so the toolchain is named here instead. The
-      # toolchain itself floats: a tag builds with whatever stable is that day,
-      # as rust-toolchain.toml's channel says; pinning it to a version is a
-      # follow-up.
+      # defaulting to stable, so the toolchain is named here instead: 1.99.0,
+      # the workflow's RUSTUP_TOOLCHAIN, so that a tag builds with the same
+      # Rust whatever stable is that day (ci.yml's header says why both).
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: stable
+          toolchain: 1.99.0
           targets: ${{ matrix.target }}
       # Exact versions, so that no new release changes what a tag builds; the
       # weekly Dependabot review checks them for new releases (CONTRIBUTING.md).

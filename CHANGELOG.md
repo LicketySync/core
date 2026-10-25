@@ -6,6 +6,54 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The Rust toolchain pinned in CI: 1.99.0, and nightly-2026-10-14 for the jobs that need nightly, on
+  the coordinator's ruling of 2026-10-25 that the owner's "CI tools - pin." covers the toolchain
+  (TM-8, TM-29). Until now each `dtolnay/rust-toolchain` step installed the day's stable or nightly,
+  and a release tag built with whatever stable was current. The 16 steps now name
+  `toolchain: 1.99.0` (12) or `toolchain: nightly-2026-10-14` (4: `ci.yml`'s `udeps`,
+  `nightly.yml`'s `fuzz`, `careful` and `miri`). That alone would pin nothing: the action makes its
+  toolchain rustup's default, and in the checkout `rust-toolchain.toml`'s `channel = "stable"`
+  outranks the default (`rustup show active-toolchain` there: "stable-x86_64-unknown-linux-gnu
+  (overridden by '.../rust-toolchain.toml')"), so every cargo command would still have run the
+  runner's stable. So `ci.yml`, `nightly.yml`, `mutants.yml` and `release.yml` set
+  `RUSTUP_TOOLCHAIN: 1.99.0` for the workflow, and the four nightly jobs set
+  `RUSTUP_TOOLCHAIN: nightly-2026-10-14` for the job; `RUSTUP_TOOLCHAIN` outranks the file
+  ("nightly-2026-10-14-x86_64-unknown-linux-gnu (overridden by environment variable
+  RUSTUP_TOOLCHAIN)"). The components the file names come, as before, from each step's `components:`
+  (rustfmt, clippy, llvm-tools-preview; rust-src and miri for the nightly jobs). The
+  `cargo +nightly` commands name `+nightly-2026-10-14` (udeps, the fuzz run, careful, and the
+  comment on reproducing a crash). `clusterfuzzlite.yml` builds in its own image and installs no
+  toolchain. `rust-toolchain.toml` stays on `channel = "stable"`, as ruled, so that the dev machine
+  needs no separately named toolchain: its stable is 1.99.0 (b940084d7 2026-09-28) and
+  nightly-2026-10-14 (rustc 1.101.0-nightly, 822182db4 2026-10-13) is installed. With that nightly,
+  `cargo +nightly-2026-10-14 udeps --workspace --all-targets` passes ("All deps seem to have been
+  used."), `cargo fuzz build` builds all 19 targets, and a 5-second `cargo fuzz run frame_decode`
+  runs clean. Its channel manifest lists `rust-src` and `miri-preview` (`miri`) as available for
+  x86_64 Linux, which the `careful` and `miri` jobs install; neither job ran locally, since the dev
+  machine's copy of that nightly lacks both components and adding them downloads them. `gate.sh`
+  names the two (`rust_stable`, `rust_nightly`) and stops unless `rustc --version` in the checkout
+  is 1.99.0, printing `rustup update stable` for an older stable and, for a newer one, moving the
+  pin or `rustup toolchain install 1.99.0 ...` with `rustup override set 1.99.0`, and unless
+  `rustup toolchain list` has the dated nightly; `RUSTUP_AUTO_INSTALL=0` keeps the check from
+  downloading. A new `toolchains` function reads each workflow: every `toolchain:`, every
+  `RUSTUP_TOOLCHAIN` and every `+<toolchain>` after cargo, rustc or rustup must be one of the two,
+  and each rust-toolchain step must install the `RUSTUP_TOOLCHAIN` its job runs with, the job's or
+  else the workflow's. The gate's udeps step runs `cargo +nightly-2026-10-14 udeps`. `bootstrap.sh`
+  (outside the repositories) installs the dated nightly with miri and rust-src, builds cargo-fuzz
+  and cargo-udeps with it, and says when stable is not 1.99.0. `CONTRIBUTING.md` names both
+  toolchains and adds them to the weekly hand check: a bump is one reviewed change to `gate.sh`'s
+  two lines and every workflow, with `bootstrap.sh` and `CONTRIBUTING.md`. The Rust toolchain is no
+  longer a residual in `ci.yml`'s header, `release.yml`, `CONTRIBUTING.md` or the entry below. Tests
+  that fail without the change: on the entry below's workflows the new check stops the gate at
+  `ci.yml` (`value stable`), and on `main`'s with `value nightly` and a line per job such as
+  `job fmt - -`; on copies of the new ones, by hand, a step on `stable` or `nightly`, a workflow
+  without `RUSTUP_TOOLCHAIN`, a nightly job without its own, a job whose `RUSTUP_TOOLCHAIN` differs
+  from its step's, `cargo +nightly`, another version, a step with no `toolchain:`, a new workflow
+  without the variable, and a gate that wants another stable or nightly each stop the gate and print
+  what they found, while a commented-out `cargo +nightly` does not. The workflows parse as YAML.
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security) over three rounds; every finding fixed and confirmed clean on
+    5753ddd. Author ac59cb154860b67dc; the merge agent wrote this line.
 - Every action in every workflow of core, site and web pinned by full commit SHA, GitHub's own
   included, and every tool CI installs pinned to an exact version, as the owner decided on
   2026-10-25 ("CI tools - pin."; the plan's decision "CI actions and tools pinned"), widening the
@@ -62,11 +110,7 @@ paths or the API also names the security-reviewer pass.
   (cd1d6d546 2026-10-07)`). A new check stops the gate unless `typos --version` is `typos-cli
   1.51.1` and `ci.yml` runs typos as exactly one step `uses: crate-ci/typos@<40 hex digits> #
   v1.51.1`. `bootstrap.sh` (outside the repositories) installs the four at those versions. The Rust
-  toolchain is not pinned: stable is `rust-toolchain.toml`'s channel, which local builds and the
-  gate follow too, and nightly (cargo-udeps; fuzzing, cargo-careful and Miri) is the day's, as
-  `cargo +nightly` is on the dev machine; pinning either is a change to `rust-toolchain.toml`,
-  `gate.sh` and `bootstrap.sh` with the workflows, and stays the plan's follow-up for the release
-  toolchain. The rule is stated once in full in `ci.yml`'s header (the `codecov` job's paragraph,
+  toolchain itself is pinned by the entry above. The rule is stated once in full in `ci.yml`'s header (the `codecov` job's paragraph,
   which said "pinning every action is a pending decision", is gone), and `release.yml`,
   `scorecard.yml`, `codeql.yml` and site's and web's `pages.yml` point to it. New
   `ci/pinned-actions.sh` checks the rule's form in a workflow directory: each `uses:` names a full
@@ -79,8 +123,8 @@ paths or the API also names the security-reviewer pass.
   new tool pins and the hand checks of the weekly Dependabot review: the ten cargo tools, the two
   release tools, site's zola, the Codecov CLI, and the `dtolnay/rust-toolchain` and
   `google/clusterfuzzlite` commits, whose single `v1` tag gives Dependabot no newer release; and how
-  a Dependabot bump of `crate-ci/typos` moves `gate.sh`'s typos version with it. Residuals: the Rust
-  toolchain, as above; the container images that pinned actions name by tag (scorecard-action's
+  a Dependabot bump of `crate-ci/typos` moves `gate.sh`'s typos version with it. Residuals: the
+  container images that pinned actions name by tag (scorecard-action's
   on ghcr.io, ClusterFuzzLite's on gcr.io) and `ci.yml`'s `semgrep/semgrep:1.181.0`, a version tag,
   not a digest. Tests that fail without the change: `ci/pinned-actions.sh` on `main`'s workflows
   exits 1 and lists 61 unpinned `uses:` lines in core, 4 in site and 4 in web; `gate.sh`'s new
