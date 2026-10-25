@@ -2,6 +2,24 @@
 # decision 2026-10-14). The checks here are the ones the plan's Engineering practice
 # table says run "every push"; nightly.yml, and the weekly mutants.yml and
 # scorecard.yml, hold the rest.
+#
+# Pinning rule (the owner's decision of 2026-10-25, "CI tools - pin."): every
+# action in every workflow, GitHub's own included, is pinned by full commit
+# SHA, since a tag can be moved, and the comment after the pin names the
+# release tag on that commit, which Dependabot reads to keep the pin current
+# (release.yml and scorecard.yml state the same rule; ci/pinned-actions.sh,
+# run below and by gate.sh, checks the form). Every tool a workflow installs
+# is pinned to an exact version: gate.sh stops when a cargo tool it runs or
+# reproduces, or typos, is installed in a workflow at any other version than
+# the gate's, and CONTRIBUTING.md lists the pins Dependabot cannot see.
+# dtolnay/rust-toolchain has one tag, v1, on its master branch, where
+# `toolchain` has no default; its stable and nightly branches, used until
+# 2026-10-25, are that commit with a default. The Rust toolchain itself
+# floats: stable is rust-toolchain.toml's channel, which local builds and the
+# gate follow too, and nightly (cargo-udeps here; fuzzing, cargo-careful and
+# Miri in nightly.yml) is the `+nightly` of the day, as on the dev machine.
+# Pinning either is a change of its own, to rust-toolchain.toml, gate.sh and
+# bootstrap.sh with the workflows.
 name: CI
 
 on:
@@ -27,9 +45,10 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -37,11 +56,12 @@ jobs:
     name: clippy (pedantic, -D warnings)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
@@ -54,10 +74,18 @@ jobs:
         # change so the wiring never rots, per the plan's Packaging section.
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # cargo-nextest, and in the jobs below cargo-llvm-cov and cargo-udeps, at
+      # the exact versions gate.sh requires, with no fallback (see the note in
+      # the deps job).
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.148
+          fallback: none
       - run: cargo nextest run --workspace --all-features --no-fail-fast
       - run: cargo test --workspace --doc
 
@@ -65,14 +93,16 @@ jobs:
     name: coverage (cargo-llvm-cov, 90% on keys/protocol/index/engine)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
-          tool: cargo-llvm-cov,nextest
+          tool: cargo-llvm-cov@0.9.1,cargo-nextest@0.9.148
+          fallback: none
       - run: cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
       - name: Enforce 90% on each crate the plan names, and the index (same loop as gate.sh)
         run: |
@@ -82,7 +112,7 @@ jobs:
               -p "licketysync-$c" --ignore-filename-regex "crates/($others)/"
           done
       # For the codecov job below, which alone uploads it.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lcov
           path: lcov.info
@@ -96,11 +126,6 @@ jobs:
   # runs every test and every dependency's build script with a read-only token.
   # Pushes to this repository's main only, so pull requests (Dependabot's among
   # them) and forks, a fork's own main included, never mint a token.
-  #
-  # Pinning rule: a job that holds id-token, attestations or contents write
-  # pins every action it uses by commit, GitHub's own included, since a tag can
-  # be moved (release.yml and scorecard.yml state the same rule). Elsewhere
-  # actions stay on tags for now; pinning every action is a pending decision.
   #
   # The artifact came from the coverage job, which ran untrusted code, so it is
   # kept out of the checkout (a planted .git/config could run a command when
@@ -168,18 +193,22 @@ jobs:
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo doc --workspace --no-deps --document-private-items
 
   deps:
     name: cargo-deny, cargo-audit, cargo-machete, cargo-vet
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Each tool at the exact version gate.sh requires (bootstrap.sh installs
       # them; gate.sh stops when this file or nightly.yml installs one any other
       # way), so that no new release changes what passes without a commit. A
@@ -189,7 +218,7 @@ jobs:
       # version missing from install-action's manifest fail here instead of
       # going to cargo-binstall, which can fetch an unverified binary and is
       # handed github.token.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-machete@0.9.2
           fallback: none
@@ -208,19 +237,26 @@ jobs:
     name: cargo-udeps (nightly)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@cargo-udeps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-udeps@0.1.61
+          fallback: none
       - run: cargo +nightly udeps --workspace --all-targets
 
   geiger:
     name: cargo-geiger (unsafe report; every count must equal ci/geiger-baseline.txt)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Built with vendored OpenSSL so the tool never depends on the runner's OpenSSL
       # (decision 2026-10-14); bootstrap.sh installs it the same way. The version
       # is the one ci/geiger-baseline.txt names (counts differ between versions;
@@ -241,7 +277,7 @@ jobs:
       # a reviewed change to both.
       image: semgrep/semgrep:1.181.0
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The project rules' own cases first (.semgrep/tests/), so that a rule that
       # stopped matching fails here rather than passing the scan silently. gate.sh
       # runs both commands as they are here.
@@ -253,12 +289,17 @@ jobs:
       # under a second on the dev machine), so 60 s leaves a slow runner room.
       - run: semgrep scan --metrics=off --timeout 60 --config p/rust --config .semgrep --exclude .semgrep --error
 
+  # typos at the version gate.sh requires: the action's release commit names
+  # the typos it runs (action/entrypoint.sh downloads that release from
+  # GitHub, with no checksum), and gate.sh stops unless the comment after the
+  # pin names the same version. A Dependabot bump of this action moves gate.sh's
+  # version and bootstrap.sh's with it (CONTRIBUTING.md).
   typos:
     name: typos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: crate-ci/typos@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
 
   # The gitleaks command-line tool (MIT), not gitleaks-action: the action needs
   # a licence key for a repository an organization owns, free but issued on
@@ -271,7 +312,7 @@ jobs:
     name: gitleaks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Every commit of every branch, not only the ones this push brings.
           fetch-depth: 0
@@ -289,10 +330,22 @@ jobs:
     name: no hostnames outside the allow-list
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # ci/no-hostnames.sh is the check; gate.sh runs the same two scripts locally.
       - run: ci/test-no-hostnames.sh
       - run: ci/no-hostnames.sh
+
+  # The pinning rule at the top of this file, checked in every workflow here;
+  # gate.sh runs the same two scripts.
+  pinned-actions:
+    name: every action pinned by commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/test-pinned-actions.sh
+      - run: ci/pinned-actions.sh
 
   # The scripts the scheduled workflows run (ci/mutants.sh in mutants.yml,
   # ci/fuzz-targets.sh in nightly.yml), tested on stand-ins for the tools on
@@ -305,7 +358,7 @@ jobs:
     name: tests of the mutants and fuzz-target scripts, and of .gitattributes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: ci/test-mutants.sh
       - run: ci/test-fuzz-targets.sh
       - run: ci/test-vector-line-endings.sh

@@ -14,11 +14,11 @@
 # permission to a job of its own. Until 2026-10-25 the one job held contents,
 # id-token and attestations write for every step.
 #
-# Pinning rule: a job that holds id-token, attestations or contents write pins
-# every action it uses by commit, GitHub's own included, since a tag can be
-# moved (ci.yml and scorecard.yml state the same rule). Elsewhere actions stay
-# on tags for now; pinning every action is a pending decision. The build job's
-# two third-party actions are pinned by commit as well.
+# Pinning rule (the owner's decision of 2026-10-25): every action in every
+# workflow pins by full commit SHA, GitHub's own included, since a tag can be
+# moved, with the release tag on that commit in a comment, and every tool a
+# workflow installs pins to an exact version (ci.yml states the rule in full,
+# and scorecard.yml too; ci/pinned-actions.sh checks the action pins).
 #
 # Verifying a release: an attestation is trusted only as this workflow's, run
 # for a v* tag on GitHub's own runners.
@@ -63,7 +63,7 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The comment after a commit pin names the release the commit is, for
@@ -101,7 +101,7 @@ jobs:
             exit 1
           fi
           cp "${sboms[@]}" "dist/sbom-$TARGET/"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: licketysync-${{ matrix.target }}
           path: dist/

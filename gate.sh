@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # The gate every change must pass before it is committed (the plan's Engineering
 # practice). It runs every CI check that can fail and fits on one machine:
-# cargo-deny, cargo-audit, cargo-machete and cargo-vet at the versions CI pins
-# (required; bootstrap.sh installs them), the Semgrep rule cases and scan with
-# the semgrep version CI's image pins (required; bootstrap.sh installs it), and
-# the cargo-geiger counts, which must equal ci/geiger-baseline.txt. gitleaks
+# cargo-nextest, cargo-llvm-cov, cargo-udeps, cargo-deny, cargo-audit,
+# cargo-machete, cargo-vet and typos at the versions CI pins (required;
+# bootstrap.sh installs them), the Semgrep rule cases and scan with the semgrep
+# version CI's image pins (required; bootstrap.sh installs it), the cargo-geiger
+# counts, which must equal ci/geiger-baseline.txt, and the check that every
+# action in the workflows is pinned by commit (ci/pinned-actions.sh). gitleaks
 # runs over the working tree when it is installed (the plan's local check; CI
 # scans the full history). CI adds the other operating systems, CodeQL, and
 # ClusterFuzzLite once it is configured. Needs the network: cargo-audit and
@@ -17,18 +19,20 @@ cd "$(dirname "$0")"
 step() { echo "== $*"; "$@"; }
 
 # The pinned tools first, so that a wrong version stops the gate before the
-# long steps. cargo-deny, cargo-audit, cargo-machete and cargo-vet at the exact
-# versions CI installs, so that the gate and CI judge alike: CI once took the
-# newest cargo-vet it found, 0.10.0, whose formatter rejects the
-# supply-chain/imports.lock that 0.10.2 writes, and main went red (run
-# 39160240196). cargo-mutants (mutants.yml), cargo-fuzz and cargo-careful
-# (nightly.yml), which the gate does not run, at the versions those workflows
-# install, so that a survivor, a crash or a finding they report reproduces
-# here with the same tool (a cargo-mutants release can make other mutants).
-# cargo-careful has no --version; need_tool takes the version cargo install
-# recorded. A bump is one reviewed change to these lines, the workflow and
-# bootstrap.sh; Dependabot cannot see the pins, so the weekly Dependabot
-# review checks them for new releases.
+# long steps. cargo-nextest, cargo-llvm-cov, cargo-udeps, cargo-deny,
+# cargo-audit, cargo-machete and cargo-vet at the exact versions CI installs,
+# so that the gate and CI judge alike: CI once took the newest cargo-vet it
+# found, 0.10.0, whose formatter rejects the supply-chain/imports.lock that
+# 0.10.2 writes, and main went red (run 39160240196). cargo-mutants
+# (mutants.yml), cargo-fuzz and cargo-careful (nightly.yml), which the gate
+# does not run, at the versions those workflows install, so that a survivor, a
+# crash or a finding they report reproduces here with the same tool (a
+# cargo-mutants release can make other mutants). need_tool reads the first
+# X.Y.Z on the first line of the tool's --version (cargo-nextest prints its
+# commit and date after it); cargo-careful has no --version, so need_tool
+# takes the version cargo install recorded. A bump is one reviewed change to
+# these lines, the workflow and bootstrap.sh; Dependabot cannot see the pins,
+# so the weekly Dependabot review checks them for new releases.
 # installs <workflow> <crate>: print each place the workflow installs the
 # crate, one per line as written there: an item of an install-action `tool:`
 # list, an install-action step named after the crate (`uses:
@@ -76,7 +80,12 @@ installs() {
 need_tool() {
   local crate=$1 version=$2 spelled=$3 have file found
   shift 3
-  have=$(cargo "${crate#cargo-}" --version 2> /dev/null | awk 'NR == 1 { print $NF }') || true
+  have=$(cargo "${crate#cargo-}" --version 2> /dev/null | awk '
+    NR == 1 {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^v?[0-9]+\.[0-9]+\.[0-9]+$/) { sub(/^v/, "", $i); print $i; break }
+      }
+    }') || true
   if [ -z "$have" ] && command -v "$crate" > /dev/null; then
     have=$(cargo install --list | awk -v c="$crate" '$1 == c { v = $2; sub(/^v/, "", v); sub(/:$/, "", v); print v }') || true
   fi
@@ -99,6 +108,9 @@ need_tool() {
   done
 }
 wf=.github/workflows
+need_tool cargo-nextest 0.9.148 cargo-nextest@0.9.148 $wf/ci.yml
+need_tool cargo-llvm-cov 0.9.1 cargo-llvm-cov@0.9.1 $wf/ci.yml
+need_tool cargo-udeps 0.1.61 cargo-udeps@0.1.61 $wf/ci.yml
 need_tool cargo-deny 0.20.2 cargo-deny@0.20.2 $wf/ci.yml
 need_tool cargo-audit 0.22.2 cargo-audit@0.22.2 $wf/ci.yml $wf/nightly.yml
 need_tool cargo-machete 0.9.2 cargo-machete@0.9.2 $wf/ci.yml
@@ -111,6 +123,24 @@ semgrep_version=1.181.0
 if ! have=$(semgrep --version 2> /dev/null) || [ "$have" != "$semgrep_version" ]; then
   echo "semgrep $semgrep_version is needed (found: ${have:-none}); install it for this user:" >&2
   echo "  pipx install --force semgrep==$semgrep_version" >&2
+  exit 1
+fi
+# typos with CI's version: ci.yml runs the crate-ci/typos action, whose release
+# commit names the typos it downloads, so its one step must be pinned by commit
+# with this version in the comment (Dependabot moves both together).
+typos_version=1.51.1
+if ! have=$(typos --version 2> /dev/null) || [ "$have" != "typos-cli $typos_version" ]; then
+  echo "typos $typos_version is needed (found: ${have:-none}); install it for this user:" >&2
+  echo "  cargo install --locked typos-cli --version $typos_version" >&2
+  exit 1
+fi
+found=$(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*crate-ci/typos' $wf/ci.yml \
+        | sed -E 's/^[[:space:]]*(-[[:space:]]+)?//') || [ $? -eq 1 ]
+re="^uses: crate-ci/typos@[0-9a-f]{40} # v${typos_version//./\\.}\$"
+if [[ $found == *$'\n'* || ! $found =~ $re ]]; then
+  echo "$wf/ci.yml must run typos $typos_version as one step," >&2
+  echo "\`uses: crate-ci/typos@<release commit> # v$typos_version\`. It has:" >&2
+  printf '%s\n' "${found:-(nothing)}" | sed 's/^/  /' >&2
   exit 1
 fi
 
@@ -140,6 +170,9 @@ step ci/test-geiger.sh
 step ci/geiger.sh
 step ci/test-no-hostnames.sh
 step ci/no-hostnames.sh
+# Every action in the workflows pinned by commit (the pinning rule in ci.yml).
+step ci/test-pinned-actions.sh
+step ci/pinned-actions.sh
 # The line-ending attributes of the test vectors and fuzz seeds (.gitattributes).
 step ci/test-vector-line-endings.sh
 # The scripts mutants.yml and nightly.yml's fuzz jobs run, on stand-ins for the tools.

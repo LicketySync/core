@@ -80,6 +80,8 @@ ci/test-geiger.sh
 ci/geiger.sh
 ci/test-no-hostnames.sh
 ci/no-hostnames.sh
+ci/test-pinned-actions.sh
+ci/pinned-actions.sh
 ci/test-mutants.sh
 ci/test-fuzz-targets.sh
 cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-<crate> --ignore-filename-regex 'crates/(<the others>)/'   # once each for keys, protocol, index, engine
@@ -96,32 +98,59 @@ or updated dependency) writes that line in the same commit, so the reviewers
 see the change; the baseline's header says how, and how to move to another
 cargo-geiger.
 
-The tools beyond cargo's: cargo-deny 0.20.2, cargo-audit 0.22.2,
-cargo-machete 0.9.2 and cargo-vet 0.10.2, the versions CI pins, are required
-(`cargo install --locked <tool> --version <version>`), and so is semgrep
-1.181.0, the version CI's image pins (`pipx install semgrep==1.181.0`). So are
-cargo-mutants 27.1.0 (the weekly `mutants.yml`), cargo-fuzz 0.13.2 and
-cargo-careful 0.4.10 (`nightly.yml`), so that a surviving mutant, a fuzz crash
-or a careful finding reproduces locally with the same tool
-(`ci/mutants.sh <k>/<n> <budget>` runs one shard of the mutants as the weekly
-job does). `gate.sh` checks all eight before its first step, and stops when
-the workflow that installs one of the seven cargo tools (`ci.yml`,
-`nightly.yml`, `mutants.yml`) installs it any other way. Dependabot cannot
-see these pins, so the agent at each weekly Dependabot review checks the
-seven for new releases; a bump is one reviewed change to the workflows that
-install the tool, `gate.sh` and `bootstrap.sh`. The same review checks the
-pins `gate.sh` does not: `release.yml`'s cargo-auditable 0.7.7 and
-cargo-cyclonedx 0.5.9, and its commit pin of `dtolnay/rust-toolchain`, whose
-one tag, `v1`, follows that action's master branch; a bump there is one
-reviewed change to `release.yml`. It checks the Codecov CLI version that
-`ci.yml`'s `codecov` job pins (v11.3.1) for new releases the same way, and
-reads the result of the last `codecov` job on `main`: that job may fail
-without turning the run red, so a broken upload shows only there. gitleaks
-is optional (`ci/gitleaks-install.sh ~/.local/bin` installs the release CI
+The tools beyond cargo's: cargo-nextest 0.9.148, cargo-llvm-cov 0.9.1,
+cargo-udeps 0.1.61, cargo-deny 0.20.2, cargo-audit 0.22.2, cargo-machete
+0.9.2 and cargo-vet 0.10.2, the versions CI pins, are required (`cargo
+install --locked <tool> --version <version>`), and so are typos 1.51.1, the
+release of `crate-ci/typos` that `ci.yml` pins (`cargo install --locked
+typos-cli --version 1.51.1`), and semgrep 1.181.0, the version CI's image
+pins (`pipx install semgrep==1.181.0`). So are cargo-mutants 27.1.0 (the
+weekly `mutants.yml`), cargo-fuzz 0.13.2 and cargo-careful 0.4.10
+(`nightly.yml`), so that a surviving mutant, a fuzz crash or a careful
+finding reproduces locally with the same tool (`ci/mutants.sh <k>/<n>
+<budget>` runs one shard of the mutants as the weekly job does). `gate.sh`
+checks all twelve before its first step. It stops when the workflow that
+installs one of the ten cargo tools (`ci.yml`, `nightly.yml`, `mutants.yml`)
+installs it any other way, and when `ci.yml` runs typos other than as one
+`crate-ci/typos` step pinned by commit with `# v1.51.1` after it. gitleaks is
+optional (`ci/gitleaks-install.sh ~/.local/bin` installs the release CI
 pins). CI adds the full-history gitleaks scan, the other operating systems,
 CodeQL and, once configured, ClusterFuzzLite.
 `bootstrap.sh` in the parent directory installs the tools the gate needs, the
 pinned versions included.
+
+Every action in every workflow of core, site and web is pinned by full commit
+SHA, with the release tag on that commit in a comment (the pinning rule in
+`ci.yml`, the owner's decision of 2026-10-25). `ci/pinned-actions.sh` checks
+the form here, and on site's or web's workflows when given their
+`.github/workflows`; whether the tag names that commit is checked by hand
+(`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, dereferencing an annotated
+tag with `git/tags/<sha>`). Dependabot's weekly pull requests move these pins
+and their comments together. When one moves `crate-ci/typos`, the reviewing
+agent also moves `gate.sh`'s `typos_version`, `bootstrap.sh` and this file
+to that release's typos on the pull request's branch, as for the geiger
+baseline, so the merged diff carries both, and installs it locally.
+
+Dependabot cannot see the following pins, so the agent at each weekly
+Dependabot review checks them for new releases; a bump is one reviewed change:
+
+- the ten cargo tools above, in the workflows that install them, `gate.sh`
+  and `bootstrap.sh`;
+- `release.yml`'s cargo-auditable 0.7.7 and cargo-cyclonedx 0.5.9;
+- site's `pages.yml`'s zola 0.23.6;
+- the Codecov CLI version that `ci.yml`'s `codecov` job pins (v11.3.1); the
+  same review reads the result of the last `codecov` job on `main`, since that
+  job may fail without turning the run red, so a broken upload shows only
+  there;
+- the commit pins of `dtolnay/rust-toolchain` (every job that installs Rust)
+  and `google/clusterfuzzlite` (`clusterfuzzlite.yml`): each has a single
+  tag, `v1`, and no version releases, so Dependabot has no newer release to
+  move to; a bump pins the commit `v1` names that day.
+
+Two things stay unpinned, as residuals: the Rust toolchain, since stable
+follows `rust-toolchain.toml` and nightly is the day's (`ci.yml`'s header
+says why), and the container images that pinned actions name by tag
+(scorecard-action's, ClusterFuzzLite's).
 
 When `cargo vet --locked` fails after a dependency change: run `cargo vet` (it
 refreshes `supply-chain/imports.lock` from the Mozilla and Google audits), then

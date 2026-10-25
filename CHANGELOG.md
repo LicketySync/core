@@ -6,6 +6,97 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Every action in every workflow of core, site and web pinned by full commit SHA, GitHub's own
+  included, and every tool CI installs pinned to an exact version, as the owner decided on
+  2026-10-25 ("CI tools - pin."; the plan's decision "CI actions and tools pinned"), widening the
+  rule that until now pinned only the jobs holding `id-token`, `attestations` or `contents` write
+  (TM-8, TM-29). Each pin is followed by a comment naming the release tag on that commit, which
+  Dependabot reads to move pin and comment together: each repository's `.github/dependabot.yml`
+  already updates the `github-actions` ecosystem weekly and is unchanged. Each tag was read on
+  2026-10-25 with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, an annotated one dereferenced
+  with `git/tags/<sha>`, and is the action's newest release in the major the workflow used; after
+  the edit, every one of the 81 `uses:` lines (72 in core, 5 in site, 4 in web) was resolved again
+  the same way and names its tag's commit. Where an action was on a major tag, the commit pinned is
+  the one that tag named that day, so the same code runs as before, except for codeql-action's v4
+  and the refs that were branches:
+  - `actions/checkout` `3d3c42e5aac5ba805825da76410c181273ba90b1` (`v7.0.1`), in every job (it was
+    already pinned in `codecov` and `scorecard`).
+  - `actions/upload-artifact` `cf430e030ddbb5b0abf93d22962f4752f3646cd9` (`v7.0.2`).
+  - `actions/download-artifact` `9000827ccba6bdab643e8b6fd33ac0654aef8333` (`v8.0.2`),
+    `actions/attest-build-provenance` `4d101475d8b20a2381f78447822ac1eab6504dd8` (`v4.2.2`),
+    `codecov/codecov-action` `303a32d7a59b442fa8d48b6a1cc6825c09c847a5` (`v7.1.1`) and
+    `ossf/scorecard-action` `fa7117db83c52d787ae5a89f350999701505d78e` (`v2.5.0`): already pinned,
+    still the newest in their majors, unchanged.
+  - `github/codeql-action` `9b3254085494b55a0f7c4c2b3d2d52cc712ce370` (`v4.39.1`): `upload-sarif`
+    unchanged; `init` and `analyze` in `codeql.yml` move from `v3` to `v4`, the plan's follow-up,
+    since v3 is deprecated in December 2026 (codeql-action's changelog). Their `action.yml` at `v3`
+    (`v3.39.1`, `4bfa242aa49c5f7c6770b98670d354a7dfac05f8`) and at `v4.39.1` differ only in
+    `runs.using`, `node20` to `node24`, so `languages` and `queries` mean what they did.
+  - `dtolnay/rust-toolchain` `683b588c487a69d01f6c6ddf40f036ff682cc2c8` (`v1`, its only tag, on
+    master's head; already pinned in `release.yml`), in all 16 steps that install Rust. The
+    `@stable` and `@nightly` refs were branches, each master's head plus a default for `toolchain`
+    (`gh api repos/dtolnay/rust-toolchain/compare/<v1>...stable`), so every step now names
+    `toolchain: stable` or `toolchain: nightly`.
+  - `Swatinem/rust-cache` `d1527c8f67ef9af357290475d4af4b0fab8f12e0` (`v2.9.3`).
+  - `taiki-e/install-action` `1e29709c0ec63babbe8f266397a465f29a825f91` (`v2.87.31`), in every
+    step; site's `pages.yml` bumped from `v2.87.30` (`a4d3f3f761dcd95cce1b72cb61cb6d1963438177`).
+    The `@nextest` and `@cargo-udeps` refs were branches that install the newest release; those
+    steps now pass the tool and version.
+  - `crate-ci/typos` `7f9d0819ca1c008ade73f4b41fa9d258d48f605b` (`v1.51.1`), was `@master`.
+  - `google/clusterfuzzlite` `884713a6c30a92e5e8544c39945cd7cb630abcd1` (`v1`, its only tag; it
+    publishes no releases), both actions.
+  - `actions/configure-pages` `45bfe0192ca1faeb007ade9deae92b16b8254a0d` (`v6.0.0`),
+    `actions/upload-pages-artifact` `fc324d3547104276b827a68afc52ff2a11cc49c9` (`v5.0.0`) and
+    `actions/deploy-pages` `368f82528645a54fb793d4d04e342629a3f51346` (`v5.0.1`), in site's and
+    web's `pages.yml`, in their own commits.
+
+  The tools that floated are pinned to the dev machine's versions (`--version`, 2026-10-25), each
+  in install-action's manifest at the pinned commit for every runner it runs on, with `fallback:
+  none`: cargo-nextest 0.9.148 (`ci.yml`'s `test` and `coverage` jobs; the manifest's newest is
+  0.9.149), cargo-llvm-cov 0.9.1 and cargo-udeps 0.1.61 (both the newest), and typos 1.51.1 (the
+  newest), which the `crate-ci/typos` release commit names: its `action/entrypoint.sh` sets
+  `VERSION=1.51.1` and downloads that release from GitHub, with no checksum (a residual).
+  `gate.sh`'s `need_tool` now checks cargo-nextest, cargo-llvm-cov and cargo-udeps like the other
+  seven, against `ci.yml`'s install lines, and reads the first X.Y.Z on the first line of
+  `--version` instead of the last word, which for cargo-nextest is a date (`cargo-nextest 0.9.148
+  (cd1d6d546 2026-10-07)`). A new check stops the gate unless `typos --version` is `typos-cli
+  1.51.1` and `ci.yml` runs typos as exactly one step `uses: crate-ci/typos@<40 hex digits> #
+  v1.51.1`. `bootstrap.sh` (outside the repositories) installs the four at those versions. The Rust
+  toolchain is not pinned: stable is `rust-toolchain.toml`'s channel, which local builds and the
+  gate follow too, and nightly (cargo-udeps; fuzzing, cargo-careful and Miri) is the day's, as
+  `cargo +nightly` is on the dev machine; pinning either is a change to `rust-toolchain.toml`,
+  `gate.sh` and `bootstrap.sh` with the workflows, and stays the plan's follow-up for the release
+  toolchain. The rule is stated once in full in `ci.yml`'s header (the `codecov` job's paragraph,
+  which said "pinning every action is a pending decision", is gone), and `release.yml`,
+  `scorecard.yml`, `codeql.yml` and site's and web's `pages.yml` point to it. New
+  `ci/pinned-actions.sh` checks the rule's form in a workflow directory: each `uses:` names a full
+  40-digit lowercase SHA with a `# v<version>` comment (`v1`, `v2.9` or `v7.0.1`); a local action,
+  or a Docker image by `sha256:` digest, also passes; it fails closed on a missing or empty
+  directory or an unreadable file. Whether the tag names that commit needs the network, so the
+  reviewers of a change that moves a pin check it. `ci/test-pinned-actions.sh` has 30 cases, and
+  `gate.sh` and a new `pinned-actions` job in `ci.yml` run both; site and web have no gate, so
+  `core/ci/pinned-actions.sh <repo>/.github/workflows` checks them. `CONTRIBUTING.md` now lists the
+  new tool pins and the hand checks of the weekly Dependabot review: the ten cargo tools, the two
+  release tools, site's zola, the Codecov CLI, and the `dtolnay/rust-toolchain` and
+  `google/clusterfuzzlite` commits, whose single `v1` tag gives Dependabot no newer release; and how
+  a Dependabot bump of `crate-ci/typos` moves `gate.sh`'s typos version with it. Residuals: the Rust
+  toolchain, as above; the container images that pinned actions name by tag (scorecard-action's
+  on ghcr.io, ClusterFuzzLite's on gcr.io) and `ci.yml`'s `semgrep/semgrep:1.181.0`, a version tag,
+  not a digest. Tests that fail without the change: `ci/pinned-actions.sh` on `main`'s workflows
+  exits 1 and lists 61 unpinned `uses:` lines in core, 4 in site and 4 in web; `gate.sh`'s new
+  `need_tool` lines fail against `main`'s `ci.yml` (`taiki-e/install-action@nextest`,
+  `cargo-llvm-cov,nextest`, `taiki-e/install-action@cargo-udeps`), and its typos check against
+  `crate-ci/typos@master`; and with the old version read, the `need_tool` for cargo-nextest would
+  have read `2026-10-07)`. The workflows were parsed as YAML; where a step runs other code than
+  before, its `with:` inputs were checked against the `action.yml` at the pinned commit
+  (codeql-action's `init` and `analyze`, rust-toolchain, install-action and typos), and a script
+  over the parsed files confirmed that every rust-toolchain step names a toolchain and every
+  install-action step gives each tool a version and `fallback: none`; actionlint is not installed.
+  They run on the first push after the merge (CI, CodeQL; Pages in site and web) and at the next
+  scheduled runs.
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security) over three rounds; every finding fixed and confirmed clean on
+    5753ddd. Author ac59cb154860b67dc; the merge agent wrote this line.
 - The index checks every stored record again when a folder opens (the owner's decision of
   2026-10-25, option A of the phase 1 store question; the plan's decision "Index check at open").
   `Index::open` gives each record that `Store::load` returns the checks a record from a peer gets

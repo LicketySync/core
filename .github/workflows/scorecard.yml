@@ -10,11 +10,12 @@
 # `run:` step. Scheduled runs are supported on the default branch only;
 # workflow_dispatch is, in Scorecard's words, experimental.
 #
-# Pinning rule: a job that holds id-token, attestations or contents write pins
-# every action it uses by commit, GitHub's own included, since a tag can be
-# moved (release.yml and ci.yml state the same rule). Scorecard matches its
-# approved actions by name, and its own published workflow pins them by commit
-# too. The action runs the container image
+# Pinning rule (the owner's decision of 2026-10-25): every action in every
+# workflow pins by full commit SHA, GitHub's own included, since a tag can be
+# moved, with the release tag on that commit in a comment (ci.yml states the
+# rule in full, and release.yml too; ci/pinned-actions.sh checks it).
+# Scorecard matches its approved actions by name, and its own published
+# workflow pins them by commit too. The action runs the container image
 # docker://ghcr.io/ossf/scorecard-action:v2.5.0, which its pinned commit names
 # by tag; Scorecard approves actions by name, so the image cannot be pinned
 # here (a residual). upload-sarif is v4, whose inputs are v3's (v3 is
