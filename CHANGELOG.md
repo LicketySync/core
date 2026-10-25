@@ -150,6 +150,16 @@ paths or the API also names the security-reviewer pass.
   - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
     a020d1ce8061c98b4 (security); every finding fixed and confirmed clean on f4acfd1. Author
     ae9a81200e90b5ed4; the merge agent wrote this line.
+- Dependabot pull requests #8 (`actions/checkout` 4 to 7, in the six workflows that use it) and #9
+  (`actions/upload-artifact` 4 to 7, in `mutants.yml`, `nightly.yml` and `release.yml`) merged into
+  `main` directly on 2026-10-25, as 36ed13c and 85dc471, after review by a0074be8100563602: tag-only
+  diffs, every step's inputs unchanged, both actions now on Node 24, and all CI green on each pull
+  request and on `main` after each merge (TM-8). Dependabot's commits do not touch this file, so
+  this entry is their review record. The line below names the reviewers of this entry, not of the
+  pull requests.
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security); every finding fixed and confirmed clean on f4acfd1. Author
+    ae9a81200e90b5ed4; the merge agent wrote this line.
 - `ctutils`, `cmov` and `constant_time_eq` confined beneath their wrappers in `deny.toml`, as the
   other primitives beneath the approved crates are (`suites.md` section 3.1, TM-5): `ctutils` to
   `universal-hash`, whose Poly1305 tag comparison is its one use here; `cmov` to `ctutils`; and
