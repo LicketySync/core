@@ -16,4 +16,9 @@ wildcards = "deny"
 allow-wildcard-paths = true
 deny = [
   { crate = "chacha20", wrappers = ["chacha20poly1305"], reason = "never without the MAC" },
+  # Reached only through proptest, a dev-dependency, so no shipped build has
+  # them (deny.toml's entries). Banned outright until the change that adds net
+  # gives rand its wrappers there (suites.md 3.1 and 3.2).
+  { crate = "rand", reason = "first-party randomness is getrandom (suites.md 4.3); rand only beneath test tooling" },
+  { crate = "rand_xorshift", reason = "proptest's test generator; never in a shipped build" },
 ]

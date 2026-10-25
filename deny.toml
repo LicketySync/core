@@ -83,6 +83,15 @@ deny = [
   { crate = "cipher", wrappers = ["chacha20", "chacha20poly1305"], reason = "reached only through chacha20poly1305" },
   { crate = "aead", wrappers = ["chacha20poly1305"], reason = "reached only through chacha20poly1305" },
   { crate = "bitcoin_hashes", wrappers = ["bip39"], reason = "the words' checksum SHA-256, inside bip39 only" },
+  # proptest's random-input generators, a dev-dependency only. suites.md
+  # section 3 counts a random source as cryptography, and section 3.2 says no
+  # first-party crate uses rand: first-party randomness is getrandom (section
+  # 4.3), and the simulator uses its own SplitMix64. deny-production.toml bans
+  # both outright for the shipped graph. The change that adds net gives rand
+  # the wrappers section 3.1 names for it (the libp2p-* crates, quinn) in both
+  # files.
+  { crate = "rand", wrappers = ["proptest"], reason = "a test tool's generator; first-party randomness is getrandom (suites.md 4.3)" },
+  { crate = "rand_xorshift", wrappers = ["proptest"], reason = "proptest's test generator, never in first-party code" },
   # Key encodings no key of ours uses (quality review NIT 9): banned so that a
   # dependency or feature change that would build them fails here.
   { crate = "pkcs8", reason = "no key is read or written as PKCS#8" },

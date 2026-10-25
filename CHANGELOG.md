@@ -6,6 +6,36 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- `rand` and `rand_xorshift` confined beneath `proptest`: the reviewers' follow-up to block `rand`
+  from first-party code before phase 1, which the owner approved on 2026-10-25 ("Yes to all").
+  `suites.md` section 3 counts a random source as cryptography, and section 3.2 says no first-party
+  crate names or uses `rand`; first-party randomness is `getrandom` (section 4.3). Nothing enforced
+  that for `rand` without its default features: a first-party crate could depend on it and draw keys
+  or nonces from a generator it seeds itself (TM-5, TM-12). With its default features `rand` brings
+  `chacha20`, whose wrapper entry already fails; without them, in the scratch copy below, only
+  `cargo vet --locked` failed, on the missing safe-to-deploy audits of `getrandom` 0.4.3 and `r-efi`
+  6.0.0 (cargo-vet counts optional dependencies), by accident and only until phase 1 vets
+  `getrandom`. `deny.toml` now allows `rand` and `rand_xorshift` only beneath `proptest`, their one
+  dependent today (`cargo tree -i`), in the style of `chacha20`'s entry, and `deny-production.toml`
+  bans both outright for the shipped graph, where nothing reaches them. When the change that adds
+  `net` brings `rand` in beneath the `libp2p-*` crates and `quinn`, as section 3.1 expects, it adds
+  those wrappers in both files; the comments say so. `rand_core` and `getrandom` stay open: section
+  3.2 approves both for first-party use. Test that fails without the change: in a scratch copy of
+  the tree just before it, with `rand = { version = "=0.10.3", default-features = false }` (the
+  locked version) added to `licketysync-engine`, the old files pass both `cargo deny check` and
+  `cargo deny --config deny-production.toml check bans` (exit 0, "bans ok"); with the new files both
+  fail with exit 2, "error[banned]: crate 'rand = 0.10.3' is explicitly banned", `deny.toml` also
+  warning that `licketysync-engine` is not a wrapper. The same holds for
+  `rand_xorshift = { version = "=0.5.0", default-features = false }`. The real tree passes both
+  commands with the new files ("bans ok", no warning about the new entries). Spec change in this
+  commit (`spec/suites.md` section 3.1): its decision's list of what `deny.toml` holds today gains
+  `rand` and `rand_xorshift`, confined beneath `proptest`, with `deny-production.toml` banning both
+  outright until the change that adds `net` gives `rand` its wrappers. Section 3.1 already required
+  an entry for each primitive on the graph, and the production counterpart for one that test tooling
+  reaches.
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security); every finding fixed and confirmed clean on f4acfd1. Author
+    ae9a81200e90b5ed4; the merge agent wrote this line.
 - Codecov upload moved to a job of its own that authenticates with GitHub's OIDC token, as the owner
   approved on 2026-10-23 ("Yes, set up Codecov if it's free.") and 2026-10-25 ("Codecov - I've
   signed in and installed the Codecov app on LicketySync organization." and "Yes to all"),

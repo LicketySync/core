@@ -491,11 +491,12 @@ its `ring` feature via `libp2p-quic`, QUIC's stateless-reset HMAC and its token 
 `ring` feature). The exact wrappers of `ring`'s `deny.toml` entry are fixed in the change that adds
 `net`, from `cargo tree -e no-dev -i ring` **(decision; `deny.toml` today bans `openssl`,
 `openssl-sys`, `md5`, `sha1`, `rust-crypto`, `pkcs8`, `der` and `spki` outright, bans `ring` outright
-until the change that adds `net` gives it wrappers, and restricts the crates `keys` uses, and the
-primitives beneath them, to listed wrappers; it has no entries for `hpke`, `ml-dsa`, `x-wing`,
-`ml-kem` or `x25519-dalek`, which no crate depends on)**. Expect `multiple-versions`
-warnings, which `deny.toml` sets to `warn`, wherever two listed crates require different lines of a
-shared dependency; each is read when it appears.
+until the change that adds `net` gives it wrappers, restricts the crates `keys` uses, and the
+primitives beneath them, to listed wrappers, and confines `rand` and `rand_xorshift` beneath
+`proptest` (`deny-production.toml` bans both outright, until that change gives `rand` the wrappers
+named above); it has no entries for `hpke`, `ml-dsa`, `x-wing`, `ml-kem` or `x25519-dalek`, which no
+crate depends on)**. Expect `multiple-versions` warnings, which `deny.toml` sets to `warn`, wherever
+two listed crates require different lines of a shared dependency; each is read when it appears.
 
 ### 3.2 Encodings and non-cryptographic helpers
 
