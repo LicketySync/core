@@ -1,0 +1,14 @@
+# Codecov's settings, read by the Codecov app. Coverage is held to its
+# threshold by gate.sh and CI's coverage job: 90% of lines in each of keys,
+# protocol, index and engine, measured per crate. Codecov's own commit
+# statuses (codecov/project and codecov/patch) are informational only, so
+# their default thresholds never mark a commit on main red: the coverage job
+# is the check, and Codecov's dashboard is for reading.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true

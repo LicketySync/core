@@ -81,10 +81,86 @@ jobs:
             cargo llvm-cov nextest --all-features --fail-under-lines 90 \
               -p "licketysync-$c" --ignore-filename-regex "crates/($others)/"
           done
-      - uses: codecov/codecov-action@v4
+      # For the codecov job below, which alone uploads it.
+      - uses: actions/upload-artifact@v7
         with:
-          files: lcov.info
-          fail_ci_if_error: false
+          name: lcov
+          path: lcov.info
+          if-no-files-found: error
+          retention-days: 7
+
+  # The coverage report to Codecov, authenticated by GitHub's OIDC token, so no
+  # Codecov token is kept as a secret (owner approvals of 2026-10-23 and
+  # 2026-10-25; the Codecov app is installed on the organization). A job of its
+  # own, so that the id-token permission sits beside no build: the coverage job
+  # runs every test and every dependency's build script with a read-only token.
+  # Pushes to this repository's main only, so pull requests (Dependabot's among
+  # them) and forks, a fork's own main included, never mint a token.
+  #
+  # Pinning rule: a job that holds id-token, attestations or contents write
+  # pins every action it uses by commit, GitHub's own included, since a tag can
+  # be moved (release.yml states the same rule). Elsewhere actions stay on tags
+  # for now; pinning every action is a pending decision.
+  #
+  # The artifact came from the coverage job, which ran untrusted code, so it is
+  # kept out of the checkout (a planted .git/config could run a command when
+  # the CLI calls git) and checked to be one plain lcov.info under 64 MiB.
+  # What is left: the CLI still parses lcov.info's content. Codecov's action
+  # needs the repository checked out (its README says so) to map the report's
+  # absolute paths onto the repository's files; the checkout keeps no
+  # credentials. Inputs: files and disable_search, that one report and nothing
+  # else; plugins: noop, no coverage tool of the CLI's runs; cleanup, the CLI
+  # is downloaded into a temporary directory, not the checkout; disable_telem,
+  # the CLI sends nothing to its error reporting; version, the CLI pinned (the
+  # weekly Dependabot review checks it, CONTRIBUTING.md); fail_ci_if_error,
+  # since without it the action's uploader script (dist/codecov.sh) only logs a
+  # failed GPG signature or SHA-256 check of the CLI and runs it anyway. The
+  # GPG key it checks against is still fetched at run time, from Keybase.
+  # continue-on-error: a failure here, or a Codecov outage, shows on this job
+  # and leaves the run green; codecov.yml makes Codecov's own commit statuses
+  # informational for the same reason.
+  codecov:
+    name: Codecov upload (pushes to main, OIDC)
+    needs: coverage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'LicketySync/core'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lcov
+          path: ${{ runner.temp }}/lcov
+      - name: Check that the artifact is one plain lcov.info
+        env:
+          DIR: ${{ runner.temp }}/lcov
+        run: |
+          found=$(find "$DIR" -mindepth 1 -printf '%y %P\n')
+          if [ "$found" != "f lcov.info" ]; then
+            echo "expected one regular file, lcov.info, in the lcov artifact; found:" >&2
+            printf '%s\n' "${found:-(nothing)}" >&2
+            exit 1
+          fi
+          size=$(stat -c %s "$DIR/lcov.info")
+          if [ "$size" -gt $((64 * 1024 * 1024)) ]; then
+            echo "lcov.info is $size bytes, over the 64 MiB bound" >&2
+            exit 1
+          fi
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: ${{ runner.temp }}/lcov/lcov.info
+          disable_search: true
+          plugins: noop
+          cleanup: true
+          disable_telem: true
+          version: v11.3.1
+          use_oidc: true
+          fail_ci_if_error: true
 
   docs:
     name: rustdoc (-D warnings)

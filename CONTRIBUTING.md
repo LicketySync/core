@@ -113,10 +113,13 @@ install the tool, `gate.sh` and `bootstrap.sh`. The same review checks the
 pins `gate.sh` does not: `release.yml`'s cargo-auditable 0.7.7 and
 cargo-cyclonedx 0.5.9, and its commit pin of `dtolnay/rust-toolchain`, whose
 one tag, `v1`, follows that action's master branch; a bump there is one
-reviewed change to `release.yml`. gitleaks is optional
-(`ci/gitleaks-install.sh ~/.local/bin` installs the release CI pins). CI
-adds the full-history gitleaks scan, the other operating systems, CodeQL and,
-once configured, ClusterFuzzLite.
+reviewed change to `release.yml`. It checks the Codecov CLI version that
+`ci.yml`'s `codecov` job pins (v11.3.1) for new releases the same way, and
+reads the result of the last `codecov` job on `main`: that job may fail
+without turning the run red, so a broken upload shows only there. gitleaks
+is optional (`ci/gitleaks-install.sh ~/.local/bin` installs the release CI
+pins). CI adds the full-history gitleaks scan, the other operating systems,
+CodeQL and, once configured, ClusterFuzzLite.
 `bootstrap.sh` in the parent directory installs the tools the gate needs, the
 pinned versions included.
 

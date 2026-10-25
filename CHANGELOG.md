@@ -6,6 +6,60 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Codecov upload moved to a job of its own that authenticates with GitHub's OIDC token, as the owner
+  approved on 2026-10-23 ("Yes, set up Codecov if it's free.") and 2026-10-25 ("Codecov - I've
+  signed in and installed the Codecov app on LicketySync organization." and "Yes to all"),
+  superseding Dependabot pull request #7 (`codecov/codecov-action` 4 to 7), which Dependabot closes
+  once this is on `main` (TM-8, TM-29). Until now the `coverage` job ran `codecov/codecov-action@v4`
+  with no token and `fail_ci_if_error: false`, so every upload from `main` was refused ("Token
+  required - not valid tokenless upload", run 39994401891 on 00bb282) and the job passed. Now
+  `coverage`, its permissions unchanged (the workflow's `contents: read`), uploads `lcov.info` as an
+  artifact, kept 7 days, after the 90% loop passes. A new `codecov` job (`needs: coverage`) runs
+  only when `github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository ==
+  'LicketySync/core'`, so pull requests, Dependabot's among them, and forks, a fork's own `main`
+  included, never mint a token. It holds `id-token: write` and `contents: read` and nothing else,
+  and pins every action by commit under the rule `ci.yml` now states with `release.yml`:
+  `actions/checkout` `3d3c42e5aac5ba805825da76410c181273ba90b1` (`v7.0.1`, the latest release, which
+  `v7` also points to), `actions/download-artifact` `9000827ccba6bdab643e8b6fd33ac0654aef8333`
+  (`v8.0.2`) and `codecov/codecov-action` `303a32d7a59b442fa8d48b6a1cc6825c09c847a5` (`v7.1.1`, the
+  latest release; `v7` is an annotated tag, dereferenced with `gh api
+  repos/codecov/codecov-action/git/tags/<sha>` on 2026-10-25). It checks out with
+  `persist-credentials: false`, because the action needs the repository checked out (its README) to
+  map the report's absolute paths onto the repository's files. The artifact came from a job that ran
+  untrusted code, so it is downloaded to `${{ runner.temp }}/lcov`, outside the checkout (inside it,
+  a planted `.git/config` could have run a command when the CLI calls `git`), and a shell step fails
+  unless that directory holds exactly one regular file (not a symlink) named `lcov.info`, of at most
+  64 MiB. The action runs with `files` set to that path, `disable_search: true` (that report only),
+  `plugins: noop` (none of the CLI's coverage tools), `cleanup: true` (the CLI downloaded into a
+  temporary directory, not the checkout), `disable_telem: true` (the CLI's Sentry error reporting
+  never starts: `--disable-telem` skips `init_telem` in `codecov_cli/main.py` of v11.3.1), `version:
+  v11.3.1`, `use_oidc: true` and `fail_ci_if_error: true`: the action's uploader script
+  (`dist/codecov.sh` at that commit) only logs a failed GPG signature or SHA-256 check of the
+  Codecov CLI it downloads, and runs that CLI anyway, unless the flag is true. v11.3.1 (2026-07-09)
+  is the newest release of `codecov/codecov-cli` (`gh api
+  repos/codecov/codecov-cli/releases/latest`), and the `SHA256SUM` that `cli.codecov.io` serves for
+  `v11.3.1/linux` equals the one it serves for `latest/linux`, the GitHub release's digest of
+  `codecovcli_linux` and the hash the uploader verified in run 39994401891
+  (`ca1d64196d2d34771084afe76ea657d581bf628e31d993ff8e52ea09cc88a56d`). The GPG key the script
+  checks against is still fetched at run time, from Keybase. What is left: the CLI still parses
+  `lcov.info`'s content.
+  The job is `continue-on-error: true`, so a Codecov failure or outage shows on the job and never
+  turns CI red; and a new `codecov.yml` at the root makes Codecov's own commit statuses
+  (`codecov/project`, `codecov/patch`) `informational: true`, since once uploads succeed the
+  installed app would otherwise post them with its default thresholds and could mark a commit on
+  `main` red. The threshold the project enforces stays the gate's and the coverage job's 90% per
+  crate. Codecov's validator accepted the file ("Valid!"). The weekly Dependabot review now checks
+  the Codecov CLI pin for new releases and reads the result of the last `codecov` job on `main`
+  (`CONTRIBUTING.md`). The job contacts Codecov's hosts (`cli.codecov.io` for the CLI and its
+  checksums, Codecov's API and the storage it hands the report to), and Keybase (a third party) for
+  the GPG key; TM-31 and `spec/allowed-hosts.txt` govern the hosts the binaries contact, which do
+  not change. There is no Codecov token secret anywhere. Uploads start with the first push to `main`
+  after this change; that run's `codecov` job is the test. The check step was run on simulated
+  artifacts (one `lcov.info`; an extra file, a symlink, a directory, a 70 MB file, another name, an
+  empty or missing directory, each refused).
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security); every finding fixed and confirmed clean on f4acfd1. Author
+    ae9a81200e90b5ed4; the merge agent wrote this line.
 - The Release workflow (`.github/workflows/release.yml`) cut to least privilege, as the owner
   approved on 2026-10-25 ("Yes to all"), superseding Dependabot pull request #4
   (`actions/attest-build-provenance` 2 to 4), which Dependabot closes once this is on `main` (TM-8,
