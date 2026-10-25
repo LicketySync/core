@@ -9,6 +9,16 @@
 # codeql-action/upload-sarif, scorecard-action, harden-runner), so never a
 # `run:` step. Scheduled runs are supported on the default branch only;
 # workflow_dispatch is, in Scorecard's words, experimental.
+#
+# Pinning rule: a job that holds id-token, attestations or contents write pins
+# every action it uses by commit, GitHub's own included, since a tag can be
+# moved (release.yml and ci.yml state the same rule). Scorecard matches its
+# approved actions by name, and its own published workflow pins them by commit
+# too. The action runs the container image
+# docker://ghcr.io/ossf/scorecard-action:v2.5.0, which its pinned commit names
+# by tag; Scorecard approves actions by name, so the image cannot be pinned
+# here (a residual). upload-sarif is v4, whose inputs are v3's (v3 is
+# deprecated in December 2026, in codeql-action's changelog).
 name: Scorecard
 
 on:
@@ -32,14 +42,14 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ossf/scorecard-action@v2.5.0
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
         with:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: results.sarif

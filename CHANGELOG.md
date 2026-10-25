@@ -6,6 +6,33 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- `scorecard.yml`'s actions pinned by commit, the coordinator's ruling on the review of this series
+  (TM-8): its `scorecard` job holds `id-token: write` (and `security-events: write`), so the pinning
+  rule `release.yml` and `ci.yml` state covers it, and every job in the repository that holds
+  `id-token`, `attestations` or `contents` write now pins every action it uses by commit
+  (`release.yml`, `ci.yml`, `scorecard.yml`, each stating the rule). The pins (each tag read with
+  `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` on 2026-10-25, an annotated one dereferenced with
+  `git/tags/<sha>`): `actions/checkout` `3d3c42e5aac5ba805825da76410c181273ba90b1` (`v7.0.1`, as in
+  `ci.yml`'s `codecov` job), `ossf/scorecard-action` `fa7117db83c52d787ae5a89f350999701505d78e`
+  (`v2.5.0`, the latest release; an annotated tag) and `github/codeql-action/upload-sarif`
+  `9b3254085494b55a0f7c4c2b3d2d52cc712ce370` (`v4.39.1`, the newest v4 release, of 2026-10-21;
+  `v4.39.1` and `v4` are annotated tags that both dereference to it). upload-sarif moves from v3 to
+  v4: codeql-action's changelog says v3 will be deprecated in December 2026, and `upload-sarif`'s
+  `action.yml` declares the same eight inputs with the same defaults at `v3` and at `v4.39.1`
+  (`sarif_file` among them), only its runtime moving from Node 20 to Node 24. Scorecard's publishing
+  rules approve a job's actions by name (its README, "Workflow Restrictions"), and Scorecard's own
+  published workflow (`ossf/scorecard`, `scorecard-analysis.yml`) pins the same `checkout` and
+  `scorecard-action` commits and `upload-sarif` v4 by commit, so the results should stay publishable
+  (the job still has no `run:` step). The action runs the container image
+  `docker://ghcr.io/ossf/scorecard-action:v2.5.0`, which its pinned commit names by tag; Scorecard
+  approves actions by name, so the image cannot be pinned here (a residual). Not changed:
+  `codeql.yml`, whose job holds `security-events: write` and `contents: read` and so is outside the
+  rule, still runs `github/codeql-action` v3 (`init`, `analyze`) by tag; moving it to v4 before
+  December 2026 is a follow-up. The workflow runs weekly and on demand, so it was not run here; its
+  next run, or one started by hand after the merge, is the test.
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security); every finding fixed and confirmed clean on f4acfd1. Author
+    ae9a81200e90b5ed4; the merge agent wrote this line.
 - `rand` and `rand_xorshift` confined beneath `proptest`: the reviewers' follow-up to block `rand`
   from first-party code before phase 1, which the owner approved on 2026-10-25 ("Yes to all").
   `suites.md` section 3 counts a random source as cryptography, and section 3.2 says no first-party

@@ -16,9 +16,9 @@
 #
 # Pinning rule: a job that holds id-token, attestations or contents write pins
 # every action it uses by commit, GitHub's own included, since a tag can be
-# moved (ci.yml states the same rule). Elsewhere actions stay on tags for now;
-# pinning every action is a pending decision. The build job's two third-party
-# actions are pinned by commit as well.
+# moved (ci.yml and scorecard.yml state the same rule). Elsewhere actions stay
+# on tags for now; pinning every action is a pending decision. The build job's
+# two third-party actions are pinned by commit as well.
 #
 # Verifying a release: an attestation is trusted only as this workflow's, run
 # for a v* tag on GitHub's own runners.
