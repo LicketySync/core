@@ -6,15 +6,54 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- cargo-vet 0.10.3, and the review's last findings (TM-8). The owner's rule takes a release at once
+  when it fixes a critical or high vulnerability (the owner's messages of 2026-10-25, quoted in the
+  project's CLAUDE.md: "or that has critical vulnerabilities fixed." and, the same day, ""Critical
+  or high vulnerabilities" works for me."); the wording is now exactly that in `ci.yml`,
+  `CONTRIBUTING.md`, `.github/dependabot.yml` and here. cargo-vet moves from 0.10.2 to 0.10.3
+  (crates.io, 2026-10-22), under 7 days old: `cargo audit --file` on each release's published
+  `Cargo.lock` finds 13 vulnerabilities in 0.10.2's, among them RUSTSEC-2024-0336 (rustls 0.20.6,
+  7.5, high) and RUSTSEC-2023-0052 (webpki 0.22.0, 7.5, high), and RUSTSEC-2026-0067 and
+  RUSTSEC-2026-0068 (tar 0.4.38, 5.1, medium), and none in 0.10.3's (five warnings: unmaintained
+  crates, and bumpalo and tokio unsound). `CARGO_VET` and `ci.yml`'s install line say 0.10.3; with
+  it, `cargo vet --locked` passes ("Vetting Succeeded (16 fully audited, 55 exempted)") and `cargo
+  vet fmt` leaves `supply-chain/` unchanged. cargo-nextest 0.9.149 still waits for its 7 days: its
+  fix concerns only the CA list of `cargo nextest self update`.
+  - `ci/pins.env` can set only its own keys (security N1): the new `ci/check-pins.sh` lists them
+    and refuses any line but a comment, a blank or `KEY=value` with a listed key, set once, and a
+    plain value, so sourcing the file can never set `PATH`, `HOME`, `IFS`, `LC_ALL`, a `CARGO_` or
+    `RUSTUP_` setting, or run anything. `gate.sh`, `ci/toolchains.sh`, `ci/gitleaks-install.sh`
+    and `bootstrap.sh` run it before sourcing the file, in place of the pattern each had;
+    `ci/test-check-pins.sh` has 25 cases (the real file, and `PATH`, `HOME`, `IFS`, `LC_ALL`,
+    `CARGO_HOME`, `RUSTUP_TOOLCHAIN`, an unknown key and a key set twice among the refused), run by
+    `gate.sh` and CI's `ci-scripts` job; eight of them fail against the pattern before it.
+  - `ci/pinned-actions.sh` refuses an alias as a key (security N2), `- *k : ...` where the anchor
+    holds `uses`, in block and flow style; 50 cases, the two new ones failing against the script
+    before it, and an alias as a value and a cron schedule's stars still pass.
+  - `fuzz/Cargo.lock` (security N3, quality NIT 3): `gate.sh` and `nightly.yml`'s audit job run
+    `cargo audit --file fuzz/Cargo.lock`, and `.github/dependabot.yml` gains a cargo entry for
+    `/fuzz` with the same 7-day cooldown. cargo-deny and cargo-vet still read the root workspace
+    only; `CONTRIBUTING.md`'s residuals say so.
+  - `ci.yml`'s header says the versions are written once, in core, in `ci/pins.env`, with site's
+    zola the exception; `CONTRIBUTING.md` says which tools `bootstrap.sh` installs that the gate
+    does not check here (cargo-auditable, cargo-cyclonedx, cargo-semver-checks), and that gitleaks,
+    which it does not install, only draws a warning; core says "the project's CLAUDE.md"; and
+    `gate.sh`'s header is rewrapped.
+  - On the dev machine: cargo-vet 0.10.3 installed from crates.io with `cargo install --locked`.
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security) over three rounds; every finding fixed and confirmed clean on
+    5753ddd. Author ac59cb154860b67dc; the merge agent wrote this line.
 - The pin-all series brought under the owner's "Stay current" rule of 2026-10-25, and its reviews'
   findings fixed (TM-8, TM-29). The owner: "We'd like to always use the latest version for tooling,
   libraries, CI, etc. Upgrade to anything that's been released for over 1 week (avoiding supply
-  chain attacks) or that has critical vulnerabilities fixed." (CLAUDE.md, "Stay current"). Every
-  pin is now the newest release that has been out for at least 7 days on 2026-10-25 (published on
-  or before 2026-10-18T20:55Z), dates read with `gh api .../releases` and the crates.io API under a
+  chain attacks) or that has critical vulnerabilities fixed." and, the same day, ""Critical or high
+  vulnerabilities" works for me." (the owner's messages of 2026-10-25, quoted in the project's
+  CLAUDE.md), so a release that fixes a critical or high vulnerability is taken at once. Every pin
+  is now the newest release that has been out for at least 7 days on 2026-10-25 (published on or
+  before 2026-10-18T20:55Z), dates read with `gh api .../releases` and the crates.io API under a
   User-Agent with no personal data. Moved back, since the pinned release was younger: install-action
-  `v2.87.31` (2026-10-23) to `v2.87.29` (`8cca0918f8471c33515202b73f56ab27f2bed283`, 2026-10-16),
-  in core and in site; rust-cache `v2.9.3` (2026-10-20) to `v2.9.2`
+  `v2.87.31` (2026-10-23) to `v2.87.29` (`8cca0918f8471c33515202b73f56ab27f2bed283`, 2026-10-16), in
+  core and in site; rust-cache `v2.9.3` (2026-10-20) to `v2.9.2`
   (`6323deb102c322ba6fcbdcafc7e3dddab59af2b6`, 2026-08-06, an annotated tag dereferenced); and
   codeql-action `v4.39.1` (2026-10-21) to `v4.39.0` (`6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee`,
   2026-10-15, annotated) for `init`, `analyze` and `upload-sarif`, whose `action.yml` files differ
@@ -27,22 +66,22 @@ paths or the API also names the security-reviewer pass.
   scorecard-action `v2.5.0` (2026-10-12), rust-toolchain `v1` (its commit of 2026-10-16) and
   clusterfuzzlite `v1` (2023-08-09). The tools stay where they were, each the newest crates.io or
   GitHub release that is old enough: cargo-nextest 0.9.148 (2026-10-08), cargo-llvm-cov 0.9.1
-  (2026-09-06), cargo-udeps 0.1.61 (2026-04-29), cargo-deny 0.20.2 (2026-07-09), cargo-audit
-  0.22.2 (2026-06-05), cargo-machete 0.9.2 (2026-04-15), cargo-vet 0.10.2 (2026-01-13),
-  cargo-mutants 27.1.0 (2026-06-02), cargo-fuzz 0.13.2 (2026-06-09), cargo-careful 0.4.10
-  (2026-04-01), cargo-geiger 0.14.0 (2026-10-12), cargo-auditable 0.7.7 (2026-10-02),
-  cargo-cyclonedx 0.5.9 (2026-03-19), cargo-semver-checks 0.51.0 (2026-10-03), typos-cli 1.51.1
-  (2026-10-06), semgrep 1.181.0 (2026-10-14), gitleaks 8.30.1 (2026-03-21), the Codecov CLI v11.3.1
-  (2026-07-09) and zola 0.23.6 (2026-09-12). Three younger releases were read and passed over:
-  cargo-nextest 0.9.149 (2026-10-20), whose security fix is in `cargo nextest self update` alone,
-  which nothing here runs, with no advisory published; cargo-vet 0.10.3 (2026-10-22), whose notes
-  say its own dependencies were updated for RUSTSEC advisories, naming none as critical or high;
-  and semgrep 1.182.0 (2026-10-20), features only. Rust: stable 1.99.1 (released 2026-10-15; the
-  security review's S1) and nightly-2026-10-18 (rustc 1.101.0-nightly, 8006091eb 2026-10-17), the
-  newest dated nightly at least 7 days old, whose manifest has miri and rust-src. On the dev
-  machine, with that nightly and both components installed, cargo-udeps passes, `cargo fuzz build`
-  builds all 17 targets, a 5-second `cargo fuzz run frame_decode` runs clean, `cargo careful test
-  --workspace` passes and `cargo miri --version` answers.
+  (2026-09-06), cargo-udeps 0.1.61 (2026-04-29), cargo-deny 0.20.2 (2026-07-09), cargo-audit 0.22.2
+  (2026-06-05), cargo-machete 0.9.2 (2026-04-15), cargo-vet 0.10.2 (2026-01-13), cargo-mutants
+  27.1.0 (2026-06-02), cargo-fuzz 0.13.2 (2026-06-09), cargo-careful 0.4.10 (2026-04-01),
+  cargo-geiger 0.14.0 (2026-10-12), cargo-auditable 0.7.7 (2026-10-02), cargo-cyclonedx 0.5.9
+  (2026-03-19), cargo-semver-checks 0.51.0 (2026-10-03), typos-cli 1.51.1 (2026-10-06), semgrep
+  1.181.0 (2026-10-14), gitleaks 8.30.1 (2026-03-21), the Codecov CLI v11.3.1 (2026-07-09) and zola
+  0.23.6 (2026-09-12). Three younger releases were read and passed over: cargo-nextest 0.9.149
+  (2026-10-20), whose security fix is in `cargo nextest self update` alone, which nothing here runs,
+  with no advisory published; cargo-vet 0.10.3 (2026-10-22), wrongly passed over here as naming no
+  severity, and taken at once by the entry above, since 0.10.2's published lockfile has two High
+  advisories; and semgrep 1.182.0 (2026-10-20), features only. Rust: stable 1.99.1 (released
+  2026-10-15; the security review's S1) and nightly-2026-10-18 (rustc 1.101.0-nightly, 8006091eb
+  2026-10-17), the newest dated nightly at least 7 days old, whose manifest has miri and rust-src.
+  On the dev machine, with that nightly and both components installed, cargo-udeps passes,
+  `cargo fuzz build` builds all 17 targets, a 5-second `cargo fuzz run frame_decode` runs clean,
+  `cargo careful test --workspace` passes and `cargo miri --version` answers.
   - One source of truth (quality SF2, as ruled): the new `ci/pins.env` holds every tool and
     toolchain version as `KEY=value` (`RUST_STABLE`, `RUST_NIGHTLY`, a key per cargo tool, `TYPOS`,
     `SEMGREP` and `SEMGREP_IMAGE_DIGEST`, `GITLEAKS` and `GITLEAKS_LINUX_X64_SHA256`,

@@ -36,6 +36,8 @@ jobs:
           tool: cargo-audit@0.22.2
           fallback: none
       - run: cargo audit
+      # fuzz/ is a workspace of its own, with its own lockfile.
+      - run: cargo audit --file fuzz/Cargo.lock
 
   # One job per fuzz target, so that 30 minutes each fits GitHub's 6 h job
   # limit however many decoders there are. cargo-fuzz from crates.io:

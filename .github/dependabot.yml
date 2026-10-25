@@ -1,13 +1,25 @@
-# Version updates wait 7 days after a release (the owner's "Stay current" rule
-# of 2026-10-25 in CLAUDE.md, against supply-chain attacks); cooldown does not
-# apply to security updates, which come at once (GitHub's Dependabot options
-# reference, "cooldown"). GitHub Actions are pinned by commit with the release
-# tag in a comment, which Dependabot rewrites when it moves the pin
-# (.github/workflows/ci.yml's header).
+# Version updates wait 7 days after a release (the owner's messages of
+# 2026-10-25, quoted in the project's CLAUDE.md: take a release once it has
+# been out for at least 7 days, against supply-chain attacks, or at once when it
+# fixes a critical or high vulnerability); cooldown does not apply to security
+# updates, which come at once (GitHub's Dependabot options reference,
+# "cooldown"). fuzz/ is a workspace of its own, with its own Cargo.lock. GitHub
+# Actions are pinned by commit with the release tag in a comment, which
+# Dependabot rewrites when it moves the pin (.github/workflows/ci.yml's header).
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: cargo
+    directory: "/fuzz"
     schedule:
       interval: weekly
     cooldown:

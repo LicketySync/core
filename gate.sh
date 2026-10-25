@@ -7,11 +7,12 @@
 # ci/geiger-baseline.txt, and the checks that every action in the workflows is
 # pinned by commit and every toolchain they name is pinned
 # (ci/pinned-actions.sh, ci/toolchains.sh). gitleaks runs over the working tree
-# when it is installed (the plan's local check; CI scans the full history). CI adds the other operating systems, CodeQL, and
-# ClusterFuzzLite once it is configured. Needs the network: cargo-audit and
-# cargo-deny fetch the advisory database, each into its own clone (see
-# deny.toml), and the Semgrep scan fetches the community rules. Works from any
-# directory and stops at the first failing step.
+# when it is installed (the plan's local check; CI scans the full history). CI
+# adds the other operating systems, CodeQL, and ClusterFuzzLite once it is
+# configured. Needs the network: cargo-audit and cargo-deny fetch the advisory
+# database, each into its own clone (see deny.toml), and the Semgrep scan
+# fetches the community rules. Works from any directory and stops at the first
+# failing step.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -28,10 +29,8 @@ step() { echo "== $*"; "$@"; }
 # survivor, a crash or a finding they report reproduces here with the same tool.
 # CONTRIBUTING.md ("Pins and the weekly refresh") says how to move a pin.
 pins=ci/pins.env
-if grep -nvE '^([[:space:]]*(#.*)?|[A-Z][A-Z0-9_]*=[A-Za-z0-9._:+-]+)$' "$pins" >&2; then
-  echo "$pins: the lines above are not comments or KEY=value; nothing else may be in it" >&2
-  exit 1
-fi
+# Only its listed keys, with plain values, so sourcing it sets nothing else.
+ci/check-pins.sh "$pins"
 # shellcheck source=ci/pins.env
 . "$pins"
 wf=.github/workflows
@@ -199,6 +198,8 @@ step env RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-p
 step cargo deny check
 step cargo deny --config deny-production.toml check bans
 step cargo audit
+# fuzz/ is a workspace of its own, so its lockfile is audited on its own.
+step cargo audit --file fuzz/Cargo.lock
 step cargo machete
 step cargo vet --locked
 step cargo "+$RUST_NIGHTLY" udeps --workspace --all-targets
@@ -226,6 +227,7 @@ step ci/no-hostnames.sh
 step ci/test-pinned-actions.sh
 step ci/pinned-actions.sh
 step ci/test-toolchains.sh
+step ci/test-check-pins.sh
 # The line-ending attributes of the test vectors and fuzz seeds (.gitattributes).
 step ci/test-vector-line-endings.sh
 # The scripts mutants.yml and nightly.yml's fuzz jobs run, on stand-ins for the tools.

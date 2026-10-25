@@ -9,7 +9,8 @@
 # needed. So that no other spelling of the key slips past, any line that writes
 # a `uses` key in another form is refused whole: a space before the colon, a
 # quoted key, a key with escapes, a flow mapping (`{uses: ...}`), an explicit
-# `?` key, or an anchored or tagged key (`&a uses:`, `!!str uses:`).
+# `?` key, an anchored or tagged key (`&a uses:`, `!!str uses:`), or an alias
+# as a key (`*a : ...`, where the anchor could hold `uses`).
 # It checks the form only: that the tag names that commit needs the network
 # (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, an annotated tag then
 # `git/tags/<sha>`), so the reviewers of a change that moves a pin check it.
@@ -41,8 +42,9 @@ remote="$q[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[^@[:space:]\"']+)?@[0-9a-f]{40}$q[[:
 docker="${q}docker://[^@[:space:]\"']+@sha256:[0-9a-f]{64}$q([[:space:]]+#.*)?"
 # Any other way to write the key: `uses` as a whole word (not part of a longer
 # key) followed by optional quote and space and a colon; an explicit-key line;
-# a double-quoted key with a backslash escape in it.
-other="(^|[^A-Za-z0-9_-])[\"']?uses[\"']?[[:space:]]*:|^[[:space:]]*(-[[:space:]]+)?\?([[:space:]]|\$)|\"[^\"]*\\\\[^\"]*\"[[:space:]]*:"
+# a double-quoted key with a backslash escape in it; an alias followed by a
+# colon, that is an alias as a key.
+other="(^|[^A-Za-z0-9_-])[\"']?uses[\"']?[[:space:]]*:|^[[:space:]]*(-[[:space:]]+)?\?([[:space:]]|\$)|\"[^\"]*\\\\[^\"]*\"[[:space:]]*:|(^|[[:space:]{,?])\*[^][:space:],{}[]+[[:space:]]*:"
 # Each `uses:` line as file:line:text whose value is not pinned, then each other
 # line (not a comment line) that writes the key some other way.
 unpinned=$(g -nHE "^$key" "${files[@]}" | g -vE "^[^:]+:[0-9]+:$key($remote|$docker)\$")

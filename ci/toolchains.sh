@@ -21,14 +21,8 @@
 set -euo pipefail
 root=${1:-$(dirname "$0")/..}
 pins=$root/ci/pins.env
-if [ ! -f "$pins" ]; then
-  echo "$pins is missing" >&2
-  exit 1
-fi
-if grep -nvE '^([[:space:]]*(#.*)?|[A-Z][A-Z0-9_]*=[A-Za-z0-9._:+-]+)$' "$pins" >&2; then
-  echo "$pins: the lines above are not comments or KEY=value" >&2
-  exit 1
-fi
+# Only its listed keys, with plain values, so sourcing it sets nothing else.
+"$(dirname "$0")/check-pins.sh" "$pins"
 # shellcheck source=pins.env
 . "$pins"
 : "${RUST_STABLE:?$pins sets no RUST_STABLE}" "${RUST_NIGHTLY:?$pins sets no RUST_NIGHTLY}"

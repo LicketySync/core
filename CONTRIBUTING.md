@@ -109,14 +109,22 @@ change.
 
 ## Pins and the weekly refresh
 
-Every version a workflow, `gate.sh` or `bootstrap.sh` uses is written once, in
-`ci/pins.env`, under a key named after the tool (`CARGO_NEXTEST`, `TYPOS`,
+Every version a workflow here, `gate.sh` or `bootstrap.sh` uses is written once,
+in `ci/pins.env`, under a key named after the tool (`CARGO_NEXTEST`, `TYPOS`,
 `SEMGREP`, `GITLEAKS`, ...) or the toolchain (`RUST_STABLE`, `RUST_NIGHTLY`);
-the pinning rule is in `.github/workflows/ci.yml`'s header. `gate.sh` stops
-before its first step when an installed tool or toolchain is not its
-`pins.env` version, printing the command that installs it, or when a copy in a
-workflow or in `ci/geiger-baseline.txt` differs, naming the file and the line
-it expects; `bootstrap.sh` installs every version from the file.
+the pinning rule is in `.github/workflows/ci.yml`'s header. Each reader runs
+`ci/check-pins.sh` before sourcing the file, which refuses any line but a
+comment or `KEY=value` with a key it lists (once) and a plain value, so the file
+can set no other variable, such as `PATH`; a new key goes into both files.
+`gate.sh` stops before its first step when an installed tool or toolchain is
+not its `pins.env` version, printing the command that installs it, or when a
+copy in a workflow or in `ci/geiger-baseline.txt` differs, naming the file and
+the line it expects; `bootstrap.sh` installs every version from the file.
+Three tools that `bootstrap.sh` installs are not checked by the gate on this
+machine: cargo-auditable and cargo-cyclonedx (the gate checks only
+`release.yml`'s copies of their versions) and cargo-semver-checks; and
+gitleaks, which `bootstrap.sh` does not install, only draws a warning from
+`ci/gitleaks.sh` when it is another version than `GITLEAKS`.
 
 The tools beyond cargo's, all required: the cargo tools of `pins.env`
 (`cargo install --locked <crate> --version <version>`; cargo-geiger and
@@ -149,9 +157,10 @@ the tag names that commit is checked by hand
 at least 7 days old (`cooldown` in `.github/dependabot.yml`; security updates
 come at once).
 
-**Which release.** The owner's "Stay current" rule (CLAUDE.md): every pin is
-the newest release that has been out for at least 7 days, or a newer one at
-once when it fixes a critical or high vulnerability. A crate's date is its
+**Which release.** The owner's "Stay current" rule (the owner's messages of
+2026-10-25, quoted in the project's CLAUDE.md): every pin is the newest
+release that has been out for at least 7 days, or a newer one at once when it
+fixes a critical or high vulnerability. A crate's date is its
 crates.io publish date; an action's, tool's or image's, its GitHub release's
 `published_at` (`gh api repos/<owner>/<repo>/releases/tags/<tag>`) or the
 image tag's push date; a stable Rust's, its release day (`rustup check` shows
@@ -186,20 +195,24 @@ change:
 - transitive crates, which Dependabot skips: `cargo update` here and in
   `fuzz/` (whose `Cargo.lock` the fuzz jobs build from with `--locked`
   checked), taking back with `cargo update --precise` any version younger than
-  7 days, then `cargo deny`, `cargo audit`, `cargo vet` and the geiger
-  baseline as for any dependency change.
+  7 days, then `cargo deny`, `cargo audit` (and `cargo audit --file
+  fuzz/Cargo.lock`), `cargo vet` and the geiger baseline as for any
+  dependency change.
 
 The same review reads the result of the last `codecov` job on `main`, since
 that job may fail without turning the run red, so a broken upload shows only
-there. A Dependabot pull request that changes a requirement in a crate's
-`Cargo.toml` can leave `fuzz/Cargo.lock` behind; CI's deps job then fails, and
-the reviewing agent updates `fuzz/Cargo.lock` on the pull request's branch, as
-for the geiger baseline.
+there. Dependabot updates `fuzz/Cargo.lock` in pull requests of its own (the
+`/fuzz` entry). A pull request for the root that changes a requirement in a
+crate's `Cargo.toml` can leave `fuzz/Cargo.lock` behind; CI's deps job then
+fails, and the reviewing agent updates `fuzz/Cargo.lock` on the pull request's
+branch, as for the geiger baseline.
 
 What stays unpinned, as residuals: the container images that pinned actions
 name by tag (scorecard-action's on ghcr.io, ClusterFuzzLite's on gcr.io); the
 toolchains that actions choose for themselves (CodeQL's Rust extractor sets its
 own, which moves only with the codeql-action pin, and ClusterFuzzLite builds in
-its own image); and GitHub's runner images. `ci/pinned-actions.sh` and
-`ci/toolchains.sh` read lines, not YAML; their headers list what they cannot
-see.
+its own image); GitHub's runner images; and `fuzz/Cargo.lock` in part:
+`fuzz/` is a workspace of its own, so cargo-deny and cargo-vet do not read its
+lockfile, though `gate.sh` and `nightly.yml` audit it with `cargo audit --file`
+and Dependabot updates it. `ci/pinned-actions.sh` and `ci/toolchains.sh` read
+lines, not YAML; their headers list what they cannot see.

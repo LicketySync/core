@@ -74,6 +74,11 @@ case_ "refused: explicit ? key in a flow mapping"     1 "$(steps "- {? uses : ac
 case_ "refused: tagged key"                           1 "$(steps "- !!str uses: actions/checkout@v1")"
 case_ "refused: anchored key"                         1 "$(steps "- &k uses: actions/checkout@v1")"
 case_ "refused: anchored value"                       1 "$(steps "- uses: &v actions/checkout@$sha # v1.2.3")"
+case_ "refused: alias as a key"                       1 "$(printf 'on: push\nenv:\n  K: &k uses\n')"$'\n'"$(steps "- *k : actions/checkout@v1")"
+case_ "refused: alias as a key in a flow mapping"     1 "$(printf 'on: push\nenv:\n  K: &k uses\n')"$'\n'"$(steps "- {*k : actions/checkout@v1}")"
+case_ "passes: an alias as a value"                   0 "$(printf 'on: push\nenv:\n  K: &k x\n  L: *k\n')"$'\n'"$(steps "- run: true")"
+case_ "passes: a cron schedule's stars"               0 $'on:\n  schedule:\n    - cron: "17 4 * * *"\njobs: {}'
+
 case_ "refused: uses-like text in a run script"       1 "$(steps "- run: echo 'uses: x'")"
 # Built by hand: case_ always writes one workflow file.
 n=$((n + 1)); mkdir -p "$tmp/$n"

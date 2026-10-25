@@ -12,10 +12,8 @@
 # Usage: ci/gitleaks-install.sh <directory>
 set -euo pipefail
 pins=$(dirname "$0")/pins.env
-if grep -nvE '^([[:space:]]*(#.*)?|[A-Z][A-Z0-9_]*=[A-Za-z0-9._:+-]+)$' "$pins" >&2; then
-  echo "$pins: the lines above are not comments or KEY=value" >&2
-  exit 1
-fi
+# Only its listed keys, with plain values, so sourcing it sets nothing else.
+"$(dirname "$0")/check-pins.sh" "$pins"
 # shellcheck source=pins.env
 . "$pins"
 version=${GITLEAKS:?$pins sets no GITLEAKS}

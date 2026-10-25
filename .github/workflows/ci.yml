@@ -3,16 +3,17 @@
 # table says run "every push"; nightly.yml, and the weekly mutants.yml and
 # scorecard.yml, hold the rest.
 #
-# Pinning rule (the owner's decisions of 2026-10-25, "CI tools - pin." and
-# "Stay current", in CLAUDE.md): every action in every workflow of core, site
-# and web, GitHub's own included, is pinned by full commit SHA, since a tag can
-# be moved, with a comment after the pin naming the release tag on that commit,
-# which Dependabot rewrites when it moves the pin (ci/pinned-actions.sh, run
-# below and by gate.sh, checks the form). Every tool and Rust toolchain a
-# workflow installs is pinned to an exact version, written once, in
-# ci/pins.env: each copy in a workflow is that key's value, and gate.sh stops
-# when one differs. A pin is the newest release that has been out for at least
-# 7 days, or a newer one at once when it fixes a critical or high
+# Pinning rule (the owner's messages of 2026-10-25, "CI tools - pin." and the
+# "Stay current" rule, quoted in the project's CLAUDE.md): every action in every
+# workflow of core, site and web, GitHub's own included, is pinned by full
+# commit SHA, since a tag can be moved, with a comment after the pin naming the
+# release tag on that commit, which Dependabot rewrites when it moves the pin
+# (ci/pinned-actions.sh, run below and by gate.sh, checks the form). Every tool
+# and Rust toolchain a workflow installs is pinned to an exact version, written
+# once, in core, in ci/pins.env (site's zola, in site's own workflow, is the one
+# exception): each copy in a workflow here is that key's value, and gate.sh
+# stops when one differs. A pin is the newest release that has been out for at
+# least 7 days, or a newer one at once when it fixes a critical or high
 # vulnerability; Dependabot waits the same 7 days (.github/dependabot.yml),
 # except for security updates, and the weekly refresh moves what it cannot see
 # (CONTRIBUTING.md, "Pins and the weekly refresh").
@@ -239,7 +240,7 @@ jobs:
       # install-action once fell back to an older one, whose formatter rejected
       # the supply-chain/imports.lock that the pinned one writes (run
       # 39160240196).
-      - run: cargo install cargo-vet --version 0.10.2 --locked
+      - run: cargo install cargo-vet --version 0.10.3 --locked
       - run: cargo deny check
       - run: cargo deny --config deny-production.toml check bans
       - run: cargo audit
@@ -390,3 +391,4 @@ jobs:
       - run: ci/test-vector-line-endings.sh
       - run: ci/test-toolchains.sh
       - run: ci/toolchains.sh
+      - run: ci/test-check-pins.sh
