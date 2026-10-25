@@ -184,7 +184,7 @@ impl FolderKey {
 }
 
 /// The link prefix: the browser client's join page, with the secret after `#`.
-pub const LINK_PREFIX: &str = "https://licketysync.dev/join#";
+pub const LINK_PREFIX: &str = "https://licketysync.app/join#";
 /// The longest link or key file accepted.
 pub const MAX_LINK_LEN: usize = 8_192;
 /// The most addresses a link carries.
@@ -197,7 +197,7 @@ pub const MAX_LINK_ITEM: usize = 256;
 pub enum LinkError {
     /// Longer than [`MAX_LINK_LEN`].
     TooLong,
-    /// Not `https://licketysync.dev/join#...`: the secret must sit after `#`.
+    /// Not `https://licketysync.app/join#...`: the secret must sit after `#`.
     Prefix,
     /// A parameter that is not `k`, `a` or `c`, or one without `=`.
     Parameter,
@@ -625,7 +625,7 @@ mod tests {
         };
         let text = link.to_text().unwrap();
         assert_eq!(text.capacity(), text.len(), "sized once");
-        assert!(text.starts_with("https://licketysync.dev/join#k=lsr1"));
+        assert!(text.starts_with("https://licketysync.app/join#k=lsr1"));
         let (before, after) = text.split_once('#').unwrap();
         assert!(!before.contains("lsr1"), "the secret is only after #");
         assert!(after.contains("&a=/ip4/192.0.2.1"));
@@ -660,7 +660,7 @@ mod tests {
         let k = w.to_key_string().to_string();
         let p = LINK_PREFIX;
         assert_eq!(
-            Link::parse(&format!("https://licketysync.dev/join?k={k}")).unwrap_err(),
+            Link::parse(&format!("{}k={k}", p.replace('#', "?"))).unwrap_err(),
             LinkError::Prefix
         );
         assert_eq!(
@@ -756,6 +756,32 @@ mod tests {
             LinkError::NotOneLine,
         ] {
             assert_ne!(e.to_string(), "");
+        }
+    }
+
+    /// TM-18: a join link is accepted only on the browser client's own
+    /// domain, licketysync.app. A link on the pre-release client domain,
+    /// `https://licketysync.dev/join#`, is refused like one on any foreign
+    /// host: nothing was released, so no such link needs honouring. So is a
+    /// link on the documentation site's licketysync.com, a separate
+    /// registrable domain on purpose. The hosts are built with `format!` so
+    /// that no string literal holds licketysync.dev, licketysync.com or
+    /// licketysync.app.example, which `ci/no-hostnames.sh` would take for
+    /// hosts the binary may contact (TM-31); these are only parsed.
+    #[test]
+    fn tm_18_links_on_other_domains_are_refused() {
+        assert_eq!(LINK_PREFIX, "https://licketysync.app/join#");
+        let [w, _, _] = tiers(5);
+        let k = w.to_key_string().to_string();
+        assert!(Link::parse(&format!("{LINK_PREFIX}k={k}")).is_ok());
+        for rest in ["dev", "com", "app.example"] {
+            let link = format!("https://licketysync.{rest}/join#k={k}");
+            assert_eq!(Link::parse(&link).unwrap_err(), LinkError::Prefix, "{link}");
+            assert_eq!(
+                Link::parse_file(&format!("{link}\n")).unwrap_err(),
+                LinkError::Prefix,
+                "{link}"
+            );
         }
     }
 

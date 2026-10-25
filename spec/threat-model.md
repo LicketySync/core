@@ -78,7 +78,7 @@ holder of one key is trusted alike.
 | The LAN | Beacons (salted folder hashes, salted announcer hash, port), multicast, every unencrypted byte | Nothing: a café network is the model | The network interface |
 | The internet | Addresses, timing, volume, QUIC and TLS handshakes | Nothing | Same |
 | The Mainline DHT | Daily discovery hashes with the addresses announcing them; signed address records (BEP 44) under a stable per-device key | Nothing; off by default, and seeing a peer grants no access | UDP to strangers; client mode by default |
-| The browser client's static host (licketysync.dev) | Serves the WebAssembly bundle; never sees invite fragments, keys or content | To serve the published bundle; a compromise serves a changed client, which a signed manifest lets the native app or a verifying extension detect | HTTPS; the service worker cache only delays what the host serves |
+| The browser client's static host (licketysync.app) | Serves the WebAssembly bundle; never sees invite fragments, keys or content | To serve the published bundle; a compromise serves a changed client, which a signed manifest lets the native app or a verifying extension detect | HTTPS; the service worker cache only delays what the host serves |
 | The browser running the client | Keys and plaintext of the folders it joins, in origin-private storage or a chosen directory | As a peer at its key's tier; the browser's origin rules keep other sites out | The browser's same-origin policy |
 | The local API and its clients | The service listens on a Unix socket or named pipe and on localhost HTTP; the CLI and web UI hold the token | The token holder is the local user | Host and Origin checks, the token, socket permissions |
 | The operating system | File system, keystore, random number generator, clock, network stack | Fully: it is out of scope (section 3.12) | — |
@@ -289,7 +289,7 @@ except through the commands its capability lists (TM-27).
 
 ### 3.8 A compromised static host for the browser client
 
-licketysync.dev serves the WebAssembly bundle. Subresource integrity cannot protect a page against
+licketysync.app serves the WebAssembly bundle. Subresource integrity cannot protect a page against
 its own host, so a host that is compromised can serve a changed client to anyone who loads it.
 
 Can: serve a bundle that exfiltrates keys or content for every user who loads it while it is
@@ -584,12 +584,14 @@ where a store serves an older snapshot as current (Tahoe-LAFS known issues; Sync
 untrusted-device spec is silent on it). Enforced by `index`.
 
 **TM-18. Invite secrets travel only after `#`, and the client origin has no landing page.** In a link
-the key string sits in the fragment, which browsers never send to a server; licketysync.dev serves
+the key string sits in the fragment, which browsers never send to a server; licketysync.app serves
 the client bundle and nothing else, so no page there logs, redirects or renders a link's secret; the
-documentation site links to the client and never carries an invite. Stops secrets in URLs leaking
-through referrers, history and landing pages (Resilio Sync 2024; BitTorrent Sync analysis 2014;
-Tahoe-LAFS). Enforced by `web` (client) and `site` (documentation), reviewed in `app` and `cli`
-wherever a link is built.
+documentation site, on the separate registrable domain licketysync.com, links to the client and
+never carries an invite; and a link that does not begin with `https://licketysync.app/join#` is
+refused (`keys.md` §6.3). Stops secrets in URLs leaking through referrers, history and landing pages
+(Resilio Sync 2024; BitTorrent Sync analysis 2014; Tahoe-LAFS). Enforced by `keys` (the link
+parser), `web` (client) and `site` (documentation), reviewed in `app` and `cli` wherever a link is
+built.
 
 **TM-19. Retired 2026-10-22.** Was "Revocation, suspension and epochs". There is no revocation,
 suspension, lift, rotation, epoch or grant (owner's decision, 2026-10-18); removing someone is
@@ -706,8 +708,12 @@ the change that adds the feature contacting it, and only for a feature that is o
 turns it on. `ci/no-hostnames.sh` checks hostnames and IPv4 addresses in one-line string literals in
 the `.rs` files under `crates/` against the list; it catches accidents, not adversaries, and states
 its limits (names under six top-level domains only; not IPv6, not hosts assembled from pieces, not
-`Cargo.toml` or included data files), which the reviewers cover. Stops telemetry, update checks and
-any contact the user did not choose. Enforced by `gate.sh` and CI.
+`Cargo.toml` or included data files), which the reviewers cover. Of the project's own domains it
+exempts only the join-link prefix: it removes the exact text `https://licketysync.app/join#` and
+checks the rest of the string, so a URL that begins with it passes, and the reviewers confirm that
+the binary, which parses and writes join links, never requests it. Any other URL on those domains
+needs its line in the list like any other host. Stops telemetry, update checks and any contact the
+user did not choose. Enforced by `gate.sh` and CI.
 
 **TM-32. Each side proves it holds a key to the folder without sending it.** The handshake's folder
 proof is one proof for every tier (ruling S-1): a payload sealed under a key derived from the

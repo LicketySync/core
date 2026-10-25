@@ -4,7 +4,12 @@
 # literal under crates/ is not listed here. Add a host only in the change that adds
 # the feature which contacts it, and only for a feature that is off until the user
 # turns it on (plan: "The binary contacts no host the user did not turn on").
-# Listing a host does not cover its subdomains. Loopback, unspecified and the
+# Listing a host does not cover its subdomains. Of the project's own domains the
+# check exempts only the join-link prefix: it removes the exact text
+# https://licketysync.app/join# and checks the rest of the string, so a URL that
+# begins with it passes, and the reviewers confirm that the binaries, which parse
+# and write join links, never request it. Any other host on those domains is
+# listed here like any other. Loopback, unspecified and the
 # documentation address ranges are exempt; anything else, including the multicast
 # and broadcast addresses LAN discovery will use, is listed here with a note on
 # when it is used. The check catches accidents, not

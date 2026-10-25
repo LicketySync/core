@@ -37,7 +37,7 @@ use crate::discovery;
 use crate::folder::{FolderKey, WriteKey};
 use crate::handshake::Role;
 use crate::ids::{DeviceId, FolderId, RecordHash, WriterDigest};
-use crate::keystring::{bech32m_encode, Link, HRP_READ, HRP_SEALED, HRP_WRITE};
+use crate::keystring::{bech32m_encode, Link, HRP_READ, HRP_SEALED, HRP_WRITE, LINK_PREFIX};
 use crate::labels::{self, derive_key, REGISTRY};
 use crate::linking::{self, LinkCode};
 use crate::records::SignedRecord;
@@ -956,7 +956,8 @@ fn vector_link() {
     assert_eq!(back.addresses, link.addresses);
     assert_eq!(*back.key.payload(), *link.key.payload());
     let in_query = format!(
-        "https://licketysync.dev/join?k={}",
+        "{}k={}",
+        LINK_PREFIX.replace('#', "?"),
         link.key.to_key_string().as_str()
     );
     check(

@@ -29,10 +29,20 @@ case_ "doc link in a comment"                      0 "# none" '/// see docs.rs/f
 case_ "stray host, empty list"                     1 "# none" 'const U: &str = "https://tracker.example.com/announce";'
 case_ "host on the list"                           0 "tracker.example.com" 'const U: &str = "https://tracker.example.com/announce";'
 case_ "subdomain of a listed host"                 1 "example.com" 'const U: &str = "https://tracker.example.com";'
-case_ "own domain"                                 0 "# none" 'const U: &str = "https://licketysync.com/app";'
-case_ "own domain beside a stray host"             1 "# none" 'const A: &str = "licketysync.com"; const B: &str = "https://evil.net";'
-case_ "subdomain of the own domain"                1 "# none" 'const U: &str = "wss://relay.licketysync.dev";'
-case_ "look-alike of the own domain"               1 "# none" 'const U: &str = "https://evil-licketysync.com";'
+case_ "join-link prefix"                           0 "# none" 'pub const P: &str = "https://licketysync.app/join#";'
+case_ "query form of the prefix"                   1 "# none" 'fn q(k: &str) -> String { format!("https://licketysync.app/join?k={k}") }'
+case_ "prefix does not clear what follows it"      1 "# none" 'const U: &str = "https://licketysync.app/join#a=evil.net";'
+case_ "prefix beside a stray host"                 1 "# none" 'const A: &str = "https://licketysync.app/join#"; const B: &str = "https://evil.net";'
+case_ "join path without # or ?"                   1 "# none" 'const U: &str = "https://licketysync.app/join";'
+case_ "other path on the client domain"            1 "# none" 'const U: &str = "https://licketysync.app/latest.json";'
+case_ "other scheme on the client domain"          1 "# none" 'const U: &str = "wss://licketysync.app/relay";'
+case_ "port on the client domain"                  1 "# none" 'const U: &str = "https://licketysync.app:8443/join#";'
+case_ "documentation domain"                       1 "# none" 'const U: &str = "https://licketysync.com/docs";'
+case_ "subdomain of the client domain"             1 "# none" 'const U: &str = "https://relay.licketysync.app/join#";'
+case_ "client domain as first labels of a host"    1 "# none" 'const U: &str = "https://licketysync.app.evil.net/join#";'
+case_ "look-alike of the client domain"            1 "# none" 'const U: &str = "https://evil-licketysync.app/join#";'
+case_ "retired client domain"                      1 "# none" 'const U: &str = "https://licketysync.dev/join#";'
+case_ "own-domain host on the list"                0 "updates.licketysync.app" 'const U: &str = "https://updates.licketysync.app/latest.json";'
 case_ "field access is not a host"                 0 "# none" 'fn f(m: &M, s: &S) -> u64 { m.dev() + s.net + s.app }'
 case_ "malformed allow-list line fails closed"     1 "[.example.com" 'pub fn f() {}'
 case_ "listed host does not clear a stray one"     1 "relay.example.com" 'const L: [&str; 2] = ["relay.example.com", "evil.net"];'
@@ -53,5 +63,25 @@ case_ "quote char literal before a host"           1 "# none" "const Q: char = '
 # a missing allow-list fails closed: built by hand because case_ always writes one
 n=$((n + 1)); dir="$tmp/$n"; mkdir -p "$dir/crates/x/src"; echo 'pub fn f() {}' > "$dir/crates/x/src/lib.rs"
 if "$lint" "$dir" > "$dir/out" 2>&1; then echo "FAIL missing allow-list: passed"; fails=$((fails + 1)); else echo "ok   missing allow-list fails closed"; fi
+# a broken stage fails the check rather than printing ok (built by hand: each
+# needs a tree case_ does not make, or a different PATH)
+fails_closed() { # fails_closed <name> <dir> [env assignment...]
+  local name=$1 dir=$2 rc=0
+  shift 2
+  env "$@" "$lint" "$dir" > "$dir/out" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ] && ! grep -q 'no-hostnames: ok' "$dir/out"; then
+    echo "ok   $name fails closed"
+  else
+    echo "FAIL $name: exit $rc"
+    cat "$dir/out"
+    fails=$((fails + 1))
+  fi
+}
+n=$((n + 1)); dir="$tmp/$n"; mkdir -p "$dir/spec"; echo '# none' > "$dir/spec/allowed-hosts.txt"
+fails_closed "missing crates/ directory" "$dir"
+n=$((n + 1)); dir="$tmp/$n"; mkdir -p "$dir/crates/x/src" "$dir/spec" "$tmp/broken-sed"
+echo '# none' > "$dir/spec/allowed-hosts.txt"; echo 'pub fn f() {}' > "$dir/crates/x/src/lib.rs"
+printf '#!/bin/sh\nexit 2\n' > "$tmp/broken-sed/sed"; chmod +x "$tmp/broken-sed/sed"
+fails_closed "a sed that fails" "$dir" PATH="$tmp/broken-sed:$PATH"
 echo "$n cases, $fails failed"
 [ "$fails" -eq 0 ]

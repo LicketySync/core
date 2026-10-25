@@ -6,6 +6,63 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The browser client's domain is licketysync.app instead of licketysync.dev (owner's decision of
+  2026-10-25: "Switch to licketysync.app for the browser client. Both licketysync.app and
+  licketysync.com have been verified for GitHub Pages."). The invite link people click starts with
+  the client's domain, and .app reads as an app where .dev reads as a developer or test site; both
+  top-level domains are HSTS-preloaded. The documentation site stays on licketysync.com, a separate
+  registrable domain (TM-18). A join link is now `https://licketysync.app/join#k=...`: `LINK_PREFIX`
+  in `crates/keys/src/keystring.rs` with its doc comments and tests; `spec/keys.md` section 6.3,
+  which now also says that a link beginning any other way is refused; and the client's host in
+  `spec/threat-model.md`'s parties table, section 3.8 and TM-18, which now names licketysync.com as
+  the documentation site's separate domain, says that a link that does not begin with
+  `https://licketysync.app/join#` is refused, and counts the link parser in `keys` among what
+  enforces it. A link starting `https://licketysync.dev/join#` is refused with `LinkError::Prefix`,
+  like one on any foreign host: nothing has been released, so no such link needs honouring and no
+  compatibility is kept. `crates/keys/tests/vectors/link.json` was regenerated with
+  `LICKETYSYNC_REGENERATE_VECTORS=1 cargo test -p licketysync-keys vector_`; it is the only vector
+  file that changed, and its three links differ from the old ones only in the host (key string,
+  addresses and certificate hash byte for byte the same). The four `link_parse` fuzz seeds carry the
+  new host: three still reach past the prefix, and `link-02`, the key string in the query, stays a
+  near miss that the prefix check refuses. `ci/no-hostnames.sh` skipped licketysync.com and
+  licketysync.dev wherever a string literal under `crates/` named them, so any URL on either, such
+  as an update check, a relay or telemetry, would have passed CI unnoticed (TM-31). It now exempts
+  only the join-link prefix: it removes the exact text `https://licketysync.app/join#` and checks
+  the rest of the string, so a URL that begins with it passes, and the reviewers confirm that the
+  binaries, which parse and write join links, never request it. The query form
+  `https://licketysync.app/join?` is not exempt: the two tests that show a key string in the query
+  refused (`link_rejections` in `keystring.rs` and `vector_link` in `test_vectors.rs`) build it as
+  `LINK_PREFIX.replace('#', "?")`, and regenerating the vectors leaves `link.json` byte for byte as
+  above. licketysync.com is no longer exempt (nothing under `crates/` names it outside comments),
+  and any other host on either own domain goes through `spec/allowed-hosts.txt` like any other;
+  TM-31 and the list's header say so in one sentence each, and the list stays empty. The check also
+  fails closed now: its pipelines ended in `|| true`, so a failing `sed`, or a `grep -r` over a
+  missing `crates/`, printed "no-hostnames: ok"; a wrapper now lets only grep's no-match status
+  through, and any other failure fails the check. `ci/test-no-hostnames.sh` has 40 cases: the prefix
+  passes; flagged are its query form, text after the prefix that names a host, a stray host beside
+  it, `/join` with neither `#` nor `?`, another path (`/latest.json`), another scheme
+  (`wss://licketysync.app/relay`), a port (`:8443`), the documentation domain, a subdomain, the
+  client domain as the first labels of another host, a look-alike and licketysync.dev; an own-domain
+  host on the list passes; and a missing `crates/` directory and a `sed` that fails (a stand-in on
+  `PATH` that exits 2) fail closed. Five of them fail against the script on `main`. The web and site
+  repositories' READMEs say licketysync.app, and that both sites are published with GitHub Pages at
+  their own domains, in their own commits. Test that fails without the change:
+  `keystring::tests::tm_18_links_on_other_domains_are_refused`, which pins `LINK_PREFIX` and checks
+  that links on licketysync.dev, licketysync.com and licketysync.app.example are refused, as a link
+  and as a key file; with the old prefix it fails on the pin, and the licketysync.dev link would
+  parse. Decisions for the plan:
+  - The browser client's domain is licketysync.app; licketysync.dev is no longer used.
+  - The link format is
+    `https://licketysync.app/join#k=<key_string>[&a=<multiaddr>]...[&c=<base64url(cert_hash)>]`.
+  - Links on licketysync.dev are refused with no compatibility window, since nothing was released.
+  - TM-18 now also requires the link parser to refuse a link that does not begin with
+    `https://licketysync.app/join#`.
+  - The CI host check exempts only the join-link prefix; any other host on the project's own domains
+    needs its line in `spec/allowed-hosts.txt`.
+
+  Reviewed 2026-10-25 by a9e5f6dcb73b9d83a (correctness), a9486e108d11818de (quality) and
+  a0a836decf4c85d57 (security); every finding fixed and confirmed clean on c1cd489. Author
+  abcfb023a8c1eeefd; the merge agent wrote this line.
 - `scorecard.yml`'s actions pinned by commit, the coordinator's ruling on the review of this series
   (TM-8): its `scorecard` job holds `id-token: write` (and `security-events: write`), so the pinning
   rule `release.yml` and `ci.yml` state covers it, and every job in the repository that holds

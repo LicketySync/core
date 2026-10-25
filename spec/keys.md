@@ -559,14 +559,16 @@ A link carries a key string after `#`, where browsers never send it, and may add
 choice, current addresses:
 
 ```
-https://licketysync.dev/join#k=<key_string>[&a=<multiaddr>]...[&c=<base64url(cert_hash)>]
+https://licketysync.app/join#k=<key_string>[&a=<multiaddr>]...[&c=<base64url(cert_hash)>]
 ```
 
-Rules: a secret appears **only after `#`**, never in the path or query, and the client never puts
-the fragment into a request, referrer or log. `a` and `c` are appended only when the sender
-chooses, or automatically for browser invites and parcel links (phase 6); `c` is base64url without
-padding. The folder is the one the key string names: its ID derives from the key, and `a` is a hint
-for dialling, never an identity. The drafts' `g=` (a grant chain) is gone with grants.
+Rules: a link begins with exactly `https://licketysync.app/join#`, on the browser client's own
+domain, and any other beginning, whatever its host, is refused (TM-18). A secret appears **only
+after `#`**, never in the path or query, and the client never puts the fragment into a request,
+referrer or log. `a` and `c` are appended only when the sender chooses, or automatically for
+browser invites and parcel links (phase 6); `c` is base64url without padding. The folder is the one
+the key string names: its ID derives from the key, and `a` is a hint for dialling, never an
+identity. The drafts' `g=` (a grant chain) is gone with grants.
 
 ### 6.4 File form
 
