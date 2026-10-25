@@ -109,7 +109,11 @@ the workflow that installs one of the seven cargo tools (`ci.yml`,
 `nightly.yml`, `mutants.yml`) installs it any other way. Dependabot cannot
 see these pins, so the agent at each weekly Dependabot review checks the
 seven for new releases; a bump is one reviewed change to the workflows that
-install the tool, `gate.sh` and `bootstrap.sh`. gitleaks is optional
+install the tool, `gate.sh` and `bootstrap.sh`. The same review checks the
+pins `gate.sh` does not: `release.yml`'s cargo-auditable 0.7.7 and
+cargo-cyclonedx 0.5.9, and its commit pin of `dtolnay/rust-toolchain`, whose
+one tag, `v1`, follows that action's master branch; a bump there is one
+reviewed change to `release.yml`. gitleaks is optional
 (`ci/gitleaks-install.sh ~/.local/bin` installs the release CI pins). CI
 adds the full-history gitleaks scan, the other operating systems, CodeQL and,
 once configured, ClusterFuzzLite.

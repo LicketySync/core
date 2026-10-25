@@ -6,6 +6,66 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The Release workflow (`.github/workflows/release.yml`) cut to least privilege, as the owner
+  approved on 2026-10-25 ("Yes to all"), superseding Dependabot pull request #4
+  (`actions/attest-build-provenance` 2 to 4), which Dependabot closes once this is on `main` (TM-8,
+  TM-29). Until now the workflow granted `contents: write`, `id-token: write` and `attestations:
+  write` to its one job, where third-party actions (`dtolnay/rust-toolchain@stable`,
+  `taiki-e/install-action@v2`), the tools they install and every dependency's build script ran, and
+  checkout left the token in `.git/config`: a compromised action or crate at release time could push
+  to `main` or store genuine-looking attestations of anything. Now the workflow's token is
+  `contents: read`. The `build` job holds only that and checks out with `persist-credentials:
+  false`; each target's binary, named after the target (`licketysync-<target>`), and the CycloneDX
+  SBOMs, under `sbom-<target>/`, go up as one artifact per target. A new `attest` job (`needs:
+  build`), which checks out nothing and runs only GitHub's own actions and a shell check, alone
+  holds `id-token: write` and `attestations: write` (with `contents: read`, as `actions/attest`'s
+  example for files grants). It downloads the artifacts with `merge-multiple: true`, which puts
+  their files straight into `dist/` whether one artifact matches or two, fails unless `dist/` holds
+  exactly one regular file (not a symlink) `licketysync-<target>` per target it names and no other
+  `licketysync-*` entry, and attests those binaries in one attestation. It runs only for a pushed
+  `v*` tag: the workflow can now also be run by hand (`workflow_dispatch`) to build both targets
+  from any branch or tag, and such a run never attests. No job has `contents: write`: nothing here
+  pushes or creates a GitHub release, so the change that publishes releases adds it to a job of its
+  own. The aarch64 leg now builds natively on `ubuntu-24.04-arm`: on `ubuntu-latest` nothing set an
+  aarch64 linker, so cargo would have linked with the host's x86_64 `cc` and failed, and no tag
+  could have been attested (the workflow has never run; there are no tags).
+  Pinning rule, stated in `release.yml`'s header and in `ci.yml`: a job that holds `id-token`,
+  `attestations` or `contents` write pins every action it uses by full commit SHA, GitHub's own
+  included; elsewhere actions stay on tags for now, and pinning every action is a pending decision.
+  The pins (each tag read with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` on 2026-10-25, an
+  annotated one dereferenced with `git/tags/<sha>`): `actions/download-artifact`
+  `9000827ccba6bdab643e8b6fd33ac0654aef8333` (`v8.0.2`, the latest release, which `v8` also points
+  to), `actions/attest-build-provenance` `4d101475d8b20a2381f78447822ac1eab6504dd8` (`v4.2.2`, the
+  latest release; `v4` is an annotated tag that dereferences to it), and in the build job
+  `dtolnay/rust-toolchain` `683b588c487a69d01f6c6ddf40f036ff682cc2c8` (its `v1` tag, master's head
+  on 2026-10-25; the `stable` branch used until now is that commit plus a default of `toolchain:
+  stable`, which the step now passes) and `taiki-e/install-action`
+  `1e29709c0ec63babbe8f266397a465f29a825f91` (`v2.87.31`, the latest release, which `v2` also points
+  to). The tools it installs are pinned to cargo-auditable 0.7.7 and cargo-cyclonedx 0.5.9, each the
+  newest release on crates.io and the `latest` in install-action's manifest at that commit, with
+  aarch64 Linux builds, and whose SHA-256 for the x86_64 musl archive equals the `.sha256` asset of
+  the upstream GitHub release; `fallback: none`, as in `ci.yml`, so a version missing from the
+  manifest fails instead of going to cargo-binstall. Dependabot cannot see the two tool pins, so the
+  weekly Dependabot review checks them and the rust-toolchain pin (`CONTRIBUTING.md`). The Rust
+  toolchain itself still floats on stable, as `rust-toolchain.toml` says; pinning it to a version is
+  a follow-up.
+  Verifying a release, stated in `release.yml`'s header: `gh attestation verify <file> --repo
+  LicketySync/core --signer-workflow LicketySync/core/.github/workflows/release.yml --source-ref
+  refs/tags/vX.Y.Z --deny-self-hosted-runners`, or with cosign the exact `--certificate-identity
+  https://github.com/LicketySync/core/.github/workflows/release.yml@refs/tags/vX.Y.Z` and
+  `--certificate-oidc-issuer https://token.actions.githubusercontent.com`. Other jobs here mint OIDC
+  tokens too (`ci.yml`'s `codecov` job, `scorecard.yml`), so any trust placed in this repository's
+  OIDC identity, now or later, is scoped to a `job_workflow_ref` of `release.yml` at a `v*` tag.
+  What the split does not change: an attestation says this workflow built these binaries from this
+  tag on GitHub's runners, and a compromised build step still gets a genuine one for any bytes it
+  hands on; the split takes away its power to attest anything of its choosing at any time and to
+  write the repository's contents. The workflow was not run (the attest job needs a `v*` tag) and
+  actionlint is not installed: it was checked by hand against each action's inputs at the pinned
+  commit and parsed as YAML, and its two shell steps were run on simulated trees (both binaries,
+  one, a symlink, an extra binary, a directory, none; the SBOM step with and without SBOMs).
+  - Reviewed 2026-10-25 by a83b13cf45293e98a (correctness), a5d7b60f381235d5a (quality) and
+    a020d1ce8061c98b4 (security); every finding fixed and confirmed clean on f4acfd1. Author
+    ae9a81200e90b5ed4; the merge agent wrote this line.
 - `ctutils`, `cmov` and `constant_time_eq` confined beneath their wrappers in `deny.toml`, as the
   other primitives beneath the approved crates are (`suites.md` section 3.1, TM-5): `ctutils` to
   `universal-hash`, whose Poly1305 tag comparison is its one use here; `cmov` to `ctutils`; and

@@ -1,43 +1,157 @@
 # Releases: built in CI, auditable, with an SBOM and build provenance, signed.
-# Linux and the Chrome client are published first; other targets compile unsigned
-# until the signing accounts exist (plan: Packaging).
+# Linux and the Chrome client will be published first; other targets will
+# compile unsigned until the signing accounts exist (plan: Packaging).
+#
+# Least privilege (TM-29). The build job runs third-party actions, the tools
+# they install and every dependency's build script, so its token can read the
+# repository and nothing else, and checkout keeps it out of .git/config. The
+# attest job runs only GitHub's own actions and a shell check, on the binaries
+# the build job hands it, and none of the repository's code; only it, in this
+# workflow, can mint the OIDC token that signs a provenance attestation and
+# store the attestation. Nothing here pushes or creates a GitHub release (the
+# binaries and SBOMs stay workflow artifacts), so no job can write the
+# repository's contents; the change that publishes releases adds that
+# permission to a job of its own. Until 2026-10-25 the one job held contents,
+# id-token and attestations write for every step.
+#
+# Pinning rule: a job that holds id-token, attestations or contents write pins
+# every action it uses by commit, GitHub's own included, since a tag can be
+# moved (ci.yml states the same rule). Elsewhere actions stay on tags for now;
+# pinning every action is a pending decision. The build job's two third-party
+# actions are pinned by commit as well.
+#
+# Verifying a release: an attestation is trusted only as this workflow's, run
+# for a v* tag on GitHub's own runners.
+#   gh attestation verify <file> --repo LicketySync/core \
+#     --signer-workflow LicketySync/core/.github/workflows/release.yml \
+#     --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+# With cosign: the exact --certificate-identity
+#   https://github.com/LicketySync/core/.github/workflows/release.yml@refs/tags/vX.Y.Z
+# and --certificate-oidc-issuer https://token.actions.githubusercontent.com.
+# Other jobs in this repository mint OIDC tokens too (ci.yml's codecov job,
+# scorecard.yml), so any trust placed in its OIDC identity, now or later, is
+# scoped to a job_workflow_ref of this file at a v* tag.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  # A run by hand builds both targets from any branch or tag, to try the
+  # workflow before the first tag; it never attests (see the attest job).
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   build:
+    name: build (${{ matrix.target }})
     strategy:
       matrix:
+        # Each target builds on a runner of its own architecture, so neither
+        # needs a cross linker or C cross-compiler (ubuntu-latest has neither
+        # for aarch64, where this leg could not have linked). The attest job
+        # names the same targets; a target is added in both places.
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
         with:
+          persist-credentials: false
+      # The comment after a commit pin names the release the commit is, for
+      # the reader and for Dependabot. v1 is rust-toolchain's master's head on
+      # 2026-10-25; its `stable` branch is that commit with `toolchain`
+      # defaulting to stable, so the toolchain is named here instead. The
+      # toolchain itself floats: a tag builds with whatever stable is that day,
+      # as rust-toolchain.toml's channel says; pinning it to a version is a
+      # follow-up.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: taiki-e/install-action@v2
+      # Exact versions, so that no new release changes what a tag builds; the
+      # weekly Dependabot review checks them for new releases (CONTRIBUTING.md).
+      # install-action checks each download's SHA-256 against its manifest, and
+      # `fallback: none` makes a version missing from it fail here instead of
+      # going to cargo-binstall (see the note in ci.yml's deps job).
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
-          tool: cargo-auditable,cargo-cyclonedx
-      - run: cargo auditable build --release --locked --target ${{ matrix.target }} --package licketysync-cli
+          tool: cargo-auditable@0.7.7,cargo-cyclonedx@0.5.9
+          fallback: none
+      - run: cargo auditable build --release --locked --target "$TARGET" --package licketysync-cli
       - run: cargo cyclonedx --format json --all
-      - uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: target/${{ matrix.target }}/release/licketysync
+      # The artifact holds the binary, named after its target, and the SBOMs
+      # (one beside each workspace crate's Cargo.toml) under sbom-<target>/, so
+      # that the attest job can merge the artifacts with no name in common.
+      - name: Gather the binary and the SBOMs
+        run: |
+          mkdir -p "dist/sbom-$TARGET"
+          cp "target/$TARGET/release/licketysync" "dist/licketysync-$TARGET"
+          mapfile -t sboms < <(find crates -name '*.cdx.json')
+          if [ "${#sboms[@]}" -eq 0 ]; then
+            echo "cargo cyclonedx wrote no SBOM under crates/" >&2
+            exit 1
+          fi
+          cp "${sboms[@]}" "dist/sbom-$TARGET/"
       - uses: actions/upload-artifact@v7
         with:
           name: licketysync-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/licketysync
-            **/*.cdx.json
+          path: dist/
+          if-no-files-found: error
+
+  # The attestation says that this workflow built these binaries from this tag
+  # on GitHub's runners. It cannot vouch for what the build job ran: a
+  # compromised build step still gets a genuine attestation for any bytes it
+  # hands on. merge-multiple puts both legs' files in one directory, so a
+  # compromised leg could replace the other leg's binary; that is inside the
+  # residual above, since both legs build the same code. What the split takes
+  # away is a third-party step's power to attest anything of its choosing at
+  # any time, or to write the repository's contents. Only a pushed v* tag
+  # attests, never a run by hand. Every action here is pinned by commit (the
+  # rule above). contents: read is as actions/attest's own example for files
+  # grants it; the job checks out nothing.
+  attest:
+    name: attest build provenance
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      # The build job's matrix targets.
+      TARGETS: x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+    steps:
+      # merge-multiple puts every artifact's files straight into dist/, whether
+      # one artifact matches or several: dist/licketysync-<target> and
+      # dist/sbom-<target>/.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: licketysync-*
+          path: dist
+          merge-multiple: true
+      # Exactly one binary per target, each a regular file (not a symlink), and
+      # no other licketysync-* entry, or nothing is attested.
+      - name: Check that dist holds exactly the expected binaries
+        run: |
+          want=$(for t in $TARGETS; do echo "f licketysync-$t"; done | sort)
+          have=$(find dist -mindepth 1 -maxdepth 1 -name 'licketysync-*' -printf '%y %f\n' | sort)
+          if [ "$have" != "$want" ]; then
+            echo "expected exactly these regular files in dist/:" >&2
+            printf '%s\n' "$want" >&2
+            echo "found:" >&2
+            printf '%s\n' "${have:-(nothing)}" >&2
+            exit 1
+          fi
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/licketysync-*
