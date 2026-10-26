@@ -226,7 +226,7 @@ impl Record {
     /// [`Cause::Forged`]: `Close(VERIFICATION_FAILED)`.
     pub fn verify(&self, folder: &FolderVerifier) -> Result<(), Cause> {
         folder
-            .verify_index_record(&self.signed)
+            .verify_record(&self.signed)
             .map_err(|_| Cause::Forged)
     }
 
@@ -739,7 +739,9 @@ impl Draft {
             sealed,
         }
         .encode_to_vec();
-        let signed = key.sign_index_record(body);
+        let signed = key
+            .sign_index_record(body)
+            .map_err(|e| DraftError::Refused(WireError::Record(e)))?;
         let record = Record::parse(signed, folder).map_err(DraftError::Refused)?;
         record.open(key.data_key()).map_err(DraftError::Fault)?;
         Ok(record.into_signed())

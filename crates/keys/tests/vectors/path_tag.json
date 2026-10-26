@@ -1,0 +1,71 @@
+{
+  "path_tag_key": "148f6c481e1886d379a55c5c579fbb05bb9ec3c9eb03e8619d9aa1992e2f3c36",
+  "tags": [
+    {
+      "path": "docs",
+      "path_tag": "e6d6d06c9d2ea23435126ee0a5883bf23e99f775a89190759dc9adab40840489",
+      "path_utf8": "646f6373"
+    },
+    {
+      "path": "docs/notes",
+      "path_tag": "c90e0131f147b093fc34ec2be16bef225cc4b4aa181c60c6e79fa97b7dc99156",
+      "path_utf8": "646f63732f6e6f746573"
+    },
+    {
+      "path": "docs/notes/a.txt",
+      "path_tag": "78b6a0ca5dc567143b02724a5929991388b4195f2341bd6ece76f30d5e2a8ef4",
+      "path_utf8": "646f63732f6e6f7465732f612e747874"
+    },
+    {
+      "path": "Docs",
+      "path_tag": "2aa9cc6a3786753b72aae148a8bf5747fccec49f43327961f301840c24a06a1e",
+      "path_utf8": "446f6373"
+    },
+    {
+      "path": "docs/notés",
+      "path_tag": "4626c524b58f820684f3e6d5682db24d1e460497d328755828beeff35447d68a",
+      "path_utf8": "646f63732f6e6f74c3a973"
+    },
+    {
+      "path": "docs/notés",
+      "path_tag": "58f9e526487dffa4eb87d28313aec051e51d14b18a6858722760741a8e317b04",
+      "path_utf8": "646f63732f6e6f7465cc8173"
+    }
+  ],
+  "under_another_folder": {
+    "tags": [
+      {
+        "path": "docs",
+        "path_tag": "b3752ec49de1b9042664594ed02e893e6a031a574c9a6ab28320a023a3b76f89",
+        "path_utf8": "646f6373"
+      },
+      {
+        "path": "docs/notes",
+        "path_tag": "0d7b94384401ca5f0ddfdbcbf363abe94979e2f45c0cc5a21063768bb5b30329",
+        "path_utf8": "646f63732f6e6f746573"
+      },
+      {
+        "path": "docs/notes/a.txt",
+        "path_tag": "f6b6a87c03b225e542794e8b50bc47d4c5d5783889b262b5018d67709126a0b8",
+        "path_utf8": "646f63732f6e6f7465732f612e747874"
+      },
+      {
+        "path": "Docs",
+        "path_tag": "31a44bf40be6a0c2e8ed62ec720b7c6c1d2141bfdc8cefe8ac055449fbb5e6f2",
+        "path_utf8": "446f6373"
+      },
+      {
+        "path": "docs/notés",
+        "path_tag": "12780e8efe12c47dfbf14a76f863e2c72b37cee1e23be5a2748c151fea7f668d",
+        "path_utf8": "646f63732f6e6f74c3a973"
+      },
+      {
+        "path": "docs/notés",
+        "path_tag": "c7b560c13bdeac4966ec130ff0456d789f983e6d21f9d0be467aa20f7313b164",
+        "path_utf8": "646f63732f6e6f7465cc8173"
+      }
+    ],
+    "write_secret": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+  },
+  "write_secret": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
+}

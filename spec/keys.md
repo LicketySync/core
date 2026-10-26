@@ -21,7 +21,8 @@ issued, per-person and child keys, key IDs, grants and their chains, `may_share`
 renewal, revocation, suspension, lift, rotation, epochs of data keys and their ladder, wrapping a
 data key to a public key (X-Wing through HPKE), the key-record quotas and refusal memory, per-key
 device admission, fork evidence, hybrid ML-DSA signatures, the exported root file, the Folder record
-(ruling S-2), separate handshake proofs per tier (ruling S-1) and version vectors (ruling R-K6). The
+(ruling S-2), separate handshake proofs per tier (ruling S-1) and the drafts' version vectors
+(ruling R-K6; version vectors of another form came back on 2026-10-25, `protocol.md` §4.4). The
 drafts never shipped, so their field numbers, record types and labels carry no compatibility duty:
 where this file still marks one `reserved` or "never used", that is only a reading aid, and
 `suites.md`'s rule that a label is never reused applies from the first release on.
@@ -60,8 +61,10 @@ where this file still marks one `reserved` or "never used", that is only a readi
   it as `uint32`, and a value outside that range is malformed. A folder's suite is the suite of its
   keys, fixed when the folder is made (§1.1); nothing moves a folder to another suite (§7).
 - A **tier** is one byte: `1` write, `2` read, `3` sealed. Lower numbers can do more.
-- No key and no record in this file expires, and no verifier compares any field in it with a
-  clock: every time field is informational.
+- No key expires, and nothing in this file compares a key or a signature with a clock. A record's
+  counter, inside its seal, is compared with clocks in two places, the clock rule and the warning of
+  a fast clock, and deletions are forgotten by the folder's own time, the greatest counter held
+  (`protocol.md` §3.2, §4.4); every other time field is informational.
 - Randomness (secrets, nonces, salts) reaches the keys crate from the caller through **the
   runtime's randomness trait**: backed by the operating system's generator in production, by a
   seeded generator in the simulator so that a run replays exactly (`suites.md` §4.3).
@@ -76,9 +79,9 @@ Sizes the keys crate checks on every parse:
 | --- | --- |
 | Ed25519 public key / signature / seed | 32 / 64 / 32 |
 | Write secret, data key, access key and every key derived from them | 32 |
-| Folder ID, device ID, record hash, ciphertext hash | 32 |
+| Folder ID, device ID, record hash, ciphertext hash, path tag | 32 |
 | Device public key as Hello carries it, `be16(suite) \|\| ed25519_pk` | 34 |
-| Sealed part of an index record (§3.4) | 40 to 1 572 864 |
+| Sealed part of an index record / of a cleanup (§3.4) | 40 + 2^k, 2^8 ≤ 2^k ≤ 2^21 / 40 + 256, 512 or 1 024 |
 | Key string payload: write / read / sealed (§6.1) | 34 / 66 / 66 |
 | Key string: write / read / sealed (§6.1) | 65 / 116 / 116 characters |
 | Write key as words (§6.2) | 24 words |
@@ -101,11 +104,12 @@ Sign(sk, label, body)        = Ed25519.Sign(sk, M)                          # 64
 Verify(pk, label, body, sig) = len(sig) == 64 AND Ed25519.VerifyStrict(pk, M, sig)
 ```
 
-There are two labels: `sig/index` for index records (§5) and `sig/device-proof` for the DeviceProof
-(`protocol.md` §3.4). Ed25519 signing is deterministic: the same key and body always give the same
-signature, so test vectors reproduce through the production signing path and need no test-only
-signing mode. Verification is always `verify_strict`, which rejects small-order and non-canonical
-components, and every public key is checked as section 0.3 says before it is used.
+There are three labels: `sig/index` for index records and `sig/cleanup` for cleanup records (§5),
+and `sig/device-proof` for the DeviceProof (`protocol.md` §3.4). Ed25519 signing is deterministic:
+the same key and body always give the same signature, so test vectors reproduce through the
+production signing path and need no test-only signing mode. Verification is always `verify_strict`,
+which rejects small-order and non-canonical components, and every public key is checked as section
+0.3 says before it is used.
 
 Deviation from the drafts (ruling R-K1, after owner answer 1 of 2026-10-22, "Ed25519 alone"): there
 is no ML-DSA and no hybrid signature anywhere, neither on records nor in the handshake. A later
@@ -122,8 +126,8 @@ device_id = H("licketysync/v1/hash/id/device", be16(suite) || device_pk)    # 32
 `folder_vk` is the folder's Ed25519 verification key (§1.2) and `device_pk` a device's Ed25519
 public key (§8.1). The two kinds use two labels, so that a device key presented as a folder key, or
 the reverse, can never produce a matching ID. Hashes of other public data (records, chunks,
-discovery, the transcript, cursor digests) use `H` under their own `licketysync/v1/hash/<purpose>`
-labels.
+discovery, the transcript, path tags, set digests) use `H` under their own
+`licketysync/v1/hash/<purpose>` labels.
 
 **Canonical keys.** A verification key or device public key received from anywhere (a key string,
 §6.1; a Hello, `protocol.md` §3.2) must be the canonical encoding of an Ed25519 point: decoding it
@@ -162,20 +166,23 @@ ws: the write secret, 32 random bytes
       ├── chunk key       ck  = derive_key("licketysync/v1/data/chunk-key", dk)         chunk ciphertext, §3.2
       ├── chunk nonce key nk  = derive_key("licketysync/v1/data/chunk-nonce-key", dk)   convergent chunk nonces, §3.2
       ├── chunk hash key  hk  = derive_key("licketysync/v1/data/chunk-hash-key", dk)    plaintext chunk hashes, §3.2
-      └── record key      rk  = derive_key("licketysync/v1/data/record-key", dk)        sealed metadata, §3.4
+      ├── chunk gear key  gk  = derive_key("licketysync/v1/data/chunk-gear-key", dk)    chunk boundaries, §3.2
+      ├── record key      rk  = derive_key("licketysync/v1/data/record-key", dk)        sealed metadata, §3.4
+      └── path-tag key    tk  = derive_key("licketysync/v1/data/path-tag-key", dk)      path tags, §3.5
 ```
 
 Every derived key is 32 bytes and nothing below a node yields the node: `ak` does not give `dk`,
-`dk` does not give `ws` or `folder_sk`, and `folder_vk` gives nothing secret. Names and folder
-structure have no key of their own: paths exist only inside an index record's sealed metadata, so
-`rk` is the key for names as well as for the rest of the metadata (decision). The keys last as long
-as the folder. There are no epochs: a folder that needs new keys is a new folder (§7).
+`dk` does not give `ws` or `folder_sk`, and `folder_vk` gives nothing secret. Paths exist only
+inside an index record's sealed metadata, under `rk` with the rest of the metadata (decision), and,
+as keyed path tags that name no path to anyone without `tk`, in the record's clear fields (§3.5,
+added 2026-10-25). The keys last as long as the folder. There are no epochs: a folder that needs new
+keys is a new folder (§7).
 
 ### 1.3 The three keys
 
 | Tier | Byte | The key holds | Its holder can | Its holder cannot |
 | --- | --- | --- | --- | --- |
-| Write | 1 | `ws` | Derive every key in §1.2; sign index records; verify, decrypt, change and delete anything; give out any tier | — |
+| Write | 1 | `ws` | Derive every key in §1.2; sign index records and cleanups; verify, decrypt, change and delete anything; give out any tier | — |
 | Read | 2 | `folder_vk`, `dk` | Verify every record; decrypt contents, names and structure; derive `ak` and every key under `dk`; give out read or sealed | Sign: every peer rejects a change it makes, and its own edits are never sent (what the engine shows for them is phase 1's design) |
 | Sealed | 3 | `folder_vk`, `ak` | Verify every record and every chunk against the hashes the signed records name; store, serve and relay ciphertext; give out sealed | Decrypt anything, test whether the folder holds a known file (TM-14), sign |
 
@@ -268,12 +275,38 @@ Encrypted connections: "Second layer"). The data key is the folder's for its who
 | Chunk nonce key | `nk = derive_key("licketysync/v1/data/chunk-nonce-key", dk)` | Keyed BLAKE3 for convergent chunk nonces (§3.2) |
 | Chunk hash key | `hk = derive_key("licketysync/v1/data/chunk-hash-key", dk)` | Keyed BLAKE3 over plaintext chunks (§3.2) |
 | Record key | `rk = derive_key("licketysync/v1/data/record-key", dk)` | XChaCha key for the sealed metadata of index records (§3.4) |
+| Chunk gear key | `gk = derive_key("licketysync/v1/data/chunk-gear-key", dk)` | Keyed BLAKE3 for the chunker's gear table, which places chunk boundaries (§3.2) |
+| Path-tag key | `tk = derive_key("licketysync/v1/data/path-tag-key", dk)` | Keyed BLAKE3 for path tags, the file IDs (§3.5) |
 
 ### 3.2 Chunk encryption
 
-The engine splits a file with FastCDC; this section fixes what one chunk becomes. The protocol
-constant `MAX_CHUNK_PLAINTEXT` is 4 MiB (4 194 304 bytes) of raw content; the engine's FastCDC
-maximum must not exceed it.
+The engine splits a file into chunks, and this section fixes where a chunk ends and what it becomes.
+The protocol constant `MAX_CHUNK_PLAINTEXT` is 4 MiB (4 194 304 bytes) of raw content; the engine's
+largest chunk must not exceed it.
+
+**Chunk boundaries.** From phase 1 the engine cuts files with FastCDC (Xia et al. 2016), whose gear
+table, the 256 64-bit values that decide where boundaries fall, is derived from the data key, so
+that only key holders can tell where a file's chunks begin and end:
+
+```
+gear[i] = be64(BLAKE3_keyed(gk, u8(i))[0..8])     # i = 0 ..= 255; the left-shifted table FastCDC also uses is gear[i] << 1
+```
+
+Every key holder of the folder computes the same table, so identical files cut into identical chunks
+and deduplicate. With FastCDC's published table, a sealed peer could cut a file it already has, pad
+the chunk lengths and compare them with the `stored_len` list of a record, which for a file of
+several chunks confirms that the file is in the folder (TM-14); with the keyed table it cannot
+compute the boundaries. What still shows, keyed or not (`threat-model.md` §5): each version's total
+size to about 3 % and its number of chunks. And keying the gear table is no full defence: Alexeev,
+Percival and Zhang (2025, IACR ePrint 2025/532) and Truong, Merz, Scarlata, Günther and Paterson
+(2025, IACR ePrint 2025/558) recover the keys of such chunkers from the chunk lengths of files the
+attacker knows or chose, after which known files can again be confirmed by their chunk lengths, in
+this folder, whose data key is the folder's for its whole life. The second paper also gives a keyed
+chunker with a security proof; which chunker phase 1 adopts, this one or that, is phase 1's
+question; the keyed gear table is the least it takes (the coordinator's ruling of 2026-10-25, for
+the owner's review). Phase 0's engine cuts fixed-size chunks (1 MiB by default, a recorded
+deviation; FastCDC is phase 1), whose lengths depend only on a file's size, so there a sealed peer
+learns each version's size, to Padmé's precision, and nothing about where content lies.
 
 ```
 raw            : the chunk's bytes (1 ..= MAX_CHUNK_PLAINTEXT)
@@ -320,11 +353,11 @@ cipher_hash    = H("licketysync/v1/hash/chunk", stored)          # 32 bytes; wha
 
 ### 3.3 Padmé padding
 
-Padmé (Nikitin et al., PURBs 2019) rounds a length up to a multiple of `2^(E - S)`, where
-`E = floor(log2 L)` and `S` is the number of bits in `E`: the low `E - S` bits of the padded length
-are zero and only about `log2(log2 L) + 1` bits of it carry information. Overhead is at most 12 %,
-3 % on average. It is the one padding scheme in suite 1, written in the keys crate (`suites.md`
-§2.3).
+Padmé (Nikitin et al., PURBs 2019) rounds a length up to a multiple of `2^(E - S)`, where `E =
+floor(log2 L)` and `S` is the number of bits in `E`: the low `E - S` bits of the padded length are
+zero and only about `log2(log2 L) + 1` bits of it carry information. Overhead is at most 12 %, 3 %
+on average. It pads chunks; sealed metadata takes a power of two instead (§3.4). Both are written in
+the keys crate (`suites.md` §2.3).
 
 ```
 padme(L):
@@ -339,31 +372,84 @@ padme(L):
 Examples the crate's vectors must reproduce: `padme(5) = 5`, `padme(9) = 10`, `padme(100) = 104`,
 `padme(1000) = 1024`, `padme(65 537) = 67 584`, `padme(1 048 577) = 1 081 344`.
 
+**Chunk sizes, the size a sealed peer sees.** A chunk's padded size is its `stored_len`, `padme(L) +
+40` where `L` is the chunk's header and payload (§3.2), and it is the one size in a record that a
+sealed peer reads (`protocol.md` §4.4). What the scheme costs and leaves visible, for the sizes
+FastCDC produces:
+
+| Chunk of about | Padded to a multiple of | Distinct padded sizes per doubling | Most bytes added |
+| --- | --- | --- | --- |
+| 16 KiB | 512 bytes | 32 | 3 % |
+| 64 KiB | 2 KiB | 32 | 3 % |
+| 1 MiB | 32 KiB | 32 | 3 % |
+| 4 MiB | 128 KiB | 32 | 3 % |
+
+So a sealed peer learns each chunk's size to within about 3 %, and the total size of a file version
+to the same precision; the cost is at most 12 % for the smallest lengths and 3 % on average, plus 40
+bytes per chunk for the nonce and tag. A coarser scheme (powers of two, at up to 100 % and 33 % on
+average) would hide more and cost more; suite 1 keeps Padmé (`suites.md` §2.3).
+
 ### 3.4 Sealed metadata
 
-Everything that would name a file (path, kind, true size, times, mode, plaintext chunk hashes) sits
-in the sealed part of its index record (`protocol.md` §4.4, `SealedMeta`), which only read and write
-holders open.
+Everything that would name a file or date it (path, kind, true size, times, mode, plaintext chunk
+hashes, and, since 2026-10-25, the writer's device ID and counter, the version vector and the
+deletion marks) sits in the sealed part of its index record (`protocol.md` §4.4, `SealedMeta`),
+which only read and write holders open; a cleanup's issuer and counter sit in its own sealed part
+(`CleanupMeta`).
 
 ```
-meta   = canonical SealedMeta bytes (§5.2)
-plain  = be32(len(meta)) || meta || zeros(padme(len(meta) + 4) - len(meta) - 4)    # Padmé-padded, §3.3
-aad    = folder_id || device_id || be64(seq)              # 72 bytes, rebuilt from the record's clear fields
+meta   = canonical SealedMeta (or CleanupMeta) bytes (§5.2)
+bucket = the least power of two that is at least max(256, len(meta) + 4)          # 256, 512, 1 024, …, 2^21
+plain  = be32(len(meta)) || meta || zeros(bucket - len(meta) - 4)
+aad    = folder_id || path_tag            # 64 bytes for an index record, rebuilt from its clear fields
+       | folder_id                        # 32 bytes for a cleanup
 nonce  = 24 bytes through the runtime's randomness trait
-sealed = nonce || XChaCha(rk, nonce, aad, plain)          # the record's field 13
+sealed = nonce || XChaCha(rk, nonce, aad, plain)          # field 13 of an index record, 5 of a cleanup
 ```
 
-`len(sealed)` is at least 40 (the nonce and the tag) and at most `MAX_SEALED_BYTES`, 1 572 864
-(1.5 MiB); outside that range the record is malformed. The largest metadata `protocol.md` §4.4
-allows (a 4 096-byte path and 32 768 plaintext hashes) seals to 1 146 920 bytes, so an honest
-writer never reaches the cap; a writer whose sealed part would pass it does not write the record and
-raises an issue. A reader opens `sealed` under the aad it rebuilds from the record's own
-`folder_id`, `device_id` and `seq`, reads the length, requires `4 + len(meta) ≤ len(plain)` and
-every padding byte to be zero, and parses `SealedMeta`. A sealed part therefore cannot be moved to a
-record with another folder, device ID or sequence number. Two records of one device at one sequence
-number (`protocol.md` §4.4, concurrent versions) share an aad; their random nonces keep their seals
-distinct, and moving a seal between them would break the signature over the body that holds it.
-Failures after the length check are writer faults (`protocol.md` §4.4 step 6).
+`len(sealed)` is 40 (the nonce and the tag) plus the bucket: for an index record a power of two from
+256 to 2^21, so at most `MAX_SEALED_BYTES`, 2 097 192; for a cleanup 256, 512 or 1 024; any other
+length is malformed. The largest metadata `protocol.md` §4.4 allows (a 4 096-byte path, 32 768
+plaintext hashes and a full vector) is about 1 120 000 bytes and fills the 2^21 bucket, so an honest
+writer never passes the cap; a writer whose sealed part would pass it does not write the record and
+raises an issue. A reader opens `sealed` under the aad it rebuilds, reads the length, requires `4 +
+len(meta) ≤ len(plain)`, the bucket to be exactly the least power of two that holds the metadata (at
+least 256 bytes), and every padding byte to be zero, and parses the metadata; a sealed part padded
+further than that is a writer fault on every release, so that implementations never split over it. A
+sealed part therefore cannot be moved to a record of another folder or file ID, nor between an index
+record and a cleanup, whose aads differ in length; the signature over the body that holds it binds
+it to everything else, and its random nonce keeps two seals distinct even for one path. Failures
+after the length check, a path whose tag (§3.5) is not the record's `path_tag` and a malformed dot
+or vector among them, are writer faults (`protocol.md` §4.4 step 7).
+
+**Why powers of two, and what they cost** (the coordinator's ruling of 2026-10-25, for the owner's
+review, so that sealed peers see almost nothing). Padmé, which pads chunks, would show a sealed
+part's length to within 12 %, and with it how long the path is and how many entries the vector has,
+that is roughly how many devices wrote the file. Rounded up to a power of two of at least 256 bytes,
+the length shows only its class: for a path of about 90 bytes, a one-chunk record whose dot and
+vector name one or two devices fills 256 bytes, three to seven 512, eight to eighteen 1 024, and
+nineteen or more, up to a full vector, 2 048; a shorter path moves each boundary up by about one
+device for every 46 bytes, and every 34 bytes of plaintext hashes (one per chunk) pushes it the same
+way, so the class cannot be told apart into those causes. The cost is up to half of the sealed part,
+about a quarter on average, against Padmé's 3 %: a typical record grows from about 470 to about 520
+bytes (`protocol.md` §2, `threat-model.md` §5).
+
+### 3.5 Path tags (file IDs)
+
+An index record names its path in the clear only by a **path tag**, its file ID, so that every peer,
+sealed ones included, can group the versions of one path, and only read and write holders can tell
+which path a tag is (`protocol.md` §4.4, "File IDs"):
+
+```
+path_tag = BLAKE3_keyed(tk, path)          # 32 bytes; path: the UTF-8 bytes exactly as SealedMeta.path holds them
+```
+
+The hash is keyed, so nobody without `tk` can compute a tag from a guessed path (TM-14), and tags of
+paths in one directory are unrelated, so they show nothing about the tree. A read or write holder
+finds which records lie beneath a directory from their paths. The keys crate computes tags for the
+index and protocol crates; nobody else calls BLAKE3 for them (`suites.md` §2.4). (An earlier draft
+of 2026-10-25 built tags as chains of hashes that sealed peers could check; signed cleanups made
+that unnecessary.)
 
 ## 4. Handshake proofs
 
@@ -401,18 +487,18 @@ proof_key   = BLAKE3_keyed(payload_key, folder_id || th)                  # 32 b
 
 ## 5. Signed records and the canonical encoding
 
-There is one kind of signed record: the index record (`protocol.md` §4.4). It is public within the
-folder: every peer, sealed ones included, stores, verifies and forwards it. Everything signed is a
-Protocol Buffers body that the signer serialises canonically and that every verifier treats as
-opaque bytes: hashed, signed and forwarded exactly as received, never re-encoded. There are no key
-records: no key ever travels inside a folder (TM-9).
+There are two kinds of signed record: the index record and the cleanup (`protocol.md` §4.4). Both
+are public within the folder: every peer, sealed ones included, stores, verifies and forwards it.
+Everything signed is a Protocol Buffers body that the signer serialises canonically and that every
+verifier treats as opaque bytes: hashed, signed and forwarded exactly as received, never re-encoded.
+There are no key records: no key ever travels inside a folder (TM-9).
 
 ### 5.1 The signed envelope
 
 ```proto
 message SignedRecord {
-  bytes body      = 1;   // canonical bytes of an index record (protocol.md §4.4)
-  bytes signature = 2;   // Sign(folder_sk, "licketysync/v1/sig/index", body); 64 bytes
+  bytes body      = 1;   // canonical bytes of an index record or a cleanup (protocol.md §4.4)
+  bytes signature = 2;   // Sign(folder_sk, label, body), the label of the body's record type; 64 bytes
   reserved 3;            // was key_signature, a grant's proof of possession
 }
 ```
@@ -427,12 +513,13 @@ same three fields, so a parser can read the suite and type before anything else:
 ```proto
 // Common prefix of every body: field numbers 1 to 3 mean this in every record type.
 uint32 suite       = 1;   // the folder's suite; any other value is malformed
-uint32 record_type = 2;   // 16 Index; every other value is malformed (1 to 8 were the drafts' Folder and key records)
+uint32 record_type = 2;   // 16 Index, 17 Cleanup; every other value is malformed (1 to 8 were the drafts' Folder and key records)
 bytes  folder_id   = 3;   // 32 bytes
 ```
 
-The label is `licketysync/v1/sig/index` for record type 16. A record type a later release adds gets
-its own label, so a body can never be presented as another type. Any write holder signs; every
+The label is `licketysync/v1/sig/index` for record type 16 and `licketysync/v1/sig/cleanup` for
+record type 17. A record type a later release adds gets its own label, so a body can never be
+presented as another type. Any write holder signs; every
 verifier uses the folder's `folder_vk`.
 
 ### 5.2 Canonical encoding
@@ -446,8 +533,10 @@ deterministic and every variable-length item is length-prefixed:
 3. Repeated scalars are packed; repeated messages and bytes appear in the order given and that
    order is part of the record's meaning (chunk lists).
 4. Varints are minimal; no unknown fields; nested messages follow the same rules.
-5. A list that the specification calls a set (an index record's `supersedes`) is written sorted
-   ascending, bytewise, without repeats.
+5. A list that the specification keys by a field (the `vector` in sealed metadata, keyed by
+   `device_id`) is written sorted ascending by that key, bytewise, each key once, and a list of
+   fingerprints (an index record's `replaces`, a cleanup group's `forget`) ascending, bytewise,
+   without repeats.
 
 Verifiers never re-encode a body and never require it to be canonical: the bytes received are the
 bytes hashed and signed, and unknown fields inside them are stored and forwarded untouched, which is
@@ -455,19 +544,23 @@ how a newer peer adds fields an older one never sees. A field number marked `res
 or in `protocol.md` is an unknown field to every decoder. A verifier does reject a body it cannot
 parse, a field of the wrong length, a value outside its stated range, or a field that is not
 repeated occurring more than once; it accepts a repeated scalar field packed or unpacked, or partly
-each, concatenating the values in the order they appear, and reads a set in any order, a repeated
-entry counting once (`protocol.md` §2).
+each, concatenating the values in the order they appear (`protocol.md` §2); and it rejects a list of
+fingerprints out of order or with repeats (`protocol.md` §4.4 step 1), and a reader treats a vector
+out of order or naming one device twice as a writer fault (step 7), so that every verifier reads one
+list the same way.
 
-### 5.3 Index records
+### 5.3 Index records and cleanups
 
-An index record's body is `protocol.md` §4.4's. Any write holder signs it with
-`Sign(folder_sk, "licketysync/v1/sig/index", body)`; every peer, sealed ones included, verifies it
-with `folder_vk`, and nothing in it is charged to anyone until that signature has verified; its
-sealed metadata is §3.4's. The `device_id` in a record is the device ID of the device that wrote it
-(§8.1), as the signer claims it, and nothing proves it: every write holder signs with the same key.
-It is only the key of the sequence the record belongs to, used to sync, and is never shown as the
-record's author (ruling S-4). Records of one device at one sequence number are concurrent versions
-(`protocol.md` §4.4); nothing in a record says which person made it.
+An index record's body, and a cleanup's, are `protocol.md` §4.4's. Any write holder signs them with
+`Sign(folder_sk, "licketysync/v1/sig/index", body)` and `Sign(folder_sk,
+"licketysync/v1/sig/cleanup", body)`; every peer, sealed ones included, verifies them with
+`folder_vk`, and nothing in them is charged to anyone until that signature has verified; their
+sealed metadata is §3.4's. The `device_id` inside a record's seal is the device ID of the device
+that wrote it (§8.1), as the signer claims it, and nothing proves it: every write holder signs with
+the same key. With the record's `counter` it is the record's dot, which orders that device's records
+and which other records' vectors name (`protocol.md` §4.4); it is never shown as the record's author
+(ruling S-4). Two records with one dot are concurrent versions (`protocol.md` §4.4); nothing in a
+record says which person made it.
 
 ## 6. Key strings, words, QR codes, links and files
 
@@ -594,7 +687,7 @@ device announces the folder (discovery) or gives out a key.
 
 A new folder (§7.1) made over a directory that already holds files: the engine indexes the files
 already there as the folder's first records, so they are not copied anywhere, and no history comes
-with them (sequences start afresh and no record supersedes anything). A device that joins the new
+with them (every first record has an empty vector and covers nothing). A device that joins the new
 folder over its own copy of the same files, such as the directory of a folder it has just unlinked
 (§7.3), adopts every file that already matches a record without downloading it (plan, Sync engine:
 "identical content is not a change") and treats a local file that differs from the record for its
@@ -657,12 +750,20 @@ keeps it in its key store (§8.2). From it:
   it is itself stable for the life of the device seed and so a handle for linking that device's
   announcements across days and folders, which the threat model lists ("What stays visible").
 
-The device ID is proven only at the handshake (the DeviceProof). Inside a folder it is only a sync
-key: the sequence a device's records belong to (§5.3). A device whose sequence number for a folder
-would pass `MAX_SEQ` (`protocol.md` §4.4) draws a new device seed and so takes a new device ID; a
-peer holds a writer's records contiguously from 1, so no device ever comes near it. The browser
-client keeps one device seed per installation, so clearing a session does not add a writer to the
-folders it writes (plan, "Stable browser device ID", phase 6).
+The device ID is proven only at the handshake (the DeviceProof). Inside a folder it is only the
+device of a record's dot (§5.3). A device seed belongs to one device: two devices with one seed (a
+disk image cloned with its key store, or one seed given to machines that can run at the same time)
+write under one device ID, and an edit of one, or of a third device that wrote from one of its
+records, can then replace a concurrent edit of the other at the same path, the replaced file going
+to the archive (`protocol.md` §4.4, "Why it is safe" 8b). A seed may pass from one machine to its
+successor only when the two never run at once. The engine raises a hint when a record under its own
+ID arrives with a counter above its high-water mark (`counter > hw`; `protocol.md` §4.5, "Durability
+before transmission"), and an image meant for cloning carries no key store. A device's counters
+follow its clock and rise past every counter it has seen; one whose next counter would pass
+`MAX_COUNTER` (`protocol.md` §4.4) can write nothing more in that folder, and a new device seed
+would not help, so the folder is shared again (§7). The browser client keeps one device seed per
+installation, so clearing a session does not add a device to the vectors of the files it writes
+(plan, "Stable browser device ID", phase 6).
 
 ### 8.2 The local key store
 
@@ -724,8 +825,8 @@ implementation exists (BLAKE3, Ed25519, XChaCha20-Poly1305 and BIP39 have offici
 the crate also checks, `suites.md` §4.4).
 
 1. **Folder derivations**: for a fixed 32-byte `ws`: the folder signing seed, `folder_vk`,
-   `folder_id`, `dk`, `ak`, the hint key, the payload key, `ck`, `nk`, `hk` and `rk`; and, for that
-   `ws`, the read and sealed keys' payloads.
+   `folder_id`, `dk`, `ak`, the hint key, the payload key, `ck`, `nk`, `hk`, `gk`, `rk` and `tk`;
+   and, for that `ws`, the read and sealed keys' payloads.
 2. **Key strings**: the three strings for the fixed `ws` in lower and upper case, and the payloads
    they decode to; rejected variants: mixed case, one flipped character, a prefix other than the
    three, a Bech32 (non-m) checksum, a write payload under `lsr` and a read payload under `lsw`
@@ -751,15 +852,22 @@ the crate also checks, `suites.md` §4.4).
    bytes and `cipher_hash`; one corrupt variant per failure path (bad tag, non-zero padding, payload
    length over L', empty payload, a compression code this release does not implement, a stored
    length that is not a Padmé length, a stored length over the bound, bad plain hash), and the same
-   chunk under another folder's keys (a different `stored`).
+   chunk under another folder's keys (a different `stored`); the gear table for the fixed `ws` (its
+   entries 0, 127 and 255), and, from phase 1, the chunk boundaries the keyed FastCDC finds in a
+   fixed 1 MiB input and in the same input under another folder's keys (different boundaries).
 7. **Padmé**: the six values in §3.3 plus 1 000 random lengths against a reference.
-8. **Index record signing and sealing**: a canonical body with two `supersedes` entries, its
-   `record_hash` and signature; a `SealedMeta` sealed with a fixed nonce and opened with the aad
-   rebuilt from the record; the seal failing when moved to another `seq`, `device_id` or folder;
-   non-zero padding (refused); `sealed` of 39 and of 1 572 865 bytes (malformed); a body with one bit
-   flipped inside a bytes field, so that it still parses, whose signature then fails (forged); a
-   signature by another folder's key (forged); two records of one device at one `seq`, both
-   verifying; and the writer digests (`protocol.md` §4.4) after each of three fixed record hashes.
+8. **Index record and cleanup signing and sealing**: a canonical body with two names and a
+   `SealedMeta` holding a vector of two entries, its `record_hash` and signature; the `SealedMeta`
+   sealed with a fixed nonce and opened with the 64-byte aad rebuilt from the record; the seal
+   failing when moved to another `path_tag` or folder, or into a cleanup; a cleanup of two groups,
+   its `CleanupMeta` sealed under the 32-byte aad, its record hash and its signature under
+   `sig/cleanup`, and the same body signed under `sig/index` (fails); non-zero padding (refused); a
+   300-byte metadata padded to 512 (accepted), padded to 400 (malformed) and padded to 1 024 (a
+   writer fault: past the least power of two that holds it); `sealed` of 295, 297 and 2^21 + 41
+   bytes (malformed); a body with one bit flipped inside a bytes field, so that it still parses,
+   whose signature then fails (forged); a signature by another folder's key (forged); two records
+   with one dot, both verifying; and the set digests (`protocol.md` §4.5) of an empty subtree, of a
+   leaf of three fixed record hashes and of a node over sixteen fixed child digests.
 9. **Handshake inputs** (shared with the protocol crate's vectors, `protocol.md` §8): for a fixed
    transcript hash `th` (32 bytes) and the fixed folder: the hint for both roles, the proof key, and
    the sealed payload for each reported tier in both roles under a fixed nonce, opened again; the
@@ -772,6 +880,10 @@ the crate also checks, `suites.md` §4.4).
     link with the key string in the query (refused).
 12. **Linking** (phase 5): a fixed link code, its beacon ID and the link proof for both roles over
     a fixed `th`.
+13. **Path tags** (§3.5; shared with `protocol.md` §8 items 7 and 12): for the fixed `ws`, the file
+    IDs of `docs`, `docs/notes` and `docs/notes/a.txt`, of `Docs`, and of `docs/notés` spelled with
+    a composed `é` (NFC, U+00E9) and with a decomposed one (NFD, `e` and U+0301) (all different);
+    the same paths under another folder's keys (other tags).
 
 ## 10. Label registry
 
@@ -786,7 +898,10 @@ every `identity/`, `epoch/` and `wrap/` label, `folder/root-seed`, `folder/chunk
 `data/chunk-hash-key`), `key/ml-dsa-65`, `key/x-wing`, `hash/id/identity`, `hash/id/key`, the keyed
 `handshake/folder-hint` and `handshake/proof-key` (now the derived hint key and payload key), and
 the `sig/` labels `folder`, `folder-proof`, `grant`, `grant-pop`, `rotation`, `wrap`, `revocation`,
-`suspension`, `lift` and `root-rotation`.
+`suspension`, `lift` and `root-rotation`. Removed on 2026-10-25 with the per-writer cursors
+(`protocol.md` §4.5): `hash/writer-digest`. Added then: `data/path-tag-key`, `data/chunk-gear-key`,
+`hash/set-leaf`, `hash/set-node` and `sig/cleanup` (the `hash/path-tag` label of an earlier draft of
+that day went with its chains).
 
 | Label | Mode | Material / input | Output |
 | --- | --- | --- | --- |
@@ -796,7 +911,9 @@ the `sig/` labels `folder`, `folder-proof`, `grant`, `grant-pop`, `rotation`, `w
 | `licketysync/v1/data/chunk-key` | derive_key | data key | `ck` (§3.1) |
 | `licketysync/v1/data/chunk-nonce-key` | derive_key | data key | `nk` (§3.1) |
 | `licketysync/v1/data/chunk-hash-key` | derive_key | data key | `hk` (§3.1) |
+| `licketysync/v1/data/chunk-gear-key` | derive_key | data key | `gk` (§3.1), the keyed-BLAKE3 key of the chunker's gear table (§3.2) |
 | `licketysync/v1/data/record-key` | derive_key | data key | `rk` (§3.1) |
+| `licketysync/v1/data/path-tag-key` | derive_key | data key | `tk` (§3.1), the keyed-BLAKE3 key of path tags, the file IDs (§3.5) |
 | `licketysync/v1/handshake/hint-key` | derive_key | access key | keyed-BLAKE3 key of the folder hint (§4) |
 | `licketysync/v1/handshake/payload-key` | derive_key | access key | keyed-BLAKE3 key that gives each connection's proof key (§4) |
 | `licketysync/v1/key/ed25519` | derive_key | device seed | Ed25519 seed of the device key (§8.1) |
@@ -808,19 +925,21 @@ the `sig/` labels `folder`, `folder-proof`, `grant`, `grant-pop`, `rotation`, `w
 | `licketysync/v1/hash/id/device` | `H` | be16(suite) \|\| device public key | device ID (§0.3) |
 | `licketysync/v1/hash/record` | `H` | record body | record hash |
 | `licketysync/v1/hash/chunk` | `H` | stored chunk blob | `cipher_hash` |
-| `licketysync/v1/hash/writer-digest` | `H` | previous digest (32) \|\| record hash (32) | cursor digest (`protocol.md` §4.4) |
+| `licketysync/v1/hash/set-leaf` | `H` | be32(count) \|\| record hashes, ascending | set digest, leaf form (`protocol.md` §4.5) |
+| `licketysync/v1/hash/set-node` | `H` | 16 child digests (32 each) | set digest, node form (`protocol.md` §4.5) |
 | `licketysync/v1/hash/discovery-peer` | `H` | salt (16) \|\| announcer libp2p identity key (32) | peer tag (16) in the LAN beacon (§2.2) |
 | `licketysync/v1/hash/discovery-lan` | `H` | salt \|\| folder ID \|\| peer tag \|\| be64(minute) | LAN beacon ID (16) |
 | `licketysync/v1/hash/discovery-dht` | `H` | folder ID \|\| be64(day) | DHT ID (20) |
 | `licketysync/v1/hash/transcript` | `H` | protocol ID, both libp2p identity keys, both Hellos | transcript hash (`protocol.md` §3.3) |
-| `licketysync/v1/sig/index` | prefix of `M` | record body | signed message (§5) |
+| `licketysync/v1/sig/index` | prefix of `M` | index record body | signed message (§5) |
+| `licketysync/v1/sig/cleanup` | prefix of `M` | cleanup record body | signed message (§5) |
 | `licketysync/v1/sig/device-proof` | prefix of `M` | transcript hash \|\| role | signed message (`protocol.md` §3.4) |
 
 ## 11. Phase map
 
 | Section | Phase |
 | --- | --- |
-| 0, 1, 2.1, 3, 4, 5, 6.1, 6.2, 8.1 (device key and libp2p identity) | 0 |
+| 0, 1, 2.1, 3 (3.5 included), 4, 5, 6.1, 6.2, 8.1 (device key and libp2p identity) | 0 |
 | 2.2 LAN, 6.3 link, 6.4 file, 7 (making, unlinking, sharing an existing directory), 8.2 key store and Argon2id | 1 |
 | 2.2 DHT, 8.1 DHT key; sealed tier in real use | 2 |
 | 6 showing and exporting keys in the app, with the operating system's authentication for a write key | 3 (the CLI's export in phase 1) |

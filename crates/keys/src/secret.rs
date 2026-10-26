@@ -23,7 +23,7 @@
 //!
 //! The derivations of `keys.md` sections 1.2, 3.1 and 4 below the write
 //! secret are methods here, one label each: the data key of the write secret,
-//! the five keys of [`DataKey`] and the two of the access key. The folder
+//! the seven keys of [`DataKey`] and the two of the access key. The folder
 //! signing key is [`crate::folder::WriteKey`]'s.
 
 use core::fmt;
@@ -151,9 +151,21 @@ secret32! {
 }
 
 secret32! {
-    /// `rk`, the `XChaCha` key for the sealed metadata of index records
-    /// (section 3.4).
+    /// `gk`, the keyed-BLAKE3 key of the chunker's gear table (section 3.2,
+    /// TM-14): only key holders can tell where chunk boundaries fall.
+    pub(crate) ChunkGearKey
+}
+
+secret32! {
+    /// `rk`, the `XChaCha` key for the sealed metadata of index records and
+    /// cleanups (section 3.4).
     pub RecordKey
+}
+
+secret32! {
+    /// `tk`, the keyed-BLAKE3 key of path tags, the file IDs (section 3.5,
+    /// TM-14): nobody without it computes a tag from a guessed path.
+    pub(crate) PathTagKey
 }
 
 secret32! {
@@ -217,6 +229,16 @@ impl DataKey {
         ChunkHashKey::fill_with(|out| derive_key_into(labels::DATA_CHUNK_HASH_KEY, &self.0, out))
     }
 
+    /// `gk = derive_key("licketysync/v1/data/chunk-gear-key", dk)`.
+    pub(crate) fn chunk_gear_key(&self) -> ChunkGearKey {
+        ChunkGearKey::fill_with(|out| derive_key_into(labels::DATA_CHUNK_GEAR_KEY, &self.0, out))
+    }
+
+    /// `tk = derive_key("licketysync/v1/data/path-tag-key", dk)`.
+    pub(crate) fn path_tag_key(&self) -> PathTagKey {
+        PathTagKey::fill_with(|out| derive_key_into(labels::DATA_PATH_TAG_KEY, &self.0, out))
+    }
+
     /// `rk = derive_key("licketysync/v1/data/record-key", dk)`: the key that
     /// [`crate::sealed_meta`] seals and opens index records' metadata under.
     #[must_use]
@@ -253,7 +275,9 @@ const _: () = {
     zeroize_on_drop::<ChunkKey>();
     zeroize_on_drop::<ChunkNonceKey>();
     zeroize_on_drop::<ChunkHashKey>();
+    zeroize_on_drop::<ChunkGearKey>();
     zeroize_on_drop::<RecordKey>();
+    zeroize_on_drop::<PathTagKey>();
     zeroize_on_drop::<HintKey>();
     zeroize_on_drop::<PayloadKey>();
     zeroize_on_drop::<DeviceSeed>();
@@ -261,6 +285,7 @@ const _: () = {
     zeroize_on_drop::<LinkConfirmKey>();
     zeroize_on_drop::<ProofKey>();
     zeroize_on_drop::<SecretBytes>();
+    zeroize_on_drop::<crate::chunk::GearTable>();
     zeroize_on_drop::<Zeroizing<[u8; 32]>>();
     zeroize_on_drop::<Zeroizing<String>>();
     // The cipher, the private keys and the word list the crate holds secrets in.
@@ -291,6 +316,14 @@ mod tests {
         assert_eq!(
             format!("{:?}", ProofKey::fill_with(|o| *o = [1; 32])),
             "ProofKey([redacted])"
+        );
+        assert_eq!(
+            format!("{:?}", PathTagKey::fill_with(|o| *o = [1; 32])),
+            "PathTagKey([redacted])"
+        );
+        assert_eq!(
+            format!("{:?}", ChunkGearKey::fill_with(|o| *o = [1; 32])),
+            "ChunkGearKey([redacted])"
         );
         assert_eq!(s.expose(), &[7u8; 32]);
         assert!(bool::from(s.ct_eq(&WriteSecret::from_bytes([7u8; 32]))));
@@ -335,7 +368,9 @@ mod tests {
             (*dk.chunk_key().expose(), labels::DATA_CHUNK_KEY),
             (*dk.chunk_nonce_key().expose(), labels::DATA_CHUNK_NONCE_KEY),
             (*dk.chunk_hash_key().expose(), labels::DATA_CHUNK_HASH_KEY),
+            (*dk.chunk_gear_key().expose(), labels::DATA_CHUNK_GEAR_KEY),
             (*dk.record_key().expose(), labels::DATA_RECORD_KEY),
+            (*dk.path_tag_key().expose(), labels::DATA_PATH_TAG_KEY),
         ];
         let mut all = vec![*ws.expose(), *dk.expose()];
         for (key, label) in derived {

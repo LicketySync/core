@@ -36,19 +36,31 @@ use crate::device::{DeviceKey, DhtKey, Libp2pIdentity};
 use crate::discovery;
 use crate::folder::{FolderKey, WriteKey};
 use crate::handshake::Role;
-use crate::ids::{DeviceId, FolderId, RecordHash, WriterDigest};
+use crate::ids::{PathTag, RecordHash, SetDigest, WriterDigest};
 use crate::keystring::{bech32m_encode, Link, HRP_READ, HRP_SEALED, HRP_WRITE, LINK_PREFIX};
 use crate::labels::{self, derive_key, REGISTRY};
 use crate::linking::{self, LinkCode};
-use crate::records::SignedRecord;
-use crate::sealed_meta::{self, open_meta, seal_meta, MAX_SEALED_BYTES};
+use crate::records::{RecordType, SignedRecord};
+use crate::sealed_meta::MAX_INDEX_SEALED_BYTES;
 use crate::secret::{DeviceSeed, LinkSecret, WriteSecret};
 use crate::suite::{Suite, Tier};
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors/");
 
+/// The fuzz targets' seed corpora (`fuzz/seeds/<target>/`).
+const SEEDS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fuzz/seeds/");
+
 fn regenerating() -> bool {
     std::env::var_os("LICKETYSYNC_REGENERATE_VECTORS").is_some()
+}
+
+/// Writes a fuzz seed for `target` when regenerating.
+fn seed(target: &str, name: &str, bytes: &[u8]) {
+    if regenerating() {
+        let dir = format!("{SEEDS}{target}");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(format!("{dir}/{name}"), bytes).unwrap();
+    }
 }
 
 fn h(bytes: &[u8]) -> Value {
@@ -133,7 +145,9 @@ fn vector_folder_derivations() {
             "chunk_key": h(dk.chunk_key().expose()),
             "chunk_nonce_key": h(dk.chunk_nonce_key().expose()),
             "chunk_hash_key": h(dk.chunk_hash_key().expose()),
+            "chunk_gear_key": h(dk.chunk_gear_key().expose()),
             "record_key": h(dk.record_key().expose()),
+            "path_tag_key": h(dk.path_tag_key().expose()),
             "hint_key": h(dk.access_key().hint_key().expose()),
             "payload_key": h(dk.access_key().payload_key().expose()),
             "write_payload": h(&FolderKey::from(folder_key()).payload()),
@@ -568,6 +582,18 @@ fn vector_chunk() {
     let other_keys = other.chunk_keys();
     let elsewhere = seal_chunk(&other_keys, &raw).unwrap();
     assert_ne!(elsewhere.stored, sealed.stored);
+    // The gear table's entries 0, 127 and 255 (keys.md 9 item 6):
+    // be64(BLAKE3_keyed(gk, u8(i))[0..8]), given as 8 bytes of hex.
+    let gear = keys.gear_table();
+    let gk = w.data_key().chunk_gear_key();
+    let gear_entries: Vec<Value> = [0u8, 127, 255]
+        .iter()
+        .map(|&i| {
+            let full = crate::labels::keyed_hash(gk.expose(), &[&[i]]);
+            assert_eq!(gear.get(i).to_be_bytes(), full[..8]);
+            json!({ "i": i, "entry": h(&gear.get(i).to_be_bytes()) })
+        })
+        .collect();
     check(
         "chunk",
         &json!({
@@ -579,6 +605,7 @@ fn vector_chunk() {
             "nonce": h(&sealed.stored[..24]),
             "stored": h(&sealed.stored),
             "cipher_hash": h(&sealed.cipher_hash.0),
+            "gear_table": gear_entries,
             "corrupt": corrupt,
             "under_another_folder": {
                 "write_secret": h(other.secret().expose()),
@@ -649,18 +676,14 @@ struct IndexRecord {
     record_type: u32,
     #[prost(bytes = "vec", tag = "3")]
     folder_id: Vec<u8>,
-    #[prost(bytes = "vec", tag = "5")]
-    device_id: Vec<u8>,
-    #[prost(uint64, tag = "6")]
-    seq: u64,
-    #[prost(bytes = "vec", repeated, tag = "8")]
-    supersedes: Vec<Vec<u8>>,
-    #[prost(bool, tag = "11")]
-    deleted: bool,
     #[prost(message, repeated, tag = "12")]
     chunks: Vec<ChunkRef>,
     #[prost(bytes = "vec", tag = "13")]
     sealed: Vec<u8>,
+    #[prost(bytes = "vec", tag = "15")]
+    path_tag: Vec<u8>,
+    #[prost(bytes = "vec", repeated, tag = "17")]
+    replaces: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -687,6 +710,64 @@ struct SealedMeta {
     plain_hashes: Vec<Vec<u8>>,
     #[prost(uint64, tag = "7")]
     written_at: u64,
+    #[prost(bytes = "vec", tag = "8")]
+    device_id: Vec<u8>,
+    #[prost(uint64, tag = "9")]
+    counter: u64,
+    #[prost(message, repeated, tag = "10")]
+    vector: Vec<VectorEntry>,
+    #[prost(bool, tag = "11")]
+    deleted: bool,
+    #[prost(bool, tag = "12")]
+    tree: bool,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct VectorEntry {
+    #[prost(bytes = "vec", tag = "1")]
+    device_id: Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    counter: u64,
+}
+
+/// The cleanup record of `protocol.md` 4.4, mirrored for the vectors only.
+#[derive(Clone, PartialEq, prost::Message)]
+struct CleanupRecord {
+    #[prost(uint32, tag = "1")]
+    suite: u32,
+    #[prost(uint32, tag = "2")]
+    record_type: u32,
+    #[prost(bytes = "vec", tag = "3")]
+    folder_id: Vec<u8>,
+    #[prost(message, repeated, tag = "4")]
+    groups: Vec<CleanupGroup>,
+    #[prost(bytes = "vec", tag = "5")]
+    sealed: Vec<u8>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct CleanupGroup {
+    #[prost(bytes = "vec", tag = "1")]
+    because: Vec<u8>,
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    forget: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct CleanupMeta {
+    #[prost(bytes = "vec", tag = "1")]
+    device_id: Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    counter: u64,
+}
+
+/// `be32(len) || meta || zeros` to `total` bytes: a plaintext sealed by hand
+/// for the reader's rejections.
+fn padded_plain(meta: &[u8], total: usize) -> Vec<u8> {
+    let mut plain = u32::try_from(meta.len()).unwrap().to_be_bytes().to_vec();
+    plain.extend_from_slice(meta);
+    plain.resize(total, 0);
+    plain
 }
 
 /// Section 9 item 8.
@@ -695,108 +776,216 @@ fn vector_index_record() {
     let w = folder_key();
     let v = *w.verifier();
     let folder = v.folder_id();
+    let keys = w.record_keys();
     let device = DeviceKey::from_device_seed(&device_seed(0xa0)).device_id();
-    let rk = w.data_key().record_key();
-    let keys = w.chunk_keys();
-    let raw = raw_chunk();
-    let chunk = seal_chunk(&keys, &raw).unwrap();
-    let meta_of = |path: &str| SealedMeta {
+    // The vector's two devices, ascending by device ID (keys.md 5.2 rule 5).
+    let mut writers = [
+        DeviceKey::from_device_seed(&device_seed(0xb0)).device_id(),
+        DeviceKey::from_device_seed(&device_seed(0xc0)).device_id(),
+    ];
+    writers.sort();
+    let chunk = seal_chunk(&w.chunk_keys(), &raw_chunk()).unwrap();
+    let path = "docs/report.txt";
+    let tag = keys.path_tag(path);
+    let counter = 1_800_000_000_000_000u64;
+    let meta_of = |mtime_ns: i64| SealedMeta {
         path: path.into(),
         kind: 1,
         size: 300,
-        mtime_ns: 1_800_000_000_000_000_000,
+        mtime_ns,
         mode: 0o644,
         plain_hashes: vec![chunk.plain_hash.0.to_vec()],
         written_at: 1_800_000_000,
+        device_id: device.0.to_vec(),
+        counter,
+        vector: vec![
+            VectorEntry {
+                device_id: writers[0].0.to_vec(),
+                counter: counter - 2_000_000,
+            },
+            VectorEntry {
+                device_id: writers[1].0.to_vec(),
+                counter: counter - 1_000_000,
+            },
+        ],
+        deleted: false,
+        tree: false,
     };
-    // A set: written sorted ascending (keys.md 5.2).
-    let mut supersedes = vec![fixed32(0x90).to_vec(), fixed32(0x30).to_vec()];
-    supersedes.sort();
-    let body_of = |seq: u64, sealed: Vec<u8>| IndexRecord {
+    // Two names, written ascending (keys.md 5.2 rule 5).
+    let mut replaces = vec![fixed32(0x90).to_vec(), fixed32(0x30).to_vec()];
+    replaces.sort();
+    let body_of = |sealed: Vec<u8>| IndexRecord {
         suite: 1,
         record_type: 16,
         folder_id: folder.0.to_vec(),
-        device_id: device.0.to_vec(),
-        seq,
-        supersedes: supersedes.clone(),
-        deleted: false,
         chunks: vec![ChunkRef {
             cipher_hash: chunk.cipher_hash.0.to_vec(),
             stored_len: u32::try_from(chunk.stored.len()).unwrap(),
         }],
         sealed,
+        path_tag: tag.0.to_vec(),
+        replaces: replaces.clone(),
     };
-    let meta = meta_of("docs/report.txt").encode_to_vec();
+    let meta = meta_of(1_800_000_000_000_000_000).encode_to_vec();
     let nonce = [0x5au8; 24];
-    let sealed = seal_meta(&rk, &folder, &device, 1, &meta, &mut |b| {
-        b.copy_from_slice(&nonce);
-    })
-    .unwrap();
-    let body = body_of(1, sealed.clone()).encode_to_vec();
-    let r = w.sign_index_record(body.clone());
-    assert_eq!(v.verify_index_record(&r), Ok(()));
-    assert_eq!(SignedRecord::from_bytes(&r.to_bytes()), Ok(r.clone()));
-    // Opened with the aad rebuilt from the record's clear fields.
-    let parsed = IndexRecord::decode(r.body()).unwrap();
-    let opened = open_meta(
-        &rk,
-        &FolderId::from_slice(&parsed.folder_id).unwrap(),
-        &DeviceId::from_slice(&parsed.device_id).unwrap(),
-        parsed.seq,
-        &parsed.sealed,
-    )
-    .unwrap();
-    assert_eq!(*opened, meta);
-    let other_device = DeviceKey::from_device_seed(&device_seed(0xb0)).device_id();
-    let other = other_folder_key();
-    let other_folder = other.verifier().folder_id();
-    let moved = json!({
-        "to_seq_2": dbg(&open_meta(&rk, &folder, &device, 2, &sealed).err()),
-        "to_another_device_id": dbg(&open_meta(&rk, &folder, &other_device, 1, &sealed).err()),
-        "to_another_folder": dbg(&open_meta(&rk, &other_folder, &device, 1, &sealed).err()),
-    });
-    // A seal whose padding is not zero, sealed by hand.
-    let mut plain = (u32::try_from(meta.len()).unwrap()).to_be_bytes().to_vec();
-    plain.extend(&meta);
-    plain.resize(
-        usize::try_from(padme(plain.len() as u64).unwrap()).unwrap(),
-        0,
+    let sealed = keys
+        .seal_index_meta(&tag, &meta, &mut |b| b.copy_from_slice(&nonce))
+        .unwrap();
+    assert!(
+        meta.len() + 4 <= 256,
+        "a record whose vector names two devices fills 256"
     );
-    *plain.last_mut().unwrap() = 1;
-    assert!(plain.len() > meta.len() + 4, "there is padding to spoil");
-    let bad_padding = sealed_meta::seal_plain_for_test(&rk, &folder, &device, 1, &nonce, &plain);
-    // Sealed parts of 39 and of 1 572 865 bytes: malformed, judged on length.
-    let lengths = json!({
-        "39": dbg(&open_meta(&rk, &folder, &device, 1, &[0u8; 39]).err()),
-        "1572865": dbg(&open_meta(&rk, &folder, &device, 1, &vec![0u8; MAX_SEALED_BYTES + 1]).err()),
+    assert_eq!(sealed.len(), 296);
+    let body = body_of(sealed.clone()).encode_to_vec();
+    let r = w.sign_index_record(body.clone()).unwrap();
+    assert_eq!(v.verify_record(&r), Ok(()));
+    assert_eq!(SignedRecord::from_bytes(&r.to_bytes()), Ok(r.clone()));
+    // Opened with the 64-byte aad rebuilt from the record's clear fields.
+    let parsed = IndexRecord::decode(r.body()).unwrap();
+    let opened = keys
+        .open_index_meta(
+            &PathTag::from_slice(&parsed.path_tag).unwrap(),
+            &parsed.sealed,
+        )
+        .unwrap();
+    assert_eq!(*opened, meta);
+    assert_eq!(
+        keys.path_tag(&SealedMeta::decode(&opened[..]).unwrap().path),
+        tag
+    );
+    let other = other_folder_key();
+    let elsewhere = keys.with_folder_id_for_test(other.verifier().folder_id());
+    let moved = json!({
+        "to_another_path_tag": dbg(&keys.open_index_meta(&keys.path_tag("docs/other.txt"), &sealed).err()),
+        "to_another_folder_id": dbg(&elsewhere.open_index_meta(&tag, &sealed).err()),
+        "under_another_folders_keys": dbg(&other.record_keys().open_index_meta(&tag, &sealed).err()),
+        "into_a_cleanup": dbg(&keys.open_cleanup_meta(&sealed).err()),
     });
-    // One bit flipped inside a bytes field (the device ID), so that the body
+    // A cleanup of two groups: one because the record above, naming two
+    // fingerprints, and one with because empty, naming one.
+    let cleanup_meta = CleanupMeta {
+        device_id: device.0.to_vec(),
+        counter: counter + 1,
+    }
+    .encode_to_vec();
+    let cleanup_nonce = [0x5cu8; 24];
+    let cleanup_sealed = keys
+        .seal_cleanup_meta(&cleanup_meta, &mut |b| b.copy_from_slice(&cleanup_nonce))
+        .unwrap();
+    assert_eq!(cleanup_sealed.len(), 296);
+    let cleanup_body = CleanupRecord {
+        suite: 1,
+        record_type: 17,
+        folder_id: folder.0.to_vec(),
+        groups: vec![
+            CleanupGroup {
+                because: r.hash().0.to_vec(),
+                forget: vec![fixed32(0x11).to_vec(), fixed32(0x22).to_vec()],
+            },
+            CleanupGroup {
+                because: Vec::new(),
+                forget: vec![fixed32(0x33).to_vec()],
+            },
+        ],
+        sealed: cleanup_sealed.clone(),
+    }
+    .encode_to_vec();
+    let c = w.sign_cleanup_record(cleanup_body.clone()).unwrap();
+    assert_eq!(c.record_type(), RecordType::Cleanup);
+    assert_eq!(v.verify_record(&c), Ok(()));
+    assert_eq!(SignedRecord::from_bytes(&c.to_bytes()), Ok(c.clone()));
+    let c_opened = keys
+        .open_cleanup_meta(&CleanupRecord::decode(c.body()).unwrap().sealed)
+        .unwrap();
+    assert_eq!(*c_opened, cleanup_meta);
+    // The same body signed under sig/index, which only a test can do: the
+    // signing functions refuse a body of another type.
+    let c_as_index =
+        crate::records::signed_under_for_test(&w, labels::SIG_INDEX, cleanup_body).unwrap();
+    // A seal whose padding is not zero, sealed by hand.
+    let mut spoiled = padded_plain(&meta, crate::sealed_meta::bucket(meta.len()).unwrap());
+    *spoiled.last_mut().unwrap() = 1;
+    let bad_padding = keys.seal_index_plain_for_test(&tag, &nonce, &spoiled);
+    assert_eq!(
+        keys.open_index_meta(&tag, &bad_padding),
+        Err(crate::sealed_meta::MetaError::Padding)
+    );
+    // 300 bytes of metadata padded to 512 (the least bucket), to 400 (no
+    // bucket: malformed by length) and to 1 024 (past the least bucket: a
+    // writer fault).
+    let meta300: Vec<u8> = (0..300u32)
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect();
+    let padding_cases: Vec<Value> = [512usize, 400, 1024]
+        .iter()
+        .map(|&total| {
+            let sealed =
+                keys.seal_index_plain_for_test(&tag, &nonce, &padded_plain(&meta300, total));
+            let result = keys.open_index_meta(&tag, &sealed);
+            json!({
+                "padded_to": total,
+                "sealed_len": sealed.len(),
+                "sealed_cipher_hash": h(&cipher_hash(&sealed).0),
+                "opens": result.as_ref().is_ok_and(|m| **m == meta300[..]),
+                "error": dbg(&result.err()),
+            })
+        })
+        .collect();
+    // Seeds for the sealed-metadata fuzz target, which opens every input as
+    // an index record's sealed part at this path tag and as a cleanup's.
+    seed("sealed_meta_open", "index-sealed", &sealed);
+    seed("sealed_meta_open", "cleanup-sealed", &cleanup_sealed);
+    seed("sealed_meta_open", "index-non-zero-padding", &bad_padding);
+    for (total, name) in [
+        (512, "300-in-512"),
+        (400, "300-in-400"),
+        (1024, "300-in-1024"),
+    ] {
+        let bytes = keys.seal_index_plain_for_test(&tag, &nonce, &padded_plain(&meta300, total));
+        seed("sealed_meta_open", &format!("index-{name}"), &bytes);
+    }
+    // Sealed parts of 295, 297 and 2^21 + 41 bytes: malformed by length.
+    let lengths = json!({
+        "295": dbg(&keys.open_index_meta(&tag, &[0u8; 295]).err()),
+        "297": dbg(&keys.open_index_meta(&tag, &[0u8; 297]).err()),
+        "2097193": dbg(&keys.open_index_meta(&tag, &vec![0u8; MAX_INDEX_SEALED_BYTES + 1]).err()),
+    });
+    // One bit flipped inside a bytes field (the path tag), so that the body
     // still parses, then a signature by another folder's key.
     let mut flipped_bytes = r.to_bytes();
     let at = flipped_bytes
         .windows(32)
-        .position(|win| win == device.0)
+        .position(|win| win == tag.0)
         .unwrap();
     flipped_bytes[at + 5] ^= 0x01;
     let flipped = SignedRecord::from_bytes(&flipped_bytes).unwrap();
     assert!(IndexRecord::decode(flipped.body()).is_ok());
     assert_ne!(flipped.body(), r.body());
-    let by_other = other.sign_index_record(body.clone());
-    // Two records of one device at one seq: both verify.
-    let meta2 = meta_of("docs/report (2).txt").encode_to_vec();
-    let sealed2 = seal_meta(&rk, &folder, &device, 1, &meta2, &mut |b| b.fill(0x5b)).unwrap();
-    let r2 = w.sign_index_record(body_of(1, sealed2).encode_to_vec());
-    assert_eq!(v.verify_index_record(&r2), Ok(()));
-    let mut canonical = [r.hash(), r2.hash()];
-    canonical.sort();
-    // The writer digests after each of three fixed record hashes.
-    let fixed = [
+    let by_other = other.sign_index_record(body.clone()).unwrap();
+    // Two records with one dot (another mtime, a fresh nonce): both verify.
+    let meta2 = meta_of(1_800_000_000_500_000_000).encode_to_vec();
+    let sealed2 = keys
+        .seal_index_meta(&tag, &meta2, &mut |b| b.fill(0x5b))
+        .unwrap();
+    let r2 = w
+        .sign_index_record(body_of(sealed2).encode_to_vec())
+        .unwrap();
+    assert_eq!(v.verify_record(&r2), Ok(()));
+    assert_ne!(r2.hash(), r.hash());
+    let mut by_hash = [r.hash(), r2.hash()];
+    by_hash.sort();
+    // The set digests (protocol.md 4.5).
+    let three = [
         RecordHash(fixed32(0x01)),
         RecordHash(fixed32(0x41)),
         RecordHash(fixed32(0x81)),
     ];
+    let sixteen: [SetDigest; 16] =
+        core::array::from_fn(|i| SetDigest(fixed32(u8::try_from(i * 16).unwrap())));
+    // The old index exchange's writer digests, kept for one commit of this
+    // series with WriterDigest itself.
     let mut d = WriterDigest::ZERO;
-    let digests: Vec<Value> = fixed
+    let digests: Vec<Value> = three
         .iter()
         .map(|rh| {
             d = d.then(rh);
@@ -809,25 +998,96 @@ fn vector_index_record() {
             "write_secret": h(w.secret().expose()),
             "folder_id": h(&folder.0),
             "device_id": h(&device.0),
-            "record_key": h(rk.expose()),
+            "vector_devices": writers.iter().map(|d| h(&d.0)).collect::<Vec<_>>(),
+            "path": path,
+            "path_tag": h(&tag.0),
             "sealed_meta": h(&meta),
             "seal_nonce": h(&nonce),
-            "aad": h(&[&folder.0[..], &device.0[..], &1u64.to_be_bytes()].concat()),
+            "aad": h(&[&folder.0[..], &tag.0[..]].concat()),
             "sealed": h(&sealed),
             "record": record(&r),
             "envelope": h(&r.to_bytes()),
             "opened_meta": h(&opened),
             "moved_seal": moved,
-            "non_zero_padding": { "sealed": h(&bad_padding), "error": dbg(&open_meta(&rk, &folder, &device, 1, &bad_padding).err()) },
+            "cleanup": {
+                "cleanup_meta": h(&cleanup_meta),
+                "seal_nonce": h(&cleanup_nonce),
+                "aad": h(&folder.0),
+                "sealed": h(&cleanup_sealed),
+                "record": record(&c),
+                "envelope": h(&c.to_bytes()),
+                "verifies": v.verify_record(&c).is_ok(),
+                "signed_under_sig_index": { "record": record(&c_as_index), "error": dbg(&v.verify_record(&c_as_index).err()) },
+            },
+            "non_zero_padding": { "sealed": h(&bad_padding), "error": dbg(&keys.open_index_meta(&tag, &bad_padding).err()) },
+            "metadata_of_300_bytes": { "meta": h(&meta300), "cases": padding_cases },
             "sealed_lengths": lengths,
-            "bit_flipped_in_the_device_id": { "record": record(&flipped), "error": dbg(&v.verify_index_record(&flipped).err()) },
-            "signed_by_another_folder": { "record": record(&by_other), "error": dbg(&v.verify_index_record(&by_other).err()) },
-            "concurrent_version_at_seq_1": {
+            "bit_flipped_in_the_path_tag": { "record": record(&flipped), "error": dbg(&v.verify_record(&flipped).err()) },
+            "signed_by_another_folder": { "record": record(&by_other), "error": dbg(&v.verify_record(&by_other).err()) },
+            "two_records_with_one_dot": {
                 "record": record(&r2),
-                "verifies": v.verify_index_record(&r2).is_ok(),
-                "canonical_order": canonical.iter().map(|h2| h(&h2.0)).collect::<Vec<_>>(),
+                "verifies": v.verify_record(&r2).is_ok(),
+                "record_hashes_ascending": by_hash.iter().map(|h2| h(&h2.0)).collect::<Vec<_>>(),
+            },
+            "set_digests": {
+                "empty_subtree": h(&SetDigest::leaf(&[]).0),
+                "leaf_of_three": {
+                    "record_hashes": three.iter().map(|x| h(&x.0)).collect::<Vec<_>>(),
+                    "digest": h(&SetDigest::leaf(&three).0),
+                },
+                "node_over_sixteen": {
+                    "children": sixteen.iter().map(|x| h(&x.0)).collect::<Vec<_>>(),
+                    "digest": h(&SetDigest::node(&sixteen).0),
+                },
             },
             "writer_digests": digests,
+        }),
+    );
+}
+
+/// Section 9 item 13 (shared with `protocol.md` section 8 items 7 and 12): the
+/// file IDs of `docs`, `docs/notes`, `docs/notes/a.txt` and `Docs`, and of
+/// an accented name spelled with a composed and with a decomposed accent, all
+/// different, for the fixed folder and under another folder's keys.
+#[test]
+fn vector_path_tags() {
+    let paths = [
+        "docs",
+        "docs/notes",
+        "docs/notes/a.txt",
+        "Docs",
+        "docs/not\u{e9}s",
+        "docs/note\u{301}s",
+    ];
+    let tags_of = |k: &WriteKey| -> Vec<PathTag> {
+        let keys = k.record_keys();
+        paths.iter().map(|p| keys.path_tag(p)).collect()
+    };
+    let here = tags_of(&folder_key());
+    let there = tags_of(&other_folder_key());
+    let all: std::collections::BTreeSet<PathTag> = here.iter().chain(&there).copied().collect();
+    assert_eq!(
+        all.len(),
+        2 * paths.len(),
+        "every tag differs from every other"
+    );
+    let rows = |tags: &[PathTag]| -> Vec<Value> {
+        paths
+            .iter()
+            .zip(tags)
+            .map(|(p, t)| json!({ "path": p, "path_utf8": h(p.as_bytes()), "path_tag": h(&t.0) }))
+            .collect()
+    };
+    check(
+        "path_tag",
+        &json!({
+            "write_secret": h(folder_key().secret().expose()),
+            "path_tag_key": h(folder_key().data_key().path_tag_key().expose()),
+            "tags": rows(&here),
+            "under_another_folder": {
+                "write_secret": h(other_folder_key().secret().expose()),
+                "tags": rows(&there),
+            },
         }),
     );
 }
@@ -1032,7 +1292,9 @@ label_vectors! {
     vector_derive_key_data_chunk_key: DATA_CHUNK_KEY;
     vector_derive_key_data_chunk_nonce_key: DATA_CHUNK_NONCE_KEY;
     vector_derive_key_data_chunk_hash_key: DATA_CHUNK_HASH_KEY;
+    vector_derive_key_data_chunk_gear_key: DATA_CHUNK_GEAR_KEY;
     vector_derive_key_data_record_key: DATA_RECORD_KEY;
+    vector_derive_key_data_path_tag_key: DATA_PATH_TAG_KEY;
     vector_derive_key_handshake_hint_key: HANDSHAKE_HINT_KEY;
     vector_derive_key_handshake_payload_key: HANDSHAKE_PAYLOAD_KEY;
     vector_derive_key_ed25519: KEY_ED25519;
@@ -1076,6 +1338,6 @@ fn vector_labels_file() {
         registered, covered,
         "every registered derive_key label has a vector, and only those"
     );
-    assert_eq!(entries.len(), 14);
+    assert_eq!(entries.len(), 16);
     check("labels", &Value::Object(file));
 }

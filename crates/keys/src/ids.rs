@@ -2,12 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Public identifiers: folder and device IDs, record and chunk hashes and
-//! writer digests, 32 bytes each. All are public data and compare with `==`.
+//! Public identifiers: folder and device IDs, record and chunk hashes, path
+//! tags (file IDs) and set digests, 32 bytes each. All are public values and
+//! compare with `==` (`suites.md` 4.2: path tags and set digests included).
 //! The derivations themselves are with the keys they come from:
 //! [`crate::folder::FolderVerifier::folder_id`],
 //! [`crate::device::DevicePublicKey::device_id`],
-//! [`crate::records::SignedRecord::hash`] and [`crate::chunk::cipher_hash`].
+//! [`crate::records::SignedRecord::hash`], [`crate::chunk::cipher_hash`],
+//! [`crate::sealed_meta::RecordKeys::path_tag`] and [`crate::set_digest`].
 
 use core::fmt;
 
@@ -79,9 +81,26 @@ id32! {
     CipherHash
 }
 id32! {
-    /// A writer's cursor digest (`protocol.md` 4.4): 32 zero bytes, then
-    /// `H("licketysync/v1/hash/writer-digest", D || record_hash)` for each of
-    /// the writer's records in canonical order ([`WriterDigest::then`]).
+    /// A path tag, the file ID (section 3.5): `BLAKE3_keyed(tk, path)` over
+    /// the path's UTF-8 bytes exactly as `SealedMeta.path` holds them, with no
+    /// normalisation. Only read and write holders compute one
+    /// ([`crate::sealed_meta::RecordKeys::path_tag`]); every tier reads it in a
+    /// record's clear fields. Without `tk` it names no path (TM-14).
+    PathTag
+}
+id32! {
+    /// The set digest of a subtree of a folder's records (`protocol.md` 4.5):
+    /// 32 zero bytes for an empty subtree, else its leaf or node form
+    /// ([`crate::set_digest`]).
+    SetDigest
+}
+id32! {
+    /// A writer's cursor digest (`protocol.md` 4.4 before 2026-10-25): 32 zero
+    /// bytes, then `H("licketysync/v1/hash/writer-digest", D || record_hash)`
+    /// for each of the writer's records in canonical order
+    /// ([`WriterDigest::then`]). Retired by `keys.md` section 10 on 2026-10-25;
+    /// used only by the old index exchange; removed in the next commit of this
+    /// series.
     WriterDigest
 }
 
@@ -120,5 +139,10 @@ mod tests {
             format!("{:?}", WriterDigest([0; 32])).len(),
             "WriterDigest()".len() + 64
         );
+        assert_eq!(
+            format!("{:?}", PathTag([0xcd; 32])),
+            format!("PathTag({})", "cd".repeat(32))
+        );
+        assert_eq!(SetDigest([1; 32]).to_string(), "01".repeat(32));
     }
 }

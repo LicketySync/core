@@ -106,7 +106,7 @@ pub(crate) fn flipped_body(r: &Record) -> Record {
 
 /// An envelope with `body` and a signature by another folder's key.
 pub(crate) fn signed_by_other_key(body: &[u8]) -> SignedRecord {
-    other_key().sign_index_record(body.to_vec())
+    other_key().sign_index_record(body.to_vec()).unwrap()
 }
 
 /// A writer fault a record is built with, bypassing the writer's checks.
@@ -295,7 +295,7 @@ impl Spec {
             sealed,
         }
         .encode_to_vec();
-        key.sign_index_record(body)
+        key.sign_index_record(body).unwrap()
     }
 
     pub(crate) fn record(&self) -> Record {

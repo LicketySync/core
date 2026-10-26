@@ -18,8 +18,9 @@
 //! - [`labelled_hash`]: `H(label, x) = BLAKE3(label || 0x00 || x)`, for every
 //!   identifier and link over public data. Plain `BLAKE3(x)` appears nowhere.
 //! - `keyed_hash` (crate-private): keyed BLAKE3 under a key that a `derive_key`
-//!   label made for that one use (`hk`, `nk`, the hint key, the payload key,
-//!   the link-confirm key), so its input carries no label of its own.
+//!   label made for that one use (`hk`, `nk`, `gk`, `tk`, the hint key, the
+//!   payload key, the link-confirm key), so its input carries no label of its
+//!   own.
 //! - `signed_message` (crate-private): the signature prefix `M = label || 0x00
 //!   || body`.
 //!
@@ -101,8 +102,14 @@ pub const DATA_CHUNK_KEY: DeriveLabel = d("licketysync/v1/data/chunk-key");
 pub const DATA_CHUNK_NONCE_KEY: DeriveLabel = d("licketysync/v1/data/chunk-nonce-key");
 /// The chunk hash key `hk`, from the data key (section 3.1).
 pub const DATA_CHUNK_HASH_KEY: DeriveLabel = d("licketysync/v1/data/chunk-hash-key");
+/// The chunk gear key `gk`, from the data key (section 3.1): the keyed-BLAKE3
+/// key of the chunker's gear table (section 3.2).
+pub const DATA_CHUNK_GEAR_KEY: DeriveLabel = d("licketysync/v1/data/chunk-gear-key");
 /// The record key `rk`, from the data key (section 3.1).
 pub const DATA_RECORD_KEY: DeriveLabel = d("licketysync/v1/data/record-key");
+/// The path-tag key `tk`, from the data key (section 3.1): the keyed-BLAKE3 key
+/// of path tags, the file IDs (section 3.5).
+pub const DATA_PATH_TAG_KEY: DeriveLabel = d("licketysync/v1/data/path-tag-key");
 /// The handshake's hint key, from the access key (section 4).
 pub const HANDSHAKE_HINT_KEY: DeriveLabel = d("licketysync/v1/handshake/hint-key");
 /// The handshake's payload key, from the access key (section 4).
@@ -126,8 +133,17 @@ pub const HASH_ID_DEVICE: HashLabel = h("licketysync/v1/hash/id/device");
 pub const HASH_RECORD: HashLabel = h("licketysync/v1/hash/record");
 /// `cipher_hash` over a stored chunk blob (section 3.2).
 pub const HASH_CHUNK: HashLabel = h("licketysync/v1/hash/chunk");
-/// A writer's cursor digest step (`protocol.md` 4.4, 4.5).
-pub const HASH_WRITER_DIGEST: HashLabel = h("licketysync/v1/hash/writer-digest");
+/// The set digest of a subtree in leaf form (`protocol.md` 4.5), over
+/// `be32(count) || record hashes, ascending`.
+pub const HASH_SET_LEAF: HashLabel = h("licketysync/v1/hash/set-leaf");
+/// The set digest of a subtree in node form (`protocol.md` 4.5), over its 16
+/// child digests.
+pub const HASH_SET_NODE: HashLabel = h("licketysync/v1/hash/set-node");
+/// A writer's cursor digest step. Retired by `keys.md` section 10 on
+/// 2026-10-25 and so not in [`REGISTRY`]; used only by
+/// [`crate::ids::WriterDigest`] for the old index exchange; removed in the next
+/// commit of this series.
+pub(crate) const HASH_WRITER_DIGEST: HashLabel = h("licketysync/v1/hash/writer-digest");
 /// The LAN beacon's peer tag (section 2.2).
 pub const HASH_DISCOVERY_PEER: HashLabel = h("licketysync/v1/hash/discovery-peer");
 /// The LAN beacon ID (section 2.2).
@@ -140,6 +156,8 @@ pub const HASH_TRANSCRIPT: HashLabel = h("licketysync/v1/hash/transcript");
 
 /// Signature prefix of an index record (type 16, section 5).
 pub const SIG_INDEX: SigLabel = s("licketysync/v1/sig/index");
+/// Signature prefix of a cleanup record (type 17, section 5).
+pub const SIG_CLEANUP: SigLabel = s("licketysync/v1/sig/cleanup");
 /// Signature prefix of the handshake's device proof (`protocol.md` 3.4).
 pub const SIG_DEVICE_PROOF: SigLabel = s("licketysync/v1/sig/device-proof");
 
@@ -154,7 +172,10 @@ macro_rules! entry {
 }
 
 /// Every label in use, with its mode. Adding a label is a change to
-/// `keys.md` section 10 first.
+/// `keys.md` section 10 first. In this commit one label in use is not here:
+/// the retired `HASH_WRITER_DIGEST`, which `keys.md` section 10 no longer
+/// registers and which only the old index exchange still uses; the next commit
+/// of this series removes it, and then this list is every label in use.
 pub const REGISTRY: &[Entry] = &[
     entry!(FOLDER_SIGNING_KEY, DeriveKey, "write secret"),
     entry!(FOLDER_DATA_KEY, DeriveKey, "write secret"),
@@ -162,7 +183,9 @@ pub const REGISTRY: &[Entry] = &[
     entry!(DATA_CHUNK_KEY, DeriveKey, "data key"),
     entry!(DATA_CHUNK_NONCE_KEY, DeriveKey, "data key"),
     entry!(DATA_CHUNK_HASH_KEY, DeriveKey, "data key"),
+    entry!(DATA_CHUNK_GEAR_KEY, DeriveKey, "data key"),
     entry!(DATA_RECORD_KEY, DeriveKey, "data key"),
+    entry!(DATA_PATH_TAG_KEY, DeriveKey, "data key"),
     entry!(HANDSHAKE_HINT_KEY, DeriveKey, "access key"),
     entry!(HANDSHAKE_PAYLOAD_KEY, DeriveKey, "access key"),
     entry!(KEY_ED25519, DeriveKey, "device seed"),
@@ -179,10 +202,11 @@ pub const REGISTRY: &[Entry] = &[
     entry!(HASH_RECORD, Hash, "record body"),
     entry!(HASH_CHUNK, Hash, "stored chunk blob"),
     entry!(
-        HASH_WRITER_DIGEST,
+        HASH_SET_LEAF,
         Hash,
-        "previous digest (32) || record hash (32)"
+        "be32(count) || record hashes, ascending"
     ),
+    entry!(HASH_SET_NODE, Hash, "16 child digests (32 each)"),
     entry!(
         HASH_DISCOVERY_PEER,
         Hash,
@@ -199,7 +223,8 @@ pub const REGISTRY: &[Entry] = &[
         Hash,
         "protocol ID, both libp2p identity keys, both Hellos"
     ),
-    entry!(SIG_INDEX, SigPrefix, "record body"),
+    entry!(SIG_INDEX, SigPrefix, "index record body"),
+    entry!(SIG_CLEANUP, SigPrefix, "cleanup record body"),
     entry!(SIG_DEVICE_PROOF, SigPrefix, "transcript hash || role"),
 ];
 
@@ -265,8 +290,8 @@ pub fn labelled_hash(label: HashLabel, parts: &[&[u8]]) -> [u8; 32] {
 }
 
 /// Keyed BLAKE3 under a key that a `derive_key` label made for that one use
-/// (`hk`, `nk`, the hint key, the payload key, the link-confirm key): no label
-/// in the input (`keys.md` 0). The output is written into `out`; the hasher,
+/// (`hk`, `nk`, `gk`, `tk`, the hint key, the payload key, the link-confirm
+/// key): no label in the input (`keys.md` 0). The output is written into `out`; the hasher,
 /// whose state holds the key, and its `blake3::Hash` are wiped.
 pub(crate) fn keyed_hash_into(key: &[u8; 32], parts: &[&[u8]], out: &mut [u8; 32]) {
     let mut hasher = blake3::Hasher::new_keyed(key);
@@ -277,7 +302,7 @@ pub(crate) fn keyed_hash_into(key: &[u8; 32], parts: &[&[u8]], out: &mut [u8; 32
 }
 
 /// [`keyed_hash_into`] for an output that is not itself a secret (a hint, a
-/// chunk nonce, a plaintext hash, a link proof).
+/// chunk nonce, a plaintext hash, a path tag, a link proof).
 #[must_use]
 pub(crate) fn keyed_hash(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
     let mut out = [0u8; 32];
@@ -350,7 +375,7 @@ mod tests {
             );
             assert!(seen.insert(e.label), "{} is registered twice", e.label);
         }
-        assert_eq!(REGISTRY.len(), 25);
+        assert_eq!(REGISTRY.len(), 29);
         let count = |m: Mode| REGISTRY.iter().filter(|e| e.mode == m).count();
         assert_eq!(
             (
@@ -358,7 +383,7 @@ mod tests {
                 count(Mode::Hash),
                 count(Mode::SigPrefix)
             ),
-            (14, 9, 2)
+            (16, 10, 3)
         );
     }
 
@@ -430,5 +455,17 @@ mod tests {
             "licketysync/v1/handshake/payload-key"
         );
         assert_eq!(SIG_INDEX.as_str(), "licketysync/v1/sig/index");
+        assert_eq!(SIG_CLEANUP.as_str(), "licketysync/v1/sig/cleanup");
+        assert_eq!(
+            signed_message(SIG_CLEANUP, b"body"),
+            b"licketysync/v1/sig/cleanup\0body"
+        );
+    }
+
+    /// The writer-digest label, kept for one commit of this series, is no
+    /// longer registered (`keys.md` section 10, 2026-10-25).
+    #[test]
+    fn the_retired_writer_digest_label_is_not_registered() {
+        assert!(REGISTRY.iter().all(|e| e.label != HASH_WRITER_DIGEST.0));
     }
 }

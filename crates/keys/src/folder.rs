@@ -145,8 +145,8 @@ impl FolderVerifyingKey {
 /// What every key of a folder carries in public: the suite, the verification
 /// key and the folder ID derived from them,
 /// `H("licketysync/v1/hash/id/folder", be16(suite) || folder_vk)`. It
-/// verifies the folder's index records
-/// ([`FolderVerifier::verify_index_record`]).
+/// verifies the folder's index records and cleanups
+/// ([`FolderVerifier::verify_record`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct FolderVerifier {
     suite: Suite,
@@ -210,7 +210,7 @@ impl FolderVerifier {
 }
 
 /// The write key (`keys.md` 1.1, 1.3): the write secret and what it derives.
-/// It signs index records and can give out every tier.
+/// It signs index records and cleanups and can give out every tier.
 /// Zeroized on drop; its `Debug` names only the folder.
 pub struct WriteKey {
     secret: WriteSecret,

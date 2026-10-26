@@ -91,11 +91,11 @@ devices) **(decision)**. The `hpke`, `x-wing` and `ml-kem` crates leave the appr
 
 ### 2.2 Signatures: Ed25519
 
-Index records are signed with the folder's signing key, and the handshake's DeviceProof with the
-device key; a forged signature is a forged change or a forged identity. Nothing else is signed in
-suite 1: the folder proof is a sealed payload, not a signature (`keys.md`, handshake proofs). Every
-signature in suite 1 is Ed25519 alone (ruling R-K1, after the owner's answer of 2026-10-22)
-**(decision)**.
+Index records and cleanup records are signed with the folder's signing key, and the handshake's
+DeviceProof with the device key; a forged signature is a forged change or a forged identity. Nothing
+else is signed in suite 1: the folder proof is a sealed payload, not a signature (`keys.md`,
+handshake proofs). Every signature in suite 1 is Ed25519 alone (ruling R-K1, after the owner's
+answer of 2026-10-22) **(decision)**.
 
 - **The algorithm.** Ed25519 as RFC 8032 pure Ed25519: no prehashing (not Ed25519ph), no context
   string (not Ed25519ctx). Public key 32 bytes, signature 64 bytes, secret a 32-byte seed. Crate
@@ -103,12 +103,11 @@ signature in suite 1 is Ed25519 alone (ruling R-K1, after the owner's answer of 
   or `hazmat`. Verification uses `verify_strict`, which rejects small-order and non-canonical
   components, so signatures are strongly unforgeable and not malleable; there is no other
   verification path in first-party code.
-- **Domain separation.** Every signed layout has a label. The bytes signed are
-  `M = label || 0x00 || body`, where `label` is the ASCII string `licketysync/v1/sig/<type>` and
-  `<type>` one of the names `keys.md` registers (`index`, `device-proof`, and any the browser
-  bundle manifest adds). For a record, `body` is its canonical encoding, which
-  already contains the suite number. A label is never reused for two layouts; a layout change is a
-  new label.
+- **Domain separation.** Every signed layout has a label. The bytes signed are `M = label || 0x00 ||
+  body`, where `label` is the ASCII string `licketysync/v1/sig/<type>` and `<type>` one of the names
+  `keys.md` registers (`index`, `cleanup`, `device-proof`, and any the browser bundle manifest
+  adds). For a record, `body` is its canonical encoding, which already contains the suite number. A
+  label is never reused for two layouts; a layout change is a new label.
 - **Encodings.** A signature is exactly 64 bytes and a public key exactly 32, the canonical encoding
   of a point that is not of small order (decoding and re-encoding gives the same bytes), so one key
   has one ID; anything else is malformed and the record or message is rejected before any
@@ -178,19 +177,28 @@ granularity at 64 KiB, 128 KiB at 4 MiB) and does not remove it. Phase 0 uses no
 release that enables one states the channel in `threat-model.md` section 5 and on the site before it
 ships.
 
-**Associated data.** Always present and never empty. The caller's specification names it:
-`keys.md` for chunks and sealed metadata, `protocol.md` for the handshake payload. Every layout binds
-at least the folder and whatever identifies the place (a chunk's `folder_id`; sealed metadata's
-`folder_id || device_id || be64(seq)`; the proof payload's hint, which is keyed with a key derived
-from the folder's access key and covers the folder ID, the transcript and the prover's role), so a
-ciphertext cannot be moved to another folder, record or connection; the suite is bound by the key,
-which exists under one suite only.
+**Associated data.** Always present and never empty. The caller's specification names it: `keys.md`
+for chunks and sealed metadata, `protocol.md` for the handshake payload. Every layout binds at least
+the folder and whatever identifies the place (a chunk's `folder_id`; an index record's sealed
+metadata `folder_id || path_tag`, 64 bytes, and a cleanup's `folder_id`, 32 bytes, `keys.md` §3.4;
+the proof payload's hint, which is keyed with a key derived from the folder's access key and covers
+the folder ID, the transcript and the prover's role), so a ciphertext cannot be moved to another
+folder, file ID, kind of record or connection; the signature over the record that holds a sealed
+part binds it to the rest of that record, and the suite is bound by the key, which exists under one
+suite only.
 
-**Padding (decision).** Chunks and sealed metadata are padded before encryption with Padmé
-(Nikitin et al., PURBs 2019), exactly as `keys.md` defines it (Padmé padding). It is the one padding
-scheme in suite 1 and the one written in this workspace, in the `keys` crate, because no approved
-crate provides it; `threat-model.md` TM-5 permits it by name. It is not a cryptographic primitive:
-a mistake in it leaks sizes, never contents.
+**Padding (decision).** Chunks are padded before encryption with Padmé (Nikitin et al., PURBs 2019),
+exactly as `keys.md` defines it (Padmé padding). A chunk's padded size is the one size a sealed peer
+reads (`protocol.md` §4.4), so this is the padding scheme for chunk sizes: each size is shown to
+within about 3 %, at a cost of at most 12 % for the smallest lengths and 3 % on average, plus the 40
+bytes of nonce and tag (`keys.md` §3.3 tabulates it). Sealed metadata is padded to a power of two of
+at least 256 bytes, exactly the least one that holds it (the coordinator's ruling of 2026-10-25, for
+the owner's review, `keys.md` §3.4), so that its length shows a sealed peer only a size class, not
+how long the path is nor how many devices wrote the file; it costs up to half of the sealed part,
+about a quarter on average, which takes a typical index record from about 470 to about 520 bytes
+(`protocol.md` §2). Both are written in this workspace, in the `keys` crate, because no approved
+crate provides them; `threat-model.md` TM-5 permits them by name. Neither is a cryptographic
+primitive: a mistake in either leaks sizes, never contents.
 
 ### 2.4 Hashing and key derivation: BLAKE3
 
@@ -200,32 +208,36 @@ its own rule, so no two jobs can produce the same output from the same input. `k
 registry lists every label in use and is the one place a label is added; the table below copies it
 and must stay identical to it. Output is always 32 bytes, truncated only where `keys.md` says so (a
 16-byte LAN beacon ID, peer tag and link beacon ID under `licketysync/v1/link/discovery`, a 20-byte
-DHT ID, and the 24-byte chunk nonce); the extendable-output mode is not used. Crate `blake3` 1 in its
-default build, which is not pure Rust: on x86-64 its build script compiles the upstream assembly
-with `cc`, and on little-endian AArch64 the C NEON code (the `pure` feature would turn both off);
-WebAssembly gets SIMD only through the `wasm32_simd` feature, which is not enabled, so the browser
-build runs the portable Rust code. Its unsafe and foreign code is accepted and shows in
-cargo-geiger's report. The `rayon` feature may be used for large files, nothing else.
+DHT ID, the 24-byte chunk nonce, and the 8-byte entries of the chunker's gear table); the
+extendable-output mode is not used. Crate `blake3` 1 in its default build, which is not pure Rust:
+on x86-64 its build script compiles the upstream assembly with `cc`, and on little-endian AArch64
+the C NEON code (the `pure` feature would turn both off); WebAssembly gets SIMD only through the
+`wasm32_simd` feature, which is not enabled, so the browser build runs the portable Rust code. Its
+unsafe and foreign code is accepted and shows in cargo-geiger's report. The `rayon` feature may be
+used for large files, nothing else.
 
-- **The labelled hash `H` for every identifier and link over public data.**
-  `H(label, x) = BLAKE3(label || 0x00 || x)`, with `label` an ASCII label under
-  `licketysync/v1/hash/`. It names folders and devices, records and stored chunks, the discovery
-  hashes, the handshake transcript and the cursor digests that reconcile index records. Plain
-  `BLAKE3(x)` without a label appears nowhere in first-party code: the label is part of the hashed
-  bytes, so a hash of one kind can never equal a hash of another kind over the same bytes. The
-  identity rule is `H("licketysync/v1/hash/id/<kind>", be16(suite) || public_key)` with `<kind>`
-  `folder` (over the folder's verification key) or `device`, as `keys.md` fixes them, so a device key
-  misused as a folder key, or the reverse, cannot produce a matching ID.
+- **The labelled hash `H` for every identifier and link over public data.** `H(label, x) =
+  BLAKE3(label || 0x00 || x)`, with `label` an ASCII label under `licketysync/v1/hash/`. It names
+  folders and devices, records and stored chunks, the discovery hashes, the handshake transcript,
+  and the set digests that reconcile index records. Plain `BLAKE3(x)` without a label appears
+  nowhere in first-party code: the label is part of the hashed bytes, so a hash of one kind can
+  never equal a hash of another kind over the same bytes. The identity rule is
+  `H("licketysync/v1/hash/id/<kind>", be16(suite) || public_key)` with `<kind>` `folder` (over the
+  folder's verification key) or `device`, as `keys.md` fixes them, so a device key misused as a
+  folder key, or the reverse, cannot produce a matching ID.
 - **The keyed hash where the output must mean nothing without the key.** `BLAKE3_keyed(k, x)` with a
   32-byte key `k` that a `derive_key` label made for that one use, so the keyed input carries no
   label of its own: the plaintext chunk hash `plain_hash` under the folder's chunk-hash key (TM-14);
   chunk nonces under the chunk-nonce key (section 2.3); the handshake's folder hint under the hint
-  key and its proof key under the payload key, both derived from the folder's access key; and the
-  link proof under the link-confirm key. Every key holder at every tier derives the access key and
-  nobody else can, so the hint and the proof key are secret from everyone without a key to the folder
-  (a network observer, a relay, a connected peer with no key), from whom they hide which folder the
-  other side is proving; the sealed payload that opens under the proof key is what admits a peer. The
-  drafts keyed both with the folder ID, which every relay knew.
+  key and its proof key under the payload key, both derived from the folder's access key; the path
+  tag, a file's ID, under the path-tag key, so that nobody without a key can compute one (`keys.md`
+  §3.5, TM-14); the chunker's gear table under the chunk-gear key, so that only key holders can tell
+  where chunk boundaries fall (`keys.md` §3.2, TM-14, with the residual stated there); and the link
+  proof under the link-confirm key. Every key holder at every tier derives the access key and nobody
+  else can, so the hint and the proof key are secret from everyone without a key to the folder (a
+  network observer, a relay, a connected peer with no key), from whom they hide which folder the
+  other side is proving; the sealed payload that opens under the proof key is what admits a peer.
+  The drafts keyed both with the folder ID, which every relay knew.
 - **`derive_key` for every purpose key, from uniformly random key material only.**
   `derive_key(label, material)` with a registered label and 32 bytes of uniformly random material: a
   write secret, a data key, an access key, a device seed, a link secret. Every key in the system
@@ -239,34 +251,36 @@ identifiers and hashes, and inside it only its labels module (`crates/keys/src/l
 every hash in the workspace is one of the four jobs above under its label. On main `protocol` and
 `index` are stubs with no dependencies. `protocol` is to depend on `keys`, take the folder hint and
 the proof key from it, and build the transcript hash with its labelled hash
-(`labels::labelled_hash`); it computes no hash itself and never sees plaintext. `index` uses `keys`'s
-record hash and its cursor-digest helper. `keys` depends on neither. The control is cargo-deny:
-`deny.toml`'s `blake3` and `chacha20poly1305` entries list `licketysync-keys` as their only wrapper,
-so that no other crate may depend on either. In `keys` and `protocol`, a Semgrep tripwire
-(`.semgrep/project.yml`) flags every call into `blake3` (`hash`, `keyed_hash`, `derive_key`, and a
-`Hasher` from `new`, `default`, `new_keyed` or `new_derive_key`) and every `use` or `extern crate` of
-it, except in `keys`'s labels module, which it excludes by path, in the crates' integration tests
-and out-of-line `tests.rs` modules, and inside a `mod tests`; so the qualified paths the first rule
-matches are the only way to reach the crate. It catches mistakes, not intent: Semgrep does not
-resolve paths, so a call it cannot parse, such as one inside a macro, passes. The cases it must and
-must not flag are in `.semgrep/tests/project.rs`, which CI runs with `semgrep --test` before the
-scan; the exclusion by path is exercised by the scan itself.
+(`labels::labelled_hash`); it computes no hash itself and never sees plaintext. `index` uses
+`keys`'s record hash, its path-tag helper and its set-digest helper. `keys` depends on neither. The
+control is cargo-deny: `deny.toml`'s `blake3` and `chacha20poly1305` entries list `licketysync-keys`
+as their only wrapper, so that no other crate may depend on either. In `keys` and `protocol`, a
+Semgrep tripwire (`.semgrep/project.yml`) flags every call into `blake3` (`hash`, `keyed_hash`,
+`derive_key`, and a `Hasher` from `new`, `default`, `new_keyed` or `new_derive_key`) and every `use`
+or `extern crate` of it, except in `keys`'s labels module, which it excludes by path, in the crates'
+integration tests and out-of-line `tests.rs` modules, and inside a `mod tests`; so the qualified
+paths the first rule matches are the only way to reach the crate. It catches mistakes, not intent:
+Semgrep does not resolve paths, so a call it cannot parse, such as one inside a macro, passes. The
+cases it must and must not flag are in `.semgrep/tests/project.rs`, which CI runs with `semgrep
+--test` before the scan; the exclusion by path is exercised by the scan itself.
 
 **Label format.** A label is ASCII, lowercase, from `a-z`, `0-9`, `-` and `/`, and reads
 `licketysync/v1/<area>/<purpose>`: `<area>` groups labels by what they derive from or serve
 (`folder`, `data`, `key`, `link`, `handshake`, `hash`, `sig`), and `<purpose>` is one or more
 `/`-separated words. The prefix `licketysync/v1/` is reserved for suite 1; suite 2 uses
-`licketysync/v2/`. Every label is a `const` in `keys`'s label registry (`crates/keys/src/labels.rs`),
-which the other crates import; every `derive_key` label has a test vector of its own (section 4.4),
-and every other label is exercised by the vectors of the construction that uses it, so a changed
-label fails a test. The table below is `keys.md`'s registry, copied row for row and byte for byte so
-that the two can be compared mechanically; the section pointers inside it are the registry's own and
-refer to `keys.md` and `protocol.md`, the one place this file carries a section number of either.
-Removed on 2026-10-22: the `identity/`, `epoch/` and `wrap/` labels, `folder/root-seed`,
-`folder/chunk-hash-key`, `key/ml-dsa-65`, `key/x-wing`, `hash/id/identity`, `hash/id/key`, the
-keyed `handshake/folder-hint` and `handshake/proof-key`, and the `sig/` labels of the drafts' key
-records, the Folder record, the folder proof and the grant proof of possession. Since the drafts
-never shipped, the rule that a label is never reused applies from the first release on.
+`licketysync/v2/`. Every label is a `const` in `keys`'s label registry
+(`crates/keys/src/labels.rs`), which the other crates import; every `derive_key` label has a test
+vector of its own (section 4.4), and every other label is exercised by the vectors of the
+construction that uses it, so a changed label fails a test. The table below is `keys.md`'s registry,
+copied row for row and byte for byte so that the two can be compared mechanically; the section
+pointers inside it are the registry's own and refer to `keys.md` and `protocol.md`, the one place
+this file carries a section number of either. Removed on 2026-10-22: the `identity/`, `epoch/` and
+`wrap/` labels, `folder/root-seed`, `folder/chunk-hash-key`, `key/ml-dsa-65`, `key/x-wing`,
+`hash/id/identity`, `hash/id/key`, the keyed `handshake/folder-hint` and `handshake/proof-key`, and
+the `sig/` labels of the drafts' key records, the Folder record, the folder proof and the grant
+proof of possession. Removed on 2026-10-25: `hash/writer-digest`; added then: `data/path-tag-key`,
+`data/chunk-gear-key`, `hash/set-leaf`, `hash/set-node` and `sig/cleanup`. Since the drafts never
+shipped, the rule that a label is never reused applies from the first release on.
 
 | Label | Mode | Material / input | Output |
 | --- | --- | --- | --- |
@@ -276,7 +290,9 @@ never shipped, the rule that a label is never reused applies from the first rele
 | `licketysync/v1/data/chunk-key` | derive_key | data key | `ck` (§3.1) |
 | `licketysync/v1/data/chunk-nonce-key` | derive_key | data key | `nk` (§3.1) |
 | `licketysync/v1/data/chunk-hash-key` | derive_key | data key | `hk` (§3.1) |
+| `licketysync/v1/data/chunk-gear-key` | derive_key | data key | `gk` (§3.1), the keyed-BLAKE3 key of the chunker's gear table (§3.2) |
 | `licketysync/v1/data/record-key` | derive_key | data key | `rk` (§3.1) |
+| `licketysync/v1/data/path-tag-key` | derive_key | data key | `tk` (§3.1), the keyed-BLAKE3 key of path tags, the file IDs (§3.5) |
 | `licketysync/v1/handshake/hint-key` | derive_key | access key | keyed-BLAKE3 key of the folder hint (§4) |
 | `licketysync/v1/handshake/payload-key` | derive_key | access key | keyed-BLAKE3 key that gives each connection's proof key (§4) |
 | `licketysync/v1/key/ed25519` | derive_key | device seed | Ed25519 seed of the device key (§8.1) |
@@ -288,12 +304,14 @@ never shipped, the rule that a label is never reused applies from the first rele
 | `licketysync/v1/hash/id/device` | `H` | be16(suite) \|\| device public key | device ID (§0.3) |
 | `licketysync/v1/hash/record` | `H` | record body | record hash |
 | `licketysync/v1/hash/chunk` | `H` | stored chunk blob | `cipher_hash` |
-| `licketysync/v1/hash/writer-digest` | `H` | previous digest (32) \|\| record hash (32) | cursor digest (`protocol.md` §4.4) |
+| `licketysync/v1/hash/set-leaf` | `H` | be32(count) \|\| record hashes, ascending | set digest, leaf form (`protocol.md` §4.5) |
+| `licketysync/v1/hash/set-node` | `H` | 16 child digests (32 each) | set digest, node form (`protocol.md` §4.5) |
 | `licketysync/v1/hash/discovery-peer` | `H` | salt (16) \|\| announcer libp2p identity key (32) | peer tag (16) in the LAN beacon (§2.2) |
 | `licketysync/v1/hash/discovery-lan` | `H` | salt \|\| folder ID \|\| peer tag \|\| be64(minute) | LAN beacon ID (16) |
 | `licketysync/v1/hash/discovery-dht` | `H` | folder ID \|\| be64(day) | DHT ID (20) |
 | `licketysync/v1/hash/transcript` | `H` | protocol ID, both libp2p identity keys, both Hellos | transcript hash (`protocol.md` §3.3) |
-| `licketysync/v1/sig/index` | prefix of `M` | record body | signed message (§5) |
+| `licketysync/v1/sig/index` | prefix of `M` | index record body | signed message (§5) |
+| `licketysync/v1/sig/cleanup` | prefix of `M` | cleanup record body | signed message (§5) |
 | `licketysync/v1/sig/device-proof` | prefix of `M` | transcript hash \|\| role | signed message (`protocol.md` §3.4) |
 
 BLAKE3's own guidance for `derive_key` contexts is "[application] [commit timestamp] [purpose]"; the
@@ -553,11 +571,12 @@ newtype over `Zeroizing<[u8; 32]>` or a struct deriving `Zeroize, ZeroizeOnDrop`
 ### 4.2 Constant-time comparison
 
 Any comparison in which one side is secret or derived from a secret (keys, seeds, tokens,
-passphrase-derived keys, AEAD outputs compared by hand, the local API token) uses `subtle::ConstantTimeEq::ct_eq` and branches on the resulting `Choice` through
-`subtle`'s API; `==`, `assert_eq!` and `cmp` on such values do not appear outside tests. AEAD tags
-and signatures are verified by their crates, which do this internally; first-party code never
-reimplements tag or signature comparison. Comparisons of public values (hashes of public data, IDs,
-lengths, cursor digests) may use `==`.
+passphrase-derived keys, AEAD outputs compared by hand, the local API token) uses
+`subtle::ConstantTimeEq::ct_eq` and branches on the resulting `Choice` through `subtle`'s API; `==`,
+`assert_eq!` and `cmp` on such values do not appear outside tests. AEAD tags and signatures are
+verified by their crates, which do this internally; first-party code never reimplements tag or
+signature comparison. Comparisons of public values (hashes of public data, IDs, lengths, path tags,
+set digests) may use `==`.
 
 ### 4.3 Randomness
 

@@ -162,11 +162,17 @@ fn vector_index_record() {
     let mut variant = |name: &str, f: &dyn Fn(&mut IndexRecord), accepted: bool| {
         let mut b = body.clone();
         f(&mut b);
-        let signed = key.sign_index_record(b.encode_to_vec());
-        let got = Record::from_bytes(&signed.to_bytes(), &v);
+        // A body of another record type is never signed (the keys crate
+        // refuses it): its envelope is built by hand with a zero signature,
+        // which step 1 refuses before any signature is read.
+        let bytes = key.sign_index_record(b.encode_to_vec()).map_or_else(
+            |_| crate::testkit::envelope(&b.encode_to_vec(), &[0; 64]),
+            |signed| signed.to_bytes(),
+        );
+        let got = Record::from_bytes(&bytes, &v);
         assert_eq!(got.is_ok(), accepted, "{name}: {got:?}");
-        seed("index_record", name, &signed.to_bytes());
-        malformed.push(json!({ "name": name, "signed_record": super::input(&signed.to_bytes()), "outcome": got.map_or_else(|e| format!("malformed: {e}"), |_| "accepted".into()) }));
+        seed("index_record", name, &bytes);
+        malformed.push(json!({ "name": name, "signed_record": super::input(&bytes), "outcome": got.map_or_else(|e| format!("malformed: {e}"), |_| "accepted".into()) }));
     };
     variant("suite-0", &|b| b.suite = 0, false);
     variant("suite-other-than-the-folders", &|b| b.suite = 2, false);
@@ -245,7 +251,7 @@ fn vector_index_record() {
     let alien = {
         let mut b = IndexRecord::parse(edit.body()).unwrap();
         b.seq = 2;
-        folder(0x20).sign_index_record(b.encode_to_vec())
+        folder(0x20).sign_index_record(b.encode_to_vec()).unwrap()
     };
     let gap = sign(
         draft(3, vec![], false, vec![], meta("x", Kind::File, 0, 0)),
@@ -296,7 +302,7 @@ fn vector_index_record() {
     // differs), stored opaque; and a forged record that would also be one.
     let mut moved = IndexRecord::parse(edit.body()).unwrap();
     moved.sealed = IndexRecord::parse(file.body()).unwrap().sealed;
-    let fault = key.sign_index_record(moved.encode_to_vec());
+    let fault = key.sign_index_record(moved.encode_to_vec()).unwrap();
     let fault_rec = Record::parse(fault.clone(), &v).unwrap();
     assert_eq!(
         judge(&fault_rec, reply, &held, &v),
@@ -338,7 +344,7 @@ fn vector_index_record() {
             sealed,
             ..IndexRecord::default()
         };
-        key.sign_index_record(body.encode_to_vec())
+        key.sign_index_record(body.encode_to_vec()).unwrap()
     };
     let one_chunk = vec![ChunkRef {
         cipher_hash: vec![0x61; 32],

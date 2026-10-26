@@ -3,6 +3,10 @@
     "input": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "output": "90b2a98e08cac1ee9159cc63e0c40d32646a1b855eede99ea0fa59bbb88dfebf"
   },
+  "licketysync/v1/data/chunk-gear-key": {
+    "input": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "output": "35fefb204af7962e923579e37dd1af56597fbdcf9aae73195d648389c5c4b5e8"
+  },
   "licketysync/v1/data/chunk-hash-key": {
     "input": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "output": "973774eed319f49e03bee951d15b01ce29706be5ee1c1e50e0775293d99d3b9f"
@@ -14,6 +18,10 @@
   "licketysync/v1/data/chunk-nonce-key": {
     "input": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "output": "117a5c49d75edf5701ea19a87682d0dee5f5ec9ea2bec6e8342203c23f790220"
+  },
+  "licketysync/v1/data/path-tag-key": {
+    "input": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "output": "69e04028a8b5b3f37ef172548fc4735705b4670ab41df01554c552db8c8588e6"
   },
   "licketysync/v1/data/record-key": {
     "input": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",

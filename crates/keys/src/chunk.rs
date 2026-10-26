@@ -16,17 +16,23 @@
 //!
 //! The keys come only from a write or read key ([`FolderKey::chunk_keys`]),
 //! which pairs the data key with its own folder ID; a sealed key has none.
+//!
+//! The chunk keys also give the chunker's gear table ([`ChunkKeys::gear_table`],
+//! section 3.2): `gear[i] = be64(BLAKE3_keyed(gk, u8(i))[0..8])`, so that only
+//! key holders can tell where content-defined chunk boundaries fall (TM-14,
+//! with the residual section 3.2 states). Phase 0's engine cuts fixed-size
+//! chunks and does not call it; phase 1's `FastCDC` does.
 
 use core::fmt;
 
 use subtle::{Choice, ConstantTimeEq};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::aead::{xchacha_open, xchacha_seal, AeadError, SealError};
 use crate::folder::{FolderKey, ReadKey, WriteKey};
 use crate::ids::{CipherHash, FolderId};
 use crate::labels::{self, keyed_hash, labelled_hash};
-use crate::secret::{ChunkHashKey, ChunkKey, ChunkNonceKey, DataKey, SecretBytes};
+use crate::secret::{ChunkGearKey, ChunkHashKey, ChunkKey, ChunkNonceKey, DataKey, SecretBytes};
 use crate::suite::sizes;
 
 /// The largest raw chunk: 4 MiB. The engine's `FastCDC` maximum must not exceed it.
@@ -115,13 +121,49 @@ pub fn cipher_hash(stored: &[u8]) -> CipherHash {
     CipherHash(labelled_hash(labels::HASH_CHUNK, &[stored]))
 }
 
-/// The chunk keys of one folder: `ck`, `nk` and `hk`, derived from its data
-/// key, and the associated data, the folder ID. Zeroized on drop.
+/// The chunk keys of one folder: `ck`, `nk`, `hk` and `gk`, derived from its
+/// data key, and the associated data, the folder ID. Zeroized on drop.
 pub struct ChunkKeys {
     ck: ChunkKey,
     nk: ChunkNonceKey,
     hk: ChunkHashKey,
+    gk: ChunkGearKey,
     folder_id: FolderId,
+}
+
+/// The number of entries of the gear table: one per byte value.
+pub const GEAR_ENTRIES: usize = 256;
+
+/// The keyed gear table of the content-defined chunker (section 3.2):
+/// `gear[i] = be64(BLAKE3_keyed(gk, u8(i))[0..8])` for `i` in `0 ..= 255`. It
+/// decides where chunk boundaries fall, so it is kept like key material:
+/// zeroized on drop, printed `[redacted]`, never compared. `FastCDC`'s
+/// left-shifted table is `gear[i] << 1`.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct GearTable([u64; GEAR_ENTRIES]);
+
+impl fmt::Debug for GearTable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("GearTable([redacted])")
+    }
+}
+
+impl GearTable {
+    /// The entry for byte value `byte`.
+    #[must_use]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "a u8 indexes the table's 256 entries, so it is never out of range"
+    )]
+    pub fn get(&self, byte: u8) -> u64 {
+        self.0[usize::from(byte)]
+    }
+
+    /// The 256 entries in order, for the chunker's inner loop.
+    #[must_use]
+    pub fn entries(&self) -> &[u64; GEAR_ENTRIES] {
+        &self.0
+    }
 }
 
 impl fmt::Debug for ChunkKeys {
@@ -137,8 +179,24 @@ impl ChunkKeys {
             ck: dk.chunk_key(),
             nk: dk.chunk_nonce_key(),
             hk: dk.chunk_hash_key(),
+            gk: dk.chunk_gear_key(),
             folder_id,
         }
+    }
+
+    /// The folder's gear table, `gear[i] = be64(BLAKE3_keyed(gk, u8(i))[0..8])`
+    /// (section 3.2), the same at every key holder of the folder, so that
+    /// identical files cut into identical chunks and deduplicate. Each keyed
+    /// hash is wiped as soon as its eight bytes are taken.
+    #[must_use]
+    pub fn gear_table(&self) -> GearTable {
+        let mut table = GearTable([0; GEAR_ENTRIES]);
+        let mut out = Zeroizing::new([0u8; 32]);
+        for (i, entry) in (0..=u8::MAX).zip(table.0.iter_mut()) {
+            crate::labels::keyed_hash_into(self.gk.expose(), &[&[i]], &mut out);
+            *entry = u64::from_be_bytes(crate::bytes::first(&out));
+        }
+        table
     }
 
     /// `plain_hash = BLAKE3_keyed(hk, raw)`, the hash an index record's
@@ -386,6 +444,47 @@ mod tests {
 
     fn hash(keys: &ChunkKeys, raw: &[u8]) -> PlainHash {
         keys.plain_hash(raw)
+    }
+
+    /// `keys.md` 3.2: the gear table is a function of the folder's data key
+    /// alone: every key holder of the folder computes the same table, read
+    /// and write tiers alike, and another folder's table differs.
+    #[test]
+    fn the_gear_table_is_the_folders_and_only_the_folders() {
+        let w = write_key(7);
+        let table = w.chunk_keys().gear_table();
+        let again = w.chunk_keys().gear_table();
+        let from_read = w.read_key().chunk_keys().gear_table();
+        assert_eq!(table.entries(), again.entries(), "deterministic");
+        assert_eq!(
+            table.entries(),
+            from_read.entries(),
+            "the same at every key holder"
+        );
+        let elsewhere = write_key(8).chunk_keys().gear_table();
+        assert!(
+            table
+                .entries()
+                .iter()
+                .zip(elsewhere.entries())
+                .all(|(a, b)| a != b),
+            "another folder's table differs in every entry"
+        );
+        // Each entry is the first eight bytes of the keyed hash of its index,
+        // big-endian.
+        let gk = w.data_key().chunk_gear_key();
+        for i in [0u8, 1, 127, 254, 255] {
+            let full = crate::labels::keyed_hash(gk.expose(), &[&[i]]);
+            assert_eq!(
+                table.get(i),
+                u64::from_be_bytes(full[..8].try_into().unwrap())
+            );
+            assert_eq!(table.entries()[usize::from(i)], table.get(i));
+        }
+        // For this fixed key no two entries repeat.
+        let distinct: std::collections::BTreeSet<u64> = table.entries().iter().copied().collect();
+        assert_eq!(distinct.len(), GEAR_ENTRIES);
+        assert_eq!(format!("{table:?}"), "GearTable([redacted])");
     }
 
     #[test]

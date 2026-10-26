@@ -28,6 +28,6 @@ fuzz_target!(|data: &[u8]| {
         assert!(data.windows(record.body().len()).any(|w| w == record.body()));
         assert_eq!(SignedRecord::from_bytes(&bytes), Ok(record.clone()));
         let _ = record.hash();
-        let _ = folder().verify_index_record(&record);
+        let _ = folder().verify_record(&record);
     }
 });

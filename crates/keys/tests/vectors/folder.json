@@ -1,5 +1,6 @@
 {
   "access_key": "f6d2d1d0528c28a4af56c508671302a26e01abfba5dc116d9ede440cafe2e90c",
+  "chunk_gear_key": "ae153d1e489d57ed167fa590a7712352d709504ace6dbac4b15b5cc0c0b7fb21",
   "chunk_hash_key": "96587d2a225cd874640a5b29ebe02d0ac5da14daa230bbf9d538feb7a4455ea4",
   "chunk_key": "0d7d74b7737d715eefdaf0633c4e95587498b06ac8c2748bf18507ef8baca24e",
   "chunk_nonce_key": "d18c6edef39fdb25cd9c692755facf64d45250be01f318637d6df0623e6ab524",
@@ -8,6 +9,7 @@
   "folder_signing_seed": "bf12d69edd5842fece99939582fde823d5601647974d120f89974b7f4cd0b31a",
   "folder_vk": "cacf9426fcbeefcd21f90082597c8a78fb8d20d90cdd6e40f6334248b29a1258",
   "hint_key": "7a28638eb25f71da7a55a7e888bbc6f9eac3e8f8bed097515fb939a335caa0bb",
+  "path_tag_key": "148f6c481e1886d379a55c5c579fbb05bb9ec3c9eb03e8619d9aa1992e2f3c36",
   "payload_key": "8c2acc4cdfb749b8dd514254ab786282f9fe173be3aa867529c2845fb8ef50b1",
   "read_payload": "0001cacf9426fcbeefcd21f90082597c8a78fb8d20d90cdd6e40f6334248b29a1258009dce20c6112595006f7ac61866e3bebecf04f6fb8a2a88d46588c6ce8f2156",
   "record_key": "b3b54925e89cc41c8133081c2ef972b23b3f4fddc6f6d98c69721244928a6a79",

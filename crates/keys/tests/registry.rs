@@ -116,7 +116,7 @@ fn registry_matches_keys_md_section_10_exactly() {
             "the crate has {label} ({mode:?}), keys.md does not"
         );
     }
-    assert_eq!(spec.len(), 25);
+    assert_eq!(spec.len(), 29);
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn registry_covers_suites_md_section_2_4() {
             "suites.md lists {label} as {mode:?}"
         );
     }
-    assert_eq!(spec.len(), 25);
+    assert_eq!(spec.len(), 29);
 }
 
 /// `suites.md` 2.4 says its table is `keys.md`'s registry "copied row for row
@@ -161,6 +161,6 @@ fn suites_md_section_2_4_copies_keys_md_section_10_row_for_row() {
     };
     let keys = rows_of(&spec("keys.md"), "## 10. Label registry");
     let suites = rows_of(&spec("suites.md"), "### 2.4");
-    assert_eq!(keys.len(), 25, "one label per row");
+    assert_eq!(keys.len(), 29, "one label per row");
     assert_eq!(keys, suites);
 }

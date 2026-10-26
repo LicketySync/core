@@ -92,7 +92,7 @@ fn forge(key: &WriteKey, seq: u64, chunks: &[Chunk], deleted: bool, meta: &[u8])
         sealed,
     }
     .encode_to_vec();
-    Record::parse(key.sign_index_record(body), folder).unwrap()
+    Record::parse(key.sign_index_record(body).unwrap(), folder).unwrap()
 }
 
 #[derive(Default)]
@@ -171,7 +171,7 @@ fn step_one_binds_the_record_to_the_open_folder() {
     );
     let mut body = IndexRecord::parse(signed.body()).unwrap();
     body.suite = 2;
-    let resigned = key.sign_index_record(body.encode_to_vec());
+    let resigned = key.sign_index_record(body.encode_to_vec()).unwrap();
     assert_eq!(
         Record::parse(resigned, key.verifier()),
         Err(WireError::Grammar {
@@ -183,11 +183,10 @@ fn step_one_binds_the_record_to_the_open_folder() {
         Record::from_bytes(&short, key.verifier()),
         Err(WireError::Record(Malformed::SignatureSize(63)))
     );
-    let big = key.sign_index_record(vec![0; MAX_INDEX_RECORD_BYTES]);
-    assert!(matches!(
-        Record::parse(big, key.verifier()),
-        Err(WireError::Record(Malformed::TooLarge(_)))
-    ));
+    // A body that does not decode is never signed (the keys crate's K-3).
+    assert!(key
+        .sign_index_record(vec![0; MAX_INDEX_RECORD_BYTES])
+        .is_err());
     assert!(matches!(
         Record::from_bytes(&[0x0b], key.verifier()),
         Err(WireError::Record(_))
@@ -267,7 +266,7 @@ fn judge_follows_the_steps_in_order() {
     let mut alien = draft(2, 3).sign(&folder(2), &mut fill(4)).unwrap();
     let mut body = IndexRecord::parse(alien.body()).unwrap();
     body.folder_id = v.folder_id().0.to_vec();
-    alien = folder(2).sign_index_record(body.encode_to_vec());
+    alien = folder(2).sign_index_record(body.encode_to_vec()).unwrap();
     let alien = Record::parse(alien, v).unwrap();
     assert_eq!(judge(&alien, Arrival::Push, &index, v), Err(Cause::Forged));
 }
@@ -304,7 +303,11 @@ fn every_writer_fault_of_step_six() {
     let alien = forge(&folder(2), 1, &[], false, &encode(good()));
     let mut body = IndexRecord::parse(alien.signed().body()).unwrap();
     body.folder_id = key.verifier().folder_id().0.to_vec();
-    let moved = Record::parse(key.sign_index_record(body.encode_to_vec()), key.verifier()).unwrap();
+    let moved = Record::parse(
+        key.sign_index_record(body.encode_to_vec()).unwrap(),
+        key.verifier(),
+    )
+    .unwrap();
     assert_eq!(open(moved).err(), Some(WriterFault::Seal(MetaError::Open)));
     assert!(matches!(
         open(forge(&key, 1, &[], false, &[0x0b])).err(),
@@ -543,7 +546,7 @@ fn kinds() {
 
 /// A draft's record with an unknown field of `extra` bytes added to its body,
 /// signed again: what a later release's writer may send.
-fn padded(key: &WriteKey, extra: usize) -> SignedRecord {
+fn padded(key: &WriteKey, extra: usize) -> Result<SignedRecord, Malformed> {
     let base = draft(2, 1).sign(key, &mut fill(4)).unwrap();
     let mut body = base.body().to_vec();
     prost::encoding::bytes::encode(99, &vec![7u8; extra], &mut body);
@@ -555,28 +558,30 @@ fn a_record_of_exactly_max_index_record_bytes_is_accepted() {
     // R2-SF4: the cap is inclusive, and judged on the encoded envelope.
     let key = folder(1);
     let mut extra = MAX_INDEX_RECORD_BYTES - 2_000;
-    let mut exact = padded(&key, extra);
+    let mut exact = padded(&key, extra).unwrap();
     for _ in 0..8 {
         let len = envelope_len(&exact);
         if len == MAX_INDEX_RECORD_BYTES {
             break;
         }
         extra = extra + MAX_INDEX_RECORD_BYTES - len;
-        exact = padded(&key, extra);
+        exact = padded(&key, extra).unwrap();
     }
     assert_eq!(envelope_len(&exact), MAX_INDEX_RECORD_BYTES);
     let bytes = exact.to_bytes();
     assert_eq!(bytes.len(), MAX_INDEX_RECORD_BYTES);
     let r = Record::from_bytes(&bytes, key.verifier()).unwrap();
     assert!(r.verify(key.verifier()).is_ok());
-    let over = padded(&key, extra + 1);
-    assert_eq!(envelope_len(&over), MAX_INDEX_RECORD_BYTES + 1);
+    // One byte more is never signed (the keys crate's K-3), and the bytes
+    // of such an envelope are refused before anything is decoded.
+    assert_eq!(
+        padded(&key, extra + 1),
+        Err(Malformed::TooLarge(MAX_INDEX_RECORD_BYTES + 1))
+    );
+    let mut over = bytes.clone();
+    over.push(0);
     assert!(matches!(
-        Record::parse(over.clone(), key.verifier()),
-        Err(WireError::Record(Malformed::TooLarge(_)))
-    ));
-    assert!(matches!(
-        Record::from_bytes(&over.to_bytes(), key.verifier()),
+        Record::from_bytes(&over, key.verifier()),
         Err(WireError::Record(Malformed::TooLarge(_)))
     ));
 }

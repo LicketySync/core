@@ -6,6 +6,356 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Spec: the index keeps only the latest versions of each path, ordered by version vectors of at most
+  32 entries that only read and write holders can read; sealed peers see almost nothing and replace
+  a version only when a signed record or cleanup names it; deletions are forgotten by the folder's
+  own time; and devices whose clocks are more than a year apart do not sync (the owner's decisions
+  of 2026-10-25: "version vectors, latest only", growth bounded, "one record for a whole folder
+  tree", "sealed peers see almost nothing", "use the folder's own time", and the clock rule). This
+  replaces ruling R-K6 (`supersedes`, keep every record) and the per-writer cursors, digests, ranges
+  and marks of rulings R-K4 and R-K5. The keys crate implements the spec's `keys.md` part in this
+  same commit, so that the gate passes (the registry test reads 29 labels in the spec and 29 in the
+  crate); the protocol and index crates follow in the next commit of this series, and the engine's
+  port after them.
+  - `protocol.md` §4.4 rewritten. An `IndexRecord` carries in the clear only the file ID
+    (`path_tag`, a keyed hash of the path), `replaces` (the fingerprints of the versions it
+    replaces, at most 64), the chunk IDs with their Padmé-padded sizes and the signature; the
+    writer's device ID and counter (its dot), the version vector, the deletion and tree-delete
+    marks, sizes and times are inside the seal (`SealedMeta` fields 8 to 12), under an aad of
+    `folder_id || path_tag`, padded to the least power of two of at least 256 bytes. Read and write
+    holders order versions by vectors (dotted version vectors: `V` covers `U` when
+    `V.vector[U.device_id] ≥ U.counter`), with device-wide Lamport counters floored at the writer's
+    wall clock in microseconds, and keep per file ID only the records nothing they hold replaces.
+    Coverage holds only between applied records: a seal is checked before its vector is used, and an
+    opaque record covers nothing and goes only by a name; the next write at a path names the records
+    there that every release judges writer faults, never one opaque only because its kind is
+    unknown, which may be a newer release's version and which no release silently replaces. A
+    write's vector is the join of the path's bases (the versions on the writing device's disk, kept
+    until a newer one is applied, so that an edit made while a newer version is still downloading
+    never replaces it) pruned to 32, the least recently active writer dropped first (the owner's
+    choice), and its names are those bases and the stale copies it covers. The sealed-peer rule: a
+    sealed peer drops a version only when a held signed record names it or a held cleanup names it
+    in a group whose `because` it holds, keeps both otherwise, and never expires anything. Files are
+    deleted by tombstones, directories by one tree delete, with which the writer issues a signed
+    cleanup (record type 17, label `sig/cleanup`): "forget these records", exact fingerprints in
+    groups `because` the record that replaces them, at most 16 384 per record, held by every tier
+    and forgotten by read and write holders after 30 days of the folder's time. A group acts only
+    while its `because` record is held, on every tier, and no device remembers that it once acted,
+    so what each tier holds and refuses depends only on the records it holds. Cleanups also carry
+    stale copies a write holder learns of from a peer and deletions it has forgotten that a peer
+    still offers, each verified once and named only once its signature has verified, never when a
+    record the write holder holds names it or a cleanup it holds names it in any group, and at most
+    `MAX_PEER_NAMES` (1 048 576) a 30-day window for one peer identity; they replace the earlier
+    drafts' sealed-peer expiry, `Covered` messages and hierarchical tag chains, which are gone. A
+    deletion is forgotten once the folder's own time, the greatest counter of an applied record a
+    read or write holder holds, passes it by the 365-day deletion horizon. The clock rule: a device
+    does not sync with a peer whose Hello `clock_days` is more than 365 days off its own, judged
+    when the first folder opens on the connection (`Close(CLOCK_OUT_OF_RANGE)`; a stranger raises no
+    issue), and a read or write holder neither holds nor relays a record whose counter is more than
+    365 days ahead of its clock when it arrives (the coordinator's reading of the owner's rule,
+    shown to the owner on 2026-10-25), while a store whose records lie more than 365 days ahead
+    keeps its folder closed, so that a clock set back never undoes the device's own unsynced edit;
+    both raise an issue that blames no device, with the remedy (stop syncing the folder, fix the
+    clock, add the folder again, which starts its index afresh) and the remedy's own residual (its
+    records from the wrong-clock time can later reappear or cover its later edits); the spread of a
+    fast clock through correct devices to a slow one, and the partition it makes, are stated. The
+    proofs ("Why it is safe", 1 to 13): coverage means "after", so an older version never replaces a
+    newer one, whatever was pruned; pruning costs spurious conflicts only; nothing is dropped but by
+    a later signed record or by forgetting a deletion; an edit beats a delete; a local write never
+    replaces a version its device has not had on its disk; a name or cleanup says no more than
+    coverage and expiry; a sealed peer loses nothing silently; a replayed cleanup removes no later
+    version; equivocation (two records with one dot) is a conflict on every tier and reconciliation
+    finds it; and the residuals are stated, among them that a replayed old deletion can take a
+    version that came back after it was forgotten from a sealed peer until a write holder meets it.
+    Stale copies at a sealed peer have no per-file bound: a holder of the sealed or read key that
+    kept a folder's history can replay it, and the growth is bounded only by that history, content
+    included, once per `CLEANUP_HORIZON` of the folder's time for each record, and for good in a
+    folder nobody writes to. The next write at a path names its shared writer faults; one at a file
+    ID nobody writes again, and a faulty cleanup, stay, and the writer-fault issue says that saving
+    the file again clears it. §6 promises that step 7's checks other than `kind` never change within
+    major 1, with a compatibility case in §8 item 14.
+  - `protocol.md` §4.5: per-peer local sequences with an index epoch, set digests over record hashes
+    in a 16-way trie of keys, the file ID then the record hash (a cleanup's record hash twice), so
+    that no leaf holds more than 64 records, `ReconcileRequest` and `ReconcileReply`; a round ends
+    caught up at `EQUAL` or after a quiet pass, one that ran to its end and brought nothing, the one
+    meaning of "caught up", so a sealed peer's stale copies or a refused record cost one re-sending
+    per round, not a storm; write holders note stale copies and forgotten records (each verified
+    once, at most `MAX_NOTE_VERIFICATIONS` (4 096) verifications per connection per 10 s, one budget
+    for every folder open on it, the notes kept across connections, each re-judged when it is named)
+    and name them at the round's end, and a round with a cleanup owes another. The convergence
+    argument: read and write holders that exchange hold the same records whatever their clocks
+    within the clock rule; a sealed peer holds the same once a write holder has met it and the
+    rounds its cleanups owe have run. §3.2 and §4.2 add the Hello `clock_days` (at most 2^21 − 1, so
+    that the largest Hello stays 2 668 bytes) and the close reason `CLOCK_OUT_OF_RANGE`; a pass or
+    reply whose records were skipped (a store failure, a paused folder) moves no cursor and is not
+    quiet; cleanups take local sequence numbers like records; key holders fetch the chunks of every
+    head and of opaque records; bases are kept per file ID with the store's metadata, a conflict
+    copy's record a base once the copy is on the disk; the clock rule judges records on arrival
+    only, and a store whose records lie more than a year ahead of the clock keeps its folder closed,
+    re-checked as the clock moves on, until the clock is within a year of them; no round of a folder
+    paused for a store failure starts; a tree delete has `kind` 2 and `size` 0; §4.1 drops `Covered`
+    (0x800D reserved); §4.7, "What the engine needs", §5 (limits, the rules table, constants:
+    `CLEANUP_HORIZON`, `CLOCK_RULE_LIMIT`, `MAX_REPLACES`, `MAX_CLEANUP_ENTRIES`,
+    `MAX_CLEANUP_GROUPS`, `MAX_STALE_KNOWN`, `MAX_NOTE_VERIFICATIONS`, `MAX_PEER_NAMES`,
+    `MAX_FUTURE_KNOWN`; `MAX_PROOF_COMPONENTS` gone), §2 (record sizes, about 520 bytes typical),
+    §6, §7, §8 (items 6, 7 and 12 rewritten, 13 and 14 added) and §9 (in plain words: the sealed
+    tier, what each kind of holder sees, the deletion horizon, the clock rule and its costs,
+    conflict-copy growth in the hourly-log case) follow. No major bump: nothing was released.
+  - `keys.md`: the path-tag key `tk` and flat file IDs (§1.2, §3.1, §3.5), the chunk gear key `gk`
+    and FastCDC's gear table derived from the data key, with the length leak that remains and phase
+    0's fixed-size chunks (§3.2), sizes (§0.1), three signature labels (§0.2), the clock comparisons
+    the index makes (§0), what chunk padding costs and leaves visible (§3.3), sealed metadata with
+    the dot, vector and deletion marks under the 64-byte aad and cleanup metadata under the folder
+    ID, padded exactly to the least power of two that holds it (§3.4), two record types (§1.3, §5,
+    §5.1, §5.3), fingerprint lists in the canonical encoding (§5.2), dots (§8.1, with the warning
+    against device seeds shared by machines that can run at once), first records (§7.2), test
+    vectors, items 1, 6, 8 and 13 (§9, the path-tag vector naming `docs/notés` composed and
+    decomposed), and the registry (§10): `data/path-tag-key`, `data/chunk-gear-key`,
+    `hash/set-leaf`, `hash/set-node` and `sig/cleanup` added, `hash/writer-digest` removed.
+    `suites.md` §2.2 (the cleanup label), §2.3 (the aad and the padding schemes with their cost),
+    §2.4 (the registry copy and the new uses) and §4.2 (public values compared with `==`).
+  - `threat-model.md`: vocabulary, the index asset, §3.2, §3.3 (rewritten: what a sealed peer sees,
+    stated in full; stale copies, their replay and the names they cost write holders; a version a
+    replayed deletion takes away; forgotten deletions brought back; the rename residual; records
+    from the future it relays; the chunk-length residual), §3.6 (vector churn, head floods,
+    cleanups, counter exhaustion, future counters), §3.10, §3.12, TM-9, TM-10, TM-11, TM-14, TM-16,
+    TM-17 (sealed peers drop only on signed names), TM-22 (cleanups, the names a write holder issues
+    and their bounds; the stale copies bounded by the folder's history), TM-40 (the folder's own
+    time and the clock rule, kept apart from the deletion horizon, with the remedy's residual and
+    the spread through correct devices), TM-41 (sealed peers, cleanup groups that act only while
+    their `because` is held, and equivocation), the new TM-43 (pruning and expiry may cost spurious
+    conflicts or reappearance, never silent loss), §5 (to a sealed peer, in full, including arrival
+    times, the sealed part's size class, chunk lengths and the old deletions a case-(c) cleanup
+    names; to a key holder, including microsecond write times; the Hello's clock to anyone who
+    connects) and the appendix's sources.
+  - Prior art read on 2026-10-25: Syncthing BEP v1 and `lib/protocol/vector.go`; Preguiça et al.
+    2010 (dotted version vectors) and Riak's causal-context page; Sheehy 2010 on pruning; Almeida,
+    Baquero and Fonte 2008 (interval tree clocks, rejected: identities need a live participant to
+    fork from and a join to retire); Kleppmann 2022 (reconcile by hashes, never by vectors); Lamport
+    1978 (the counters' rule); Alexeev, Percival and Zhang 2025 and Truong, Merz, Scarlata, Günther
+    and Paterson 2025 (attacks on keyed content-defined chunking).
+  - Models (scratch, not committed): random runs of the coverage rules with pruning to 3 entries
+    (claims 3 and 4, and convergence of two key holders within 2 passes), of bases (claim 9), and of
+    the sealed tier with names and cleanups (claim 11), 20 000 runs each; the comparison of a count
+    cap with time windows for the owner; and a model of the cleanup rule with several paths, tree
+    deletes, expiry by the folder's time, pruning to 3 entries, download lag, replays of old records
+    and read, write and sealed holders, 10 000 runs: with no applied bit, key holders that end
+    caught-up rounds with each other always hold the same records, a key holder's holdings and
+    refusals depend only on what it holds, and a sealed peer holds what a write holder holds within
+    4 of the write holder's rounds; with the earlier draft's applied bit, 9 of 3 000 runs left key
+    holders apart after caught-up rounds and 116 left a sealed peer apart, and a scripted case in
+    which the bit leaves two key holders apart reproduces. The same model with the rule that a write
+    holder notes no record that any group of a cleanup it holds names, 10 000 runs: key holders
+    never apart, and a sealed peer holds what a write holder holds within four rounds, or, in the
+    304 runs where a stale copy waited for the write holder to forget the cleanup that named it,
+    within two rounds once the folder's time had passed that cleanup by `CLEANUP_HORIZON` (one such
+    wait at most).
+  - The keys crate (`licketysync-keys`), in this commit:
+    - Labels (`keys.md` §10): `data/path-tag-key`, `data/chunk-gear-key`, `hash/set-leaf`,
+      `hash/set-node` and `sig/cleanup` registered, `hash/writer-digest` taken out of `REGISTRY`,
+      and the `sig/index` row's input read as §10 has it ("index record body"); 29 labels.
+    - The chunk gear key `gk` and the path-tag key `tk`, derived from the data key, crate-private,
+      zeroized and in the compile-time `ZeroizeOnDrop` guard (TM-6). `ChunkKeys::gear_table`
+      gives the keyed gear table (§3.2) as a `GearTable` that zeroizes on drop and prints
+      `[redacted]`; phase 0's fixed-size chunks do not call it.
+    - `RecordKeys`, made only from a write or read key: the record key, the path-tag key and the
+      folder ID together, with `path_tag` (§3.5, byte for byte, no normalisation) and the sealing
+      and opening of index-record metadata under `folder_id || path_tag` and of cleanup metadata
+      under `folder_id` (§3.4), each by its own function so that no caller passes the other's aad,
+      padded to exactly the least power of two of at least 256 bytes. A sealed part of any other
+      length is malformed (`MetaError::SealedLength`); the seal not opening, the length field not
+      fitting, padding past the least bucket (`MetaError::OverPadded`) and a non-zero padding byte
+      are writer faults, each its own variant (`MetaError::is_malformed` tells the two classes
+      apart); a writer past the cap (`MAX_INDEX_SEALED_BYTES`, 2 097 192; a cleanup's 1 064) gets
+      `MetaError::TooLong`, never a panic.
+    - Signed records (§5): `RecordType` (16 index, 17 cleanup), which `SignedRecord::from_bytes`
+      now reads from the body's prefix (every other value is malformed) and
+      `SignedRecord::record_type` exposes; `WriteKey::sign_cleanup_record`; and
+      `FolderVerifier::verify_record`, which takes the label from the record's type, so a cleanup
+      body signed under `sig/index`, or the reverse, is forged. It replaces `verify_index_record`,
+      whose one call in the protocol crate and the `index_envelope_parse` fuzz target follow. Both
+      signing functions now read the body's common prefix with the decoder `from_bytes` uses and
+      refuse (`Result<SignedRecord, Malformed>`) a body that does not decode, declares the other
+      record type, or would pass `MAX_INDEX_RECORD_BYTES`, so every `SignedRecord` declares the
+      type it was signed for and reads back as itself (the reviews' K-3); the callers in the
+      protocol and index crates follow, and the protocol vector `record-type-1`, whose body a
+      signing function now refuses, is built with a zero signature (step 1 refuses it before any
+      signature is read; that one entry of `index_record.json` and its fuzz seed change).
+    - `PathTag` and `SetDigest` (32-byte public IDs, compared with `==`, `suites.md` §4.2) and the
+      set-digest helpers of `protocol.md` §4.5: `SetDigest::leaf`, which returns
+      `SetDigest::EMPTY` (32 zero bytes) for no records so that no caller hashes an empty leaf, and
+      `SetDigest::node`.
+    - Vectors (§9): `gk` and `tk` in `folder.json` (item 1), the gear table's entries 0, 127 and
+      255 in `chunk.json` (item 6), `index_record.json` rewritten for item 8, `labels.json` with
+      the two new `derive_key` labels (item 10), and the new `path_tag.json` (item 13), which the
+      protocol and index vectors will share (next commit). Unit and property tests: the bucket
+      boundaries, round trips in the least bucket under both aads, every reader rejection, path
+      tags byte for byte, the gear table's determinism and difference between folders, both
+      record types through `from_bytes`, and `sig/cleanup` against `sig/index`.
+    - Fuzzing (TM-3): `sealed_meta_open` opens every input with the new reader too, as an index
+      record's sealed part at the vectors' path tag and as a cleanup's: a length its kind does
+      not allow is refused before decryption, and what opens fills exactly its least bucket, does
+      not open as the other kind and seals again, under its nonce, to the same bytes. Six seeds
+      written by the keys vectors (`LICKETYSYNC_REGENERATE_VECTORS`).
+    - Kept for this one commit, unchanged, because the protocol and index crates still call them,
+      each documented as retired by `keys.md` on 2026-10-25 and removed in the next commit of this
+      series: `sealed_meta::seal_meta` and `open_meta` (Padmé padding, the 72-byte aad) with the
+      old `MAX_SEALED_BYTES` (1 572 864) and `MetaError::TooShort`; `WriterDigest` and its `then`,
+      with the crate-private `HASH_WRITER_DIGEST`, which is no longer registered (so
+      `labels::REGISTRY` lists every label in use but that one, until then), and the
+      writer-digest vectors of `index_record.json`; the old reader's part of the
+      `sealed_meta_open` fuzz target; and the "not an index record" wording of
+      `Malformed::RecordType`, which the protocol crate's vectors quote.
+  - Decisions for the plan (the owner's where marked; the coordinator's rulings, awaiting the
+    owner's review, where marked; the rest are design choices of this change, for the owner's
+    review):
+    - The index keeps only the latest versions of each path (the owner's decision of 2026-10-25,
+      "version vectors, latest only"; replaces ruling R-K6).
+    - Read and write holders order versions by version vectors compared by the replaced record's
+      dot; a vector has at most 32 entries and drops the least recently active writer first (the
+      owner's choice of 2026-10-25, a count over a time window); a write covers and names at most 32
+      heads.
+    - Sealed peers see only file IDs, replaced fingerprints, chunk IDs with padded sizes and
+      signatures (the owner's decision of 2026-10-25, "sealed peers see almost nothing"), and drop a
+      version only when a signed record or cleanup names it.
+    - Write holders issue signed cleanups naming exact record fingerprints, with tree deletes, for
+      stale copies and for forgotten deletions (the owner's decision of 2026-10-25, that sealed
+      peers drop only what a write holder's signed list names).
+    - Contents are never merged: concurrent versions are kept as conflicts, shown as conflict copies
+      (the owner's decision of 2026-10-25).
+    - A cleanup group acts only while its `because` record is held, on every tier, with no memory of
+      having acted (the coordinator's ruling of 2026-10-25, for the owner's review); its cost is
+      that a stale copy can return to a sealed peer once the record it was named for is replaced.
+    - A write holder verifies a stale copy before it notes it, never verifies a noted one again,
+      verifies at most 4 096 for notes per connection per 10 s, one budget shared by every folder
+      open on it (`MAX_NOTE_VERIFICATIONS`; the sharing is the coordinator's ruling of 2026-10-26,
+      for the owner's review; at most about 2.4 % of one core per connection opened), and never
+      notes one that a record it holds names or that a cleanup it holds names in any group, whether
+      or not that group still applies, so each old record is named at most once per 30 days of the
+      folder's time, however often its file is written; it names at most 1 048 576 for one peer
+      identity per 30 days (`MAX_PEER_NAMES`). All of this is the coordinator's ruling of
+      2026-10-25, for the owner's review, and the cap's value the author's; the cost is that a stale
+      copy replayed after an edit stays at a sealed peer until the cleanup that named it is
+      forgotten.
+    - The next write at a path names the records there that every release judges writer faults,
+      after its bases, the rest in a cleanup `because` the write; a record opaque only because its
+      kind is unknown is never named, and no release silently replaces a newer release's version
+      (the coordinator's ruling of 2026-10-25, for the owner's review).
+    - Counters are device-wide and Lamport, floored at the writer's wall clock in microseconds
+      (capped at 2^61), at most 2^62, sealed. That read and write holders learn microsecond write
+      times from them is the owner's decision of 2026-10-25: "Make sure this is documented - do not
+      hide this detail", and, for microseconds over minutes, "I can work on files in multiple
+      locations nearly simultaneously and the per-minute version resolution is not accurate enough".
+      Sealed peers learn nothing of them.
+    - `written_at` is the writer's wall clock in microseconds since the Unix epoch, the unit of
+      `clock_us` (the coordinator's ruling of 2026-10-26, for the owner's review, in keeping with
+      the owner's decision that key holders see write times to the microsecond).
+    - One record a write holder signs near `MAX_COUNTER` makes the folder unwritable until it is
+      shared again (write holders only; a stated residual).
+    - Deletions are forgotten by the folder's own time, the greatest counter held, after a fixed
+      365-day deletion horizon, the same on every device (the owner's decisions of 2026-10-25, "use
+      the folder's own time", replacing the plan's "configurable, zero meaning never"); sealed peers
+      forget only by cleanup.
+    - A file deleted and forgotten reappears when a device or relay that kept it offers it again
+      (the owner's decision of 2026-10-25); the plan's snapshot rule for returning devices is
+      dropped.
+    - The clock rule (the owner's decision of 2026-10-25): devices whose clocks differ by more than
+      365 days do not sync; that read and write holders also refuse records arriving more than 365
+      days ahead of their clock is the coordinator's reading of the owner's rule, shown to the owner
+      on 2026-10-25; the remedy is to stop syncing the folder on the wrong device, fix its clock and
+      add the folder again, which brings back what it deleted meanwhile and turns its edits into
+      conflict copies to settle. Judging it when the first folder opens on a connection, and an
+      issue that blames no device, are the coordinator's rulings of 2026-10-25, for the owner's
+      review. The remedy's own residual is stated (a per-folder writer generation is an open
+      question for phase 1); a clock up to a year ahead can still make deletions be forgotten early
+      (files come back, never lost) and can cut off a device whose clock is behind. Hello carries
+      the clock to the day.
+    - A device whose clock runs ahead raises every later counter in the folder while it writes; a
+      counter more than a day ahead raises an issue saying the folder's time is ahead, pointing to
+      the device ID the record claims as where it was first seen.
+    - Local writes and a scan's tree deletes are built from the versions on the device's disk (its
+      bases), never from records held but not yet applied.
+    - File IDs are flat keyed hashes of paths under `tk`, derived from the data key.
+    - FastCDC's gear table is derived from the data key under `data/chunk-gear-key` (the
+      coordinator's ruling of 2026-10-25, for the owner's review); published attacks recover such
+      keys from known files, so which keyed chunker phase 1 adopts is phase 1's question; phase 0
+      cuts fixed-size chunks.
+    - A directory is deleted by one tree delete whose vector covers the tree it deletes (the owner's
+      decision of 2026-10-25, "one record for a whole folder tree"), a later tree delete covers an
+      earlier one beneath it, and a file is deleted by a tombstone; a rename is a version at the new
+      path then a tombstone.
+    - A conflict copy becomes an ordinary live file, which the person deletes, when a device writes
+      over the conflict; in the hourly-log case that is up to 3 files an hour, about 26 000 a year
+      and about 300 MB of index a year until they are deleted.
+    - Index sync is per-peer local sequences with an index epoch, then a set-digest check and
+      reconciliation over file IDs; a round ends caught up at equal digests or a quiet pass.
+    - Per-peer state is kept 90 days, at most 4 096 per folder.
+    - Chunks no held record names are freed at the end of the next round, from a durable list.
+    - Sealed metadata is padded to the least power of two of at least 256 bytes that holds it (the
+      coordinator's ruling of 2026-10-25, for the owner's review), so that sealed peers cannot read
+      the number of writers or the path length from its size; chunks keep Padmé. The cost is up to
+      half the sealed part, about a quarter on average.
+    - Record sizes, for a path of about 90 bytes: about 520 bytes for a one-chunk file whose record
+      names one or two devices, 780 with three to seven, 1.3 KB with eight to eighteen and 2.3 KB
+      with more; each further chunk adds about 75 bytes. The plan's budget becomes "typically under
+      1 KB per file; files written by many devices up to about 2.3 KB" (the coordinator's ruling of
+      2026-10-25, for the owner's review).
+    - No bound on the stale copies a sealed peer keeps per file ID (the coordinator's ruling of
+      2026-10-25, for the owner's review, option A): they are bounded only by the folder's history,
+      since a version a held cleanup names is refused; a sealed peer shows its records beyond one
+      per file ID in `FolderStatus` (`extra_versions`, field 7).
+    - TM-43, its own requirement: pruning and expiry may cost spurious conflicts or reappearance,
+      never silent loss (the coordinator's ruling of 2026-10-25, for the owner's review).
+    - `CLEANUP_HORIZON` is 30 days of the folder's time (the coordinator's ruling of 2026-10-25, for
+      the owner's review).
+    - A pass or reply whose records were skipped (a store failure, a paused folder) moves no cursor
+      and is not quiet; cleanups take local sequence numbers like records; key holders fetch the
+      chunks of every head and of opaque records; bases are kept per file ID with the store's
+      metadata; the clock rule judges records on arrival only, and a store whose records lie more
+      than a year ahead of the clock keeps its folder closed rather than drop them; no round of a
+      folder paused for a store failure starts; step 7's checks other than `kind` never change
+      within major 1; a note is re-judged when it is named; the rule against naming what a held
+      cleanup names covers shared writer faults; Hello `clock_days` is at most 2^21 − 1; a tree
+      delete has `kind` 2 and `size` 0 (the coordinator's rulings of 2026-10-25, for the owner's
+      review, some from gaps the engine's brief found).
+    - Consequences of the owner's clock rule, stated in §9 (the coordinator's ruling of 2026-10-25,
+      for the owner's review, that they need no question for the owner): a device whose clock is
+      unset cannot sync until it is set; the remedy does not recall records already sent with
+      far-future dates, which read and write holders refuse and sealed peers relay until the real
+      date comes within a year.
+    - A sealed peer learns, from a cleanup group with an empty `because`, that the index records it
+      names were deletions more than a year old in the folder's time; this leak is stated, not
+      removed (the coordinator's ruling of 2026-10-26, for the owner's review).
+    - The note-verification budget's window is fixed, so a peer can spend up to two windows' budget
+      in a short burst across a boundary, and the 2.4 % bound is an average (the coordinator's
+      ruling of 2026-10-26, for the owner's review).
+    - A folder's notes are shared by every connection and dropped oldest first, so a hostile peer
+      with several connections and genuine old records can push an honest peer's notes out before
+      they are named, which costs an honest sealed peer a slower cleanup and never a loss; per-peer
+      shares are a phase 1 follow-up (the coordinator's ruling of 2026-10-26, for the owner's
+      review).
+    - A tree delete is judged without a walk, through a per-device index of held records ordered by
+      path that keeps least counters, at most two queries per vector entry; and set digests key
+      records by file ID then record hash, so that no leaf holds more than 64 records and a change
+      rehashes at most one leaf and 128 nodes; a store that cannot stage atomically writes the base
+      slots with the metadata and is reopened before its folder resumes after a store failure, which
+      a peer that fills the disk can trigger once per failure; step 3's ancestor lookups cost `O(L)`
+      work per path; `RECORDS` replies page in ascending key order, keeping only the last key sent
+      (the coordinator's rulings of 2026-10-26, for the owner's review).
+    - Plan bullets made stale: Sync engine "Index" (.48214), "Sealed peers" (.48654), "Nothing
+      stalls on one file" (.122706, ordering by supersedes), "Concurrent versions are kept, and
+      nothing rolls back" (.140303) and Folder features "Index growth" (.55484, the horizon and the
+      snapshot rule).
+    - The keys crate's choices (the author's, for review): the verifier takes the signature label
+      from the record type the body declares, and signing refuses a body of another type;
+      `SetDigest::leaf` gives the digest of the set, sorting and deduplicating hashes given out of
+      order; and the gear table is kept like key material, zeroized on drop and in the compile-time
+      guard.
+  - Dependencies: none new.
+  - Reviewed 2026-10-25 to 2026-10-26; every finding fixed, every reviewer clean. Spec: R1
+    ae9dc383f7e161385, R2 a281dc7dff3a4e55b, security afc014fc508deffae (16 fixups, clean on
+    155511d). Keys code: R1 a1c31b0383a318706, R2 a6324b4a6eb8a9464, security ae88535b041666d4f.
+    Authors ad9009b3b0a0d5112 (spec) and af36a5e76af7d9dbc (keys); the merge agent wrote this line.
 - cargo-vet 0.10.3, and the review's last findings (TM-8). The owner's rule takes a release at once
   when it fixes a critical or high vulnerability (the owner's messages of 2026-10-25, quoted in the
   project's CLAUDE.md: "or that has critical vulnerabilities fixed." and, the same day, ""Critical

@@ -148,7 +148,8 @@ pub mod sizes {
     pub const ED25519_SIG: usize = 64;
     /// A write secret, data key, access key and every key derived from them.
     pub const KEY: usize = 32;
-    /// Folder ID, device ID, record hash, ciphertext hash.
+    /// Folder ID, device ID, record hash, ciphertext hash, path tag (and the
+    /// set digests of `protocol.md` 4.5).
     pub const ID: usize = 32;
     /// The device public key as Hello carries it, `be16(suite) || ed25519_pk`.
     pub const DEVICE_PUBLIC_KEY: usize = SUITE + ED25519_PK;

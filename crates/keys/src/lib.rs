@@ -8,11 +8,15 @@
 //! - [`folder`]: the 32-byte write secret and everything it derives (the
 //!   folder's Ed25519 signing key, its data key, its folder ID), the read and
 //!   sealed keys, and the stored form of a folder key.
-//! - [`records`]: the signed envelope that every update travels in, signed
-//!   with the folder's write key and verified by every peer, the record hash
-//!   and the writer digest.
-//! - [`chunk`] and [`sealed_meta`]: chunk and sealed-metadata encryption
-//!   (XChaCha20-Poly1305, Padmé), keyed BLAKE3 chunk hashes.
+//! - [`records`]: the signed envelope that every update travels in, index
+//!   records and cleanups, signed with the folder's write key under the label
+//!   of the record type and verified by every peer, and the record hash.
+//! - [`chunk`] and [`sealed_meta`]: chunk encryption (XChaCha20-Poly1305,
+//!   Padmé padding) with keyed BLAKE3 chunk hashes and the chunker's keyed
+//!   gear table; sealed metadata, padded to a power of two, under the
+//!   associated data of its index record or cleanup; and path tags, the file
+//!   IDs.
+//! - [`set_digest`]: the set digests that reconcile index records.
 //! - [`handshake`] and [`device`]: the hint and the sealed payload of the
 //!   folder proof (one for every tier), the device key and its proof, the
 //!   libp2p identity and the DHT key.
@@ -47,8 +51,9 @@
 //!
 //! # Time
 //!
-//! Nothing here reads a clock, and no key or record expires. The discovery
-//! hashes take the time from the caller.
+//! Nothing here reads a clock, and no key expires. The discovery hashes take
+//! the time from the caller; a record's counter is inside its seal, which this
+//! crate seals and opens without reading it.
 //!
 //! # Secrets
 //!
@@ -73,6 +78,7 @@ pub mod records;
 pub mod rng;
 pub mod sealed_meta;
 pub mod secret;
+pub mod set_digest;
 pub mod sig;
 pub mod suite;
 #[cfg(test)]
@@ -82,8 +88,8 @@ pub mod words;
 pub use aead::{AeadError, SealError};
 pub use folder::{FolderKey, FolderVerifier, ReadKey, SealedKey, WriteKey};
 pub use handshake::Role;
-pub use ids::{CipherHash, DeviceId, FolderId, RecordHash, WriterDigest};
-pub use records::SignedRecord;
+pub use ids::{CipherHash, DeviceId, FolderId, PathTag, RecordHash, SetDigest, WriterDigest};
+pub use records::{RecordType, SignedRecord};
 pub use rng::RandomFill;
 pub use secret::{DataKey, WriteSecret};
 pub use sig::Signature;
