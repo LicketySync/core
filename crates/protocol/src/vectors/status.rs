@@ -32,7 +32,11 @@ fn vector_close_and_status() {
             seed(
                 "message_parse",
                 &format!("close-{name}"),
-                &[&[1u8], &body[..]].concat(),
+                &[
+                    &[super::frames::selector(crate::frame::MessageType::Close)],
+                    &body[..],
+                ]
+                .concat(),
             );
             closes.push(
                 json!({ "reason": reason.name(), "detail": detail, "body": super::input(&body) }),
@@ -81,7 +85,11 @@ fn vector_close_and_status() {
         seed(
             "message_parse",
             &format!("status-{i}"),
-            &[&[9u8], &st.encode_to_vec()[..]].concat(),
+            &[
+                &[super::frames::selector(crate::frame::MessageType::Status)],
+                &st.encode_to_vec()[..],
+            ]
+            .concat(),
         );
     }
     let mut bad = Pair::open();
@@ -112,8 +120,40 @@ fn vector_close_and_status() {
         .b
         .saw(|e| matches!(e, Event::PeerNamed { device_name } if device_name == "phone")));
 
+    // extra_versions (field 7), as the decoder reads it: 3 at a sealed holder
+    // with two stale copies and one real conflict, 1 at a read holder with
+    // that conflict (the engine fills it from the index).
+    let mut extra = Vec::new();
+    for (holder, n) in [
+        ("sealed-two-stale-copies-and-a-conflict", 3u64),
+        ("read-a-conflict", 1),
+    ] {
+        let st = Status {
+            folders: vec![FolderStatus {
+                folder_id: f.0.to_vec(),
+                index_records: 4,
+                extra_versions: n,
+                ..FolderStatus::default()
+            }],
+            device_name: String::new(),
+        };
+        let body = st.encode_to_vec();
+        assert_eq!(Status::parse(&body).unwrap().folders[0].extra_versions, n);
+        seed(
+            "message_parse",
+            &format!("status-extra-versions-{holder}"),
+            &[
+                &[super::frames::selector(crate::frame::MessageType::Status)],
+                &body[..],
+            ]
+            .concat(),
+        );
+        extra.push(json!({ "holder": holder, "extra_versions": n, "body": h(&body) }));
+    }
+
     let value: Value = json!({
-        "description": "protocol.md 8 items 10 and 11: Close for every reason with and without detail, one whose detail holds a control character (not shown; its reason kept), and Status: the first after the open with the device name and chunks_stored 0, fifty chunks stored within a second reported by one Status, and a name with a control character (PROTOCOL_ERROR).",
+        "description": "protocol.md 8 items 10 and 11: Close for every reason with and without detail, one whose detail holds a control character (not shown; its reason kept), and Status: the first after the open with the device name and chunks_stored 0, fifty chunks stored within a second reported by one Status, extra_versions as decoded, and a name with a control character (PROTOCOL_ERROR).",
+        "extra_versions": extra,
         "closes": closes,
         "close_with_control_detail": h(&control),
         "status_scenario": scenario(&p, &[], json!("A stores fifty chunks within one second after the open")),

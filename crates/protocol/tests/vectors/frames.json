@@ -25,9 +25,9 @@
       "type": "DeviceProof"
     },
     {
-      "body": "0a2001010101010101010101010101010101010101010101010101010101010101012001",
+      "body": "0a2001010101010101010101010101010101010101010101010101010101010101012001410100000000000000",
       "name": "empty-able-fields-absent",
-      "outcome": "accepted 0a2001010101010101010101010101010101010101010101010101010101010101012001",
+      "outcome": "accepted 0a2001010101010101010101010101010101010101010101010101010101010101012001410100000000000000",
       "type": "IndexRequest"
     },
     {
@@ -55,10 +55,10 @@
       "type": "Hello"
     },
     {
-      "body": "0a20010101010101010101010101010101010101010101010101010101010101010120013802",
+      "body": "0a2001010101010101010101010101010101010101010101010101010101010101012901000000000000001802",
       "name": "bool-2",
-      "outcome": "malformed: listed: value out of range",
-      "type": "IndexRequest"
+      "outcome": "malformed: more: value out of range",
+      "type": "IndexRecords"
     },
     {
       "body": "088080808010",
@@ -118,8 +118,14 @@
       "state": "established"
     },
     {
-      "input": "00000002800c",
+      "input": "000000028010",
       "name": "unknown-critical",
+      "outcome": "close UNSUPPORTED_CRITICAL_TYPE (UnknownCriticalType)",
+      "state": "established"
+    },
+    {
+      "input": "00000002800d",
+      "name": "reserved-covered-type",
       "outcome": "close UNSUPPORTED_CRITICAL_TYPE (UnknownCriticalType)",
       "state": "established"
     },

@@ -310,6 +310,28 @@ impl Connection {
         ) else {
             return;
         };
+        // The clock rule (3.2; TM-40): when the first folder opens, and before
+        // any record, chunk or Status of it is sent, the two Hellos' clocks
+        // are compared; more than CLOCK_RULE_LIMIT apart, the connection
+        // closes.
+        if !self.opened_any {
+            if let (Some((ours, theirs)), Some(peer)) = (
+                self.clocks_out_of_range(),
+                self.peer.as_ref().map(|p| p.device_id),
+            ) {
+                self.clock_refused = true;
+                out.events.push(Event::ClockOutOfRange {
+                    folder,
+                    peer,
+                    ours,
+                    theirs,
+                });
+                return self.fail(Cause::ClockOutOfRange, out);
+            }
+        }
+        let Some(state) = self.folders.get_mut(&folder) else {
+            return;
+        };
         state.open = Some(Box::new(super::index::Exchange::new(verifier)));
         if !self.opened_any {
             self.opened_any = true;

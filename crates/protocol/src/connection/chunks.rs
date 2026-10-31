@@ -442,8 +442,8 @@ impl Connection {
         };
     }
 
-    /// A round of this side's range requests with the peer completed: a
-    /// trigger, remembered whatever the pass is doing (R2-B1).
+    /// A round of this side's with the peer completed: a trigger, remembered
+    /// whatever the pass is doing (R2-B1).
     pub(super) fn round_completed_for_chunks(&mut self, folder: FolderId, out: &mut Output) {
         if let Some(x) = open_mut(&mut self.folders, &folder) {
             x.chunks.round_since_not_found = true;

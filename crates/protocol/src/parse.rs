@@ -16,25 +16,32 @@
 //! identity sizes and the suite in common are the connection's Hello checks
 //! (3.2, with their own close reasons); a record's suite and folder against
 //! the open folder are [`crate::record::Record::parse`]'s; a `ProofPayload`'s
-//! tier is the folder proof's (3.5 step 4, REJECTED rather than closed); and
-//! `SealedMeta`'s path grammar, kind and chunk count are step 6's writer-fault
-//! checks.
+//! tier is the folder proof's (3.5 step 4, REJECTED rather than closed); which
+//! request a reply answers, and so whether its `through`, `reset` or kind fits,
+//! is the connection's (4.5); and every check of `SealedMeta` and
+//! `CleanupMeta` beyond the wire format is step 7's ([`crate::record`]), each
+//! a writer fault of its own, so their parsers here are lax on sizes and
+//! counts and strict only on the wire format.
 
 use crate::features::{is_feature_name, is_list_entry};
 use crate::limits::{
-    DEVICE_SIGNATURE_LEN, HINT_LEN, MAX_CHUNKS, MAX_CLOSE_DETAIL_BYTES, MAX_CURSORS_PER_REQUEST,
-    MAX_DEVICE_NAME_BYTES, MAX_FEATURES, MAX_FEATURE_NAME_BYTES, MAX_INDEX_RECORD_BYTES,
-    MAX_LIST_ENTRIES, MAX_LIST_ENTRY_BYTES, MAX_PAGE_RECORDS, MAX_PATH_BYTES, MAX_PROOF_SEALED,
-    MAX_SEALED_BYTES, MAX_SEQ, MAX_STATUS_FOLDERS, MAX_STORED_LEN, MAX_SUITES, MAX_SUPERSEDES,
-    MIN_PROOF_SEALED, MIN_SEALED_BYTES, MIN_STORED_LEN, PRE_HELLO_LIMIT, PROOF_NONCE_LEN,
+    CLEANUP_RECORD_TYPE, DEVICE_SIGNATURE_LEN, HINT_LEN, INDEX_RECORD_TYPE, MAX_CHUNKS,
+    MAX_CLEANUP_ENTRIES, MAX_CLEANUP_GROUPS, MAX_CLEANUP_SEALED_BYTES, MAX_CLOCK_DAYS,
+    MAX_CLOSE_DETAIL_BYTES, MAX_DEVICE_NAME_BYTES, MAX_FEATURES, MAX_FEATURE_NAME_BYTES,
+    MAX_INDEX_RECORD_BYTES, MAX_LIST_ENTRIES, MAX_LIST_ENTRY_BYTES, MAX_LOCAL_SEQ,
+    MAX_PAGE_RECORDS, MAX_PREFIX_NIBBLES, MAX_PROOF_SEALED, MAX_REPLACES, MAX_SEALED_BYTES,
+    MAX_STATUS_FOLDERS, MAX_STORED_LEN, MAX_SUITES, MAX_VECTOR_ENTRIES, MIN_PROOF_SEALED,
+    MIN_STORED_LEN, PRE_HELLO_LIMIT, PROOF_NONCE_LEN,
 };
 use crate::messages::{
-    ChunkRef, ChunkReply, ChunkRequest, ChunkStatus, Close, Cursor, DeviceProof, FolderProof,
-    FolderStatus, Hello, IndexRecord, IndexRecords, IndexRequest, ProofPayload, ProofResult,
-    ProofStatus, SealedMeta, Status, Unsupported,
+    ChunkRef, ChunkReply, ChunkRequest, ChunkStatus, CleanupGroup, CleanupMeta, CleanupRecord,
+    Close, DeviceProof, FolderProof, FolderStatus, Hello, IndexRecord, IndexRecords, IndexRequest,
+    ProofPayload, ProofResult, ProofStatus, ReconcileOutcome, ReconcileReply, ReconcileRequest,
+    SealedMeta, Status, Unsupported, VectorEntry,
 };
 use crate::wire::{empty_or_exact, exact, push_bounded, room, Reader, Seen, WireError, WireType};
 use licketysync_keys::records::SignedRecord;
+use licketysync_keys::sealed_meta::SealedKind;
 
 /// A message body that parses under its bounds.
 pub trait Parse: Sized {
@@ -118,7 +125,7 @@ impl Parse for Hello {
         let mut seen = Seen::default();
         let any = PRE_HELLO_LIMIT as usize;
         while let Some((field, wt)) = r.next_tag()? {
-            seen.check(field, &[1, 7, 8, 9, 10])?;
+            seen.check(field, &[1, 7, 8, 9, 10, 11])?;
             match field {
                 1 => m.device_public_key = to_vec(r.bytes(wt, field, "device_public_key", any)?),
                 3 => r.repeated_uint32(wt, field, "suites", MAX_SUITES, &mut m.suites)?,
@@ -129,6 +136,7 @@ impl Parse for Hello {
                 8 => m.max_requests_in_flight = r.uint32(wt, field, "max_requests_in_flight")?,
                 9 => m.nonce = to_vec(r.bytes(wt, field, "nonce", any)?),
                 10 => m.libp2p_identity = to_vec(r.bytes(wt, field, "libp2p_identity", any)?),
+                11 => m.clock_days = r.uint32(wt, field, "clock_days")?,
                 // Field 2 is reserved (it was `device_name`) and, like any
                 // unknown field, skipped.
                 _ => r.skip(wt)?,
@@ -136,6 +144,9 @@ impl Parse for Hello {
         }
         if m.suites.iter().any(|s| !is_suite_number(*s)) {
             return Err(WireError::OutOfRange { what: "suites" });
+        }
+        if m.clock_days > MAX_CLOCK_DAYS {
+            return Err(WireError::OutOfRange { what: "clock_days" });
         }
         Ok(m)
     }
@@ -291,7 +302,7 @@ impl Parse for ProofResult {
 /// One `SignedRecord` embedded as field `field`: at most
 /// `MAX_INDEX_RECORD_BYTES`, and decoded by the keys crate's strict decoder
 /// (`keys.md` 5.1: each field once, no groups, the signature's 64 bytes, the
-/// record type 16 of the body's common prefix), which every embedded record
+/// record type 16 or 17 of the body's common prefix), which every embedded record
 /// passes before anything else reads it (ruling SF6 of the keys review).
 /// Returns the raw bytes and the decoded envelope, so that a caller keeps
 /// whichever it needs and nothing decodes the record twice.
@@ -338,38 +349,58 @@ pub fn is_stored_len(n: u32) -> bool {
         && licketysync_keys::chunk::padme(padded) == Some(padded)
 }
 
+/// A list of fingerprints that must be ascending without repeats (`keys.md`
+/// 5.2 rule 5; `protocol.md` 4.4 step 1).
+fn ascending(list: &[Vec<u8>], what: &'static str) -> Result<(), WireError> {
+    if list.windows(2).all(|w| matches!(w, [a, b] if a < b)) {
+        Ok(())
+    } else {
+        Err(WireError::Grammar { what })
+    }
+}
+
+/// One 32-byte fingerprint of a list, appended under the list's bound.
+fn fingerprint(
+    r: &mut Reader<'_>,
+    wt: WireType,
+    field: u32,
+    what: &'static str,
+    limit: usize,
+    into: &mut Vec<Vec<u8>>,
+) -> Result<(), WireError> {
+    room(into, limit, what)?;
+    let hash = r.bytes(wt, field, what, ID)?;
+    exact(hash, ID, what)?;
+    into.push(hash.to_vec());
+    Ok(())
+}
+
 impl Parse for IndexRecord {
     /// An index record body under step 1's context-free checks (4.4): the
-    /// suite a suite number, the record type 16, the fixed sizes, `seq` from 1
-    /// to `MAX_SEQ`, a tombstone without chunks, at most 16 `supersedes` of 32
-    /// bytes, the sealed part's 40 to 1 572 864 bytes, and every chunk
-    /// reference's hash and stored length.
+    /// suite a suite number, the record type 16, the folder ID and the path
+    /// tag of 32 bytes, at most `MAX_REPLACES` names of 32 bytes, ascending
+    /// without repeats, at most `MAX_CHUNKS` chunk references each with its
+    /// 32-byte hash and a stored length that is a Padmé length plus 40, and a
+    /// sealed part of 40 bytes plus a power of two from 256 to 2^21.
     fn parse(body: &[u8]) -> Result<Self, WireError> {
         let mut r = Reader::new(body);
         let mut m = Self::default();
         let mut seen = Seen::default();
         while let Some((field, wt)) = r.next_tag()? {
-            seen.check(field, &[1, 2, 3, 5, 6, 11, 13])?;
+            seen.check(field, &[1, 2, 3, 13, 15])?;
             match field {
                 1 => m.suite = r.uint32(wt, field, "suite")?,
                 2 => m.record_type = r.uint32(wt, field, "record_type")?,
                 3 => m.folder_id = to_vec(r.bytes(wt, field, "folder_id", ID)?),
-                5 => m.device_id = to_vec(r.bytes(wt, field, "device_id", ID)?),
-                6 => m.seq = r.uint64(wt, field)?,
-                8 => {
-                    room(&m.supersedes, MAX_SUPERSEDES, "supersedes")?;
-                    let hash = r.bytes(wt, field, "supersedes", ID)?;
-                    exact(hash, ID, "supersedes")?;
-                    m.supersedes.push(hash.to_vec());
-                }
-                11 => m.deleted = r.boolean(wt, field, "deleted")?,
                 12 => {
                     room(&m.chunks, MAX_CHUNKS, "chunks")?;
                     let sub = r.bytes(wt, field, "chunks", usize::MAX)?;
                     m.chunks.push(ChunkRef::parse(sub)?);
                 }
                 13 => m.sealed = to_vec(r.bytes(wt, field, "sealed", MAX_SEALED_BYTES)?),
-                // Fields 4, 7, 9, 10 and 14 are reserved: skipped here, kept
+                15 => m.path_tag = to_vec(r.bytes(wt, field, "path_tag", ID)?),
+                17 => fingerprint(&mut r, wt, field, "replaces", MAX_REPLACES, &mut m.replaces)?,
+                // Fields 4 to 11, 14 and 16 are reserved: skipped here, kept
                 // in the body, which is forwarded as received.
                 _ => r.skip(wt)?,
             }
@@ -377,50 +408,132 @@ impl Parse for IndexRecord {
         if !is_suite_number(m.suite) {
             return Err(WireError::OutOfRange { what: "suite" });
         }
-        if m.record_type != crate::limits::INDEX_RECORD_TYPE {
+        if m.record_type != INDEX_RECORD_TYPE {
             return Err(WireError::OutOfRange {
                 what: "record_type",
             });
         }
         exact(&m.folder_id, ID, "folder_id")?;
-        exact(&m.device_id, ID, "device_id")?;
-        if !(1..=MAX_SEQ).contains(&m.seq) {
-            return Err(WireError::OutOfRange { what: "seq" });
-        }
-        if m.deleted && !m.chunks.is_empty() {
-            return Err(WireError::Grammar {
-                what: "deleted with chunks",
-            });
-        }
-        if m.sealed.len() < MIN_SEALED_BYTES {
+        exact(&m.path_tag, ID, "path_tag")?;
+        ascending(&m.replaces, "replaces: ascending, no repeats")?;
+        if !SealedKind::Index.is_sealed_len(m.sealed.len()) {
             return Err(WireError::OutOfRange { what: "sealed" });
         }
         Ok(m)
     }
 }
 
-impl Parse for SealedMeta {
-    /// The opened metadata of a record whose signature verified. A failure
-    /// here is the writer's fault (4.4 step 6), never the sender's.
+/// One cleanup group, its names counted against `budget`, what is left of
+/// `MAX_CLEANUP_ENTRIES` for the record.
+fn cleanup_group(body: &[u8], budget: &mut usize) -> Result<CleanupGroup, WireError> {
+    let mut r = Reader::new(body);
+    let mut m = CleanupGroup::default();
+    let mut seen = Seen::default();
+    while let Some((field, wt)) = r.next_tag()? {
+        seen.check(field, &[1])?;
+        match field {
+            1 => m.because = to_vec(r.bytes(wt, field, "groups.because", ID)?),
+            2 => {
+                if *budget == 0 {
+                    return Err(WireError::LimitExceeded {
+                        what: "groups.forget",
+                        limit: MAX_CLEANUP_ENTRIES,
+                        offered: u64::try_from(MAX_CLEANUP_ENTRIES + 1).unwrap_or(u64::MAX),
+                    });
+                }
+                fingerprint(
+                    &mut r,
+                    wt,
+                    field,
+                    "groups.forget",
+                    MAX_CLEANUP_ENTRIES,
+                    &mut m.forget,
+                )?;
+                *budget -= 1;
+            }
+            _ => r.skip(wt)?,
+        }
+    }
+    empty_or_exact(&m.because, ID, "groups.because")?;
+    ascending(&m.forget, "groups.forget: ascending, no repeats")?;
+    Ok(m)
+}
+
+impl Parse for CleanupGroup {
+    /// One cleanup group on its own, under the bounds a cleanup puts on it:
+    /// `because` empty or 32 bytes, at most `MAX_CLEANUP_ENTRIES` names of 32
+    /// bytes, ascending without repeats (the fuzz target's entry point; a
+    /// cleanup's groups share one budget of names).
+    fn parse(body: &[u8]) -> Result<Self, WireError> {
+        let mut budget = MAX_CLEANUP_ENTRIES;
+        cleanup_group(body, &mut budget)
+    }
+}
+
+impl Parse for CleanupRecord {
+    /// A cleanup body under step 1's context-free checks (4.4): the suite a
+    /// suite number, the record type 17, the folder ID of 32 bytes, 1 to
+    /// `MAX_CLEANUP_GROUPS` groups, each `because` empty or 32 bytes, 1 to
+    /// `MAX_CLEANUP_ENTRIES` names in all, each of 32 bytes and ascending
+    /// without repeats within its group, and a sealed part of 296, 552 or
+    /// 1 064 bytes.
+    fn parse(body: &[u8]) -> Result<Self, WireError> {
+        let mut r = Reader::new(body);
+        let mut m = Self::default();
+        let mut seen = Seen::default();
+        let mut budget = MAX_CLEANUP_ENTRIES;
+        while let Some((field, wt)) = r.next_tag()? {
+            seen.check(field, &[1, 2, 3, 5])?;
+            match field {
+                1 => m.suite = r.uint32(wt, field, "suite")?,
+                2 => m.record_type = r.uint32(wt, field, "record_type")?,
+                3 => m.folder_id = to_vec(r.bytes(wt, field, "folder_id", ID)?),
+                4 => {
+                    room(&m.groups, MAX_CLEANUP_GROUPS, "groups")?;
+                    let sub = r.bytes(wt, field, "groups", usize::MAX)?;
+                    m.groups.push(cleanup_group(sub, &mut budget)?);
+                }
+                5 => m.sealed = to_vec(r.bytes(wt, field, "sealed", MAX_CLEANUP_SEALED_BYTES)?),
+                _ => r.skip(wt)?,
+            }
+        }
+        if !is_suite_number(m.suite) {
+            return Err(WireError::OutOfRange { what: "suite" });
+        }
+        if m.record_type != CLEANUP_RECORD_TYPE {
+            return Err(WireError::OutOfRange {
+                what: "record_type",
+            });
+        }
+        exact(&m.folder_id, ID, "folder_id")?;
+        if m.groups.is_empty() {
+            return Err(WireError::Grammar {
+                what: "a cleanup with no group",
+            });
+        }
+        if budget == MAX_CLEANUP_ENTRIES {
+            return Err(WireError::Grammar {
+                what: "a cleanup with no name",
+            });
+        }
+        if !SealedKind::Cleanup.is_sealed_len(m.sealed.len()) {
+            return Err(WireError::OutOfRange { what: "sealed" });
+        }
+        Ok(m)
+    }
+}
+
+impl Parse for VectorEntry {
+    /// One vector entry, lax on its sizes: step 7 judges them.
     fn parse(body: &[u8]) -> Result<Self, WireError> {
         let mut r = Reader::new(body);
         let mut m = Self::default();
         let mut seen = Seen::default();
         while let Some((field, wt)) = r.next_tag()? {
-            seen.check(field, &[1, 2, 3, 4, 5, 7])?;
+            seen.check(field, &[1, 2])?;
             match field {
-                1 => m.path = r.string(wt, field, "path", MAX_PATH_BYTES)?,
-                2 => m.kind = r.uint32(wt, field, "kind")?,
-                3 => m.size = r.uint64(wt, field)?,
-                4 => m.mtime_ns = r.int64(wt, field)?,
-                5 => m.mode = r.uint32(wt, field, "mode")?,
-                6 => {
-                    room(&m.plain_hashes, MAX_CHUNKS, "plain_hashes")?;
-                    let hash = r.bytes(wt, field, "plain_hashes", ID)?;
-                    exact(hash, ID, "plain_hashes")?;
-                    m.plain_hashes.push(hash.to_vec());
-                }
-                7 => m.written_at = r.uint64(wt, field)?,
+                1 => m.device_id = to_vec(r.bytes(wt, field, "vector.device_id", usize::MAX)?),
+                2 => m.counter = r.uint64(wt, field)?,
                 _ => r.skip(wt)?,
             }
         }
@@ -428,92 +541,185 @@ impl Parse for SealedMeta {
     }
 }
 
-impl Parse for Cursor {
+impl Parse for SealedMeta {
+    /// The opened metadata of a record (4.4 step 7). Only the wire format is
+    /// judged here (each field once, the wire types, `bool`s and `uint32`s in
+    /// range, valid UTF-8, plaintext hashes of 32 bytes and at most
+    /// `MAX_CHUNKS`); a failure here is "metadata that does not parse". The
+    /// sizes and values of the device ID, the counter and the vector are step
+    /// 7's checks, each a writer fault of its own: entries past the 33rd are
+    /// read and skipped, so that a vector of more than `MAX_VECTOR_ENTRIES` is
+    /// still told as such without being held whole.
     fn parse(body: &[u8]) -> Result<Self, WireError> {
         let mut r = Reader::new(body);
         let mut m = Self::default();
         let mut seen = Seen::default();
         while let Some((field, wt)) = r.next_tag()? {
-            seen.check(field, &[2, 3, 6])?;
+            seen.check(field, &[1, 2, 3, 4, 5, 7, 8, 9, 11, 12])?;
             match field {
-                2 => m.device_id = to_vec(r.bytes(wt, field, "have.device_id", ID)?),
-                3 => m.seq = r.uint64(wt, field)?,
-                6 => m.digest = to_vec(r.bytes(wt, field, "have.digest", ID)?),
-                // Fields 1, 4 and 5 are reserved and skipped.
+                1 => m.path = r.string(wt, field, "path", usize::MAX)?,
+                2 => m.kind = r.uint32(wt, field, "kind")?,
+                3 => m.size = r.uint64(wt, field)?,
+                4 => m.mtime_ns = r.int64(wt, field)?,
+                5 => m.mode = r.uint32(wt, field, "mode")?,
+                6 => fingerprint(
+                    &mut r,
+                    wt,
+                    field,
+                    "plain_hashes",
+                    MAX_CHUNKS,
+                    &mut m.plain_hashes,
+                )?,
+                7 => m.written_at = r.uint64(wt, field)?,
+                8 => m.device_id = to_vec(r.bytes(wt, field, "device_id", usize::MAX)?),
+                9 => m.counter = r.uint64(wt, field)?,
+                10 => {
+                    let sub = r.bytes(wt, field, "vector", usize::MAX)?;
+                    let entry = VectorEntry::parse(sub)?;
+                    if m.vector.len() <= MAX_VECTOR_ENTRIES {
+                        m.vector.push(entry);
+                    }
+                }
+                11 => m.deleted = r.boolean(wt, field, "deleted")?,
+                12 => m.tree = r.boolean(wt, field, "tree")?,
                 _ => r.skip(wt)?,
             }
         }
-        exact(&m.device_id, ID, "have.device_id")?;
-        if m.seq > MAX_SEQ {
-            return Err(WireError::OutOfRange { what: "have.seq" });
+        Ok(m)
+    }
+}
+
+impl Parse for CleanupMeta {
+    /// A cleanup's opened metadata (4.4 step 7): the wire format only; the
+    /// device ID's size and the counter's range are step 7's checks.
+    fn parse(body: &[u8]) -> Result<Self, WireError> {
+        let mut r = Reader::new(body);
+        let mut m = Self::default();
+        let mut seen = Seen::default();
+        while let Some((field, wt)) = r.next_tag()? {
+            seen.check(field, &[1, 2])?;
+            match field {
+                1 => m.device_id = to_vec(r.bytes(wt, field, "device_id", usize::MAX)?),
+                2 => m.counter = r.uint64(wt, field)?,
+                _ => r.skip(wt)?,
+            }
         }
-        exact(&m.digest, if m.seq == 0 { 0 } else { ID }, "have.digest")?;
         Ok(m)
     }
 }
 
 impl Parse for IndexRequest {
-    /// A request under every rule of 4.5 that the request alone decides:
-    /// `have` ascending and unique and inside the range, at most
-    /// `MAX_CURSORS_PER_REQUEST`, `after < through` when both are set, a listed
-    /// request non-empty and without a range, and a `request_id` of at least 1.
+    /// A request under 4.5: the folder ID's 32 bytes, a `request_id` of at
+    /// least 1, an `epoch` that is not 0, and a `since` of at most
+    /// `MAX_LOCAL_SEQ`. Fields 2, 5, 6 and 7 are reserved (the drafts'
+    /// cursors and ranges) and skipped.
     fn parse(body: &[u8]) -> Result<Self, WireError> {
         let mut r = Reader::new(body);
         let mut m = Self::default();
         let mut seen = Seen::default();
         while let Some((field, wt)) = r.next_tag()? {
-            seen.check(field, &[1, 3, 4, 5, 6, 7])?;
+            seen.check(field, &[1, 3, 4, 8, 9])?;
             match field {
                 1 => m.folder_id = to_vec(r.bytes(wt, field, "folder_id", ID)?),
-                2 => {
-                    room(&m.have, MAX_CURSORS_PER_REQUEST, "have")?;
-                    let sub = r.bytes(wt, field, "have", usize::MAX)?;
-                    m.have.push(Cursor::parse(sub)?);
-                }
                 3 => m.max_records = r.uint32(wt, field, "max_records")?,
                 4 => m.request_id = r.uint32(wt, field, "request_id")?,
-                5 => m.after = to_vec(r.bytes(wt, field, "after", ID)?),
-                6 => m.through = to_vec(r.bytes(wt, field, "through", ID)?),
-                7 => m.listed = r.boolean(wt, field, "listed")?,
+                8 => m.epoch = r.fixed64(wt, field)?,
+                9 => m.since = r.uint64(wt, field)?,
                 _ => r.skip(wt)?,
             }
         }
         exact(&m.folder_id, ID, "folder_id")?;
-        empty_or_exact(&m.after, ID, "after")?;
-        empty_or_exact(&m.through, ID, "through")?;
         if m.request_id == 0 {
             return Err(WireError::OutOfRange { what: "request_id" });
         }
-        check_request_shape(&m)?;
+        if m.epoch == 0 {
+            return Err(WireError::OutOfRange { what: "epoch" });
+        }
+        if m.since > MAX_LOCAL_SEQ {
+            return Err(WireError::OutOfRange { what: "since" });
+        }
         Ok(m)
     }
 }
 
-/// The range and list rules of an `IndexRequest` (4.5), on fields whose sizes
-/// are already checked.
-fn check_request_shape(m: &IndexRequest) -> Result<(), WireError> {
-    let grammar = |what| Err(WireError::Grammar { what });
-    if m.listed && (m.have.is_empty() || !m.after.is_empty() || !m.through.is_empty()) {
-        return grammar("listed: have non-empty, no range");
+/// A `ReconcileRequest`'s prefix: at most 128 bytes, each a nibble (0 to 15).
+#[must_use]
+pub fn is_prefix(prefix: &[u8]) -> bool {
+    prefix.len() <= MAX_PREFIX_NIBBLES && prefix.iter().all(|n| *n <= 15)
+}
+
+impl Parse for ReconcileRequest {
+    /// A request under 4.5: the folder ID's 32 bytes, a `request_id` of at
+    /// least 1, a prefix of at most 128 nibbles, and a 32-byte digest.
+    fn parse(body: &[u8]) -> Result<Self, WireError> {
+        let mut r = Reader::new(body);
+        let mut m = Self::default();
+        let mut seen = Seen::default();
+        while let Some((field, wt)) = r.next_tag()? {
+            seen.check(field, &[1, 2, 3, 4])?;
+            match field {
+                1 => m.folder_id = to_vec(r.bytes(wt, field, "folder_id", ID)?),
+                2 => m.request_id = r.uint32(wt, field, "request_id")?,
+                3 => m.prefix = to_vec(r.bytes(wt, field, "prefix", MAX_PREFIX_NIBBLES)?),
+                4 => m.digest = to_vec(r.bytes(wt, field, "digest", ID)?),
+                _ => r.skip(wt)?,
+            }
+        }
+        exact(&m.folder_id, ID, "folder_id")?;
+        exact(&m.digest, ID, "digest")?;
+        if m.request_id == 0 {
+            return Err(WireError::OutOfRange { what: "request_id" });
+        }
+        if !is_prefix(&m.prefix) {
+            return Err(WireError::OutOfRange { what: "prefix" });
+        }
+        Ok(m)
     }
-    if !m.after.is_empty() && !m.through.is_empty() && m.after >= m.through {
-        return grammar("after < through");
+}
+
+impl Parse for ReconcileReply {
+    /// A reply under 4.5: the folder ID's 32 bytes, an `outcome` of 1 to 3,
+    /// exactly 16 children of 32 bytes on `CHILDREN` and none on another
+    /// outcome, an `epoch` that is not 0, and a `through` of at most
+    /// `MAX_LOCAL_SEQ`. Whether it answers a request outstanding, and whether
+    /// `through` may be set for its prefix, is the connection's.
+    fn parse(body: &[u8]) -> Result<Self, WireError> {
+        let mut r = Reader::new(body);
+        let mut m = Self::default();
+        let mut seen = Seen::default();
+        while let Some((field, wt)) = r.next_tag()? {
+            seen.check(field, &[1, 2, 3, 5, 6])?;
+            match field {
+                1 => m.folder_id = to_vec(r.bytes(wt, field, "folder_id", ID)?),
+                2 => m.request_id = r.uint32(wt, field, "request_id")?,
+                3 => m.outcome = r.uint32(wt, field, "outcome")?,
+                4 => fingerprint(&mut r, wt, field, "children", 16, &mut m.children)?,
+                5 => m.epoch = r.fixed64(wt, field)?,
+                6 => m.through = r.uint64(wt, field)?,
+                _ => r.skip(wt)?,
+            }
+        }
+        exact(&m.folder_id, ID, "folder_id")?;
+        let outcome = ReconcileOutcome::from_u32(m.outcome)
+            .ok_or(WireError::OutOfRange { what: "outcome" })?;
+        let children = if outcome == ReconcileOutcome::Children {
+            16
+        } else {
+            0
+        };
+        if m.children.len() != children {
+            return Err(WireError::Grammar {
+                what: "children: 16 on CHILDREN, none otherwise",
+            });
+        }
+        if m.epoch == 0 {
+            return Err(WireError::OutOfRange { what: "epoch" });
+        }
+        if m.through > MAX_LOCAL_SEQ {
+            return Err(WireError::OutOfRange { what: "through" });
+        }
+        Ok(m)
     }
-    let ascending = m
-        .have
-        .windows(2)
-        .all(|w| matches!(w, [a, b] if a.device_id < b.device_id));
-    if !ascending {
-        return grammar("have: ascending, each writer once");
-    }
-    let inside = |c: &Cursor| {
-        (m.after.is_empty() || c.device_id > m.after)
-            && (m.through.is_empty() || c.device_id <= m.through)
-    };
-    if !m.have.iter().all(inside) {
-        return grammar("have: inside the range");
-    }
-    Ok(())
 }
 
 /// An `IndexRecords` body with each embedded record decoded once, by the
@@ -528,71 +734,108 @@ pub(crate) struct RecordsPage {
     pub(crate) more: bool,
     /// The request answered; 0 for a push.
     pub(crate) request_id: u32,
+    /// The sender's index epoch, never 0.
+    pub(crate) epoch: u64,
+    /// A local sequence of the sender's to count through, or 0.
+    pub(crate) through: u64,
+    /// A reset page.
+    pub(crate) reset: bool,
+}
+
+/// The fields of an `IndexRecords` other than its records.
+#[derive(Default)]
+struct PageFields {
+    folder_id: Vec<u8>,
+    more: bool,
+    request_id: u32,
+    epoch: u64,
+    through: u64,
+    reset: bool,
 }
 
 /// Reads an `IndexRecords` body, handing each embedded record, decoded once,
-/// to `keep`: at most `MAX_PAGE_RECORDS` records, the folder ID's 32 bytes,
-/// no push with `more`, and no page with `more` that holds no record
-/// (4.5: an honest responder ends a page before a record only when the page
-/// already holds one).
+/// to `keep`, under every rule of 4.5 the page alone decides: at most
+/// `MAX_PAGE_RECORDS` records, the folder ID's 32 bytes, an `epoch` that is
+/// not 0, a `through` of at most `MAX_LOCAL_SEQ`; no push with `more` or
+/// `reset`; no page with `more` that holds no record (an honest responder ends
+/// a page before a record only when the page already holds one); and no
+/// `reset` with records, `more` or `through`.
 fn records_page<T>(
     body: &[u8],
     mut keep: impl FnMut(&[u8], SignedRecord) -> T,
-) -> Result<(Vec<u8>, Vec<T>, bool, u32), WireError> {
+) -> Result<(PageFields, Vec<T>), WireError> {
     let mut r = Reader::new(body);
-    let (mut folder_id, mut records, mut more, mut request_id) = (Vec::new(), Vec::new(), false, 0);
+    let mut f = PageFields::default();
+    let mut records = Vec::new();
     let mut seen = Seen::default();
     while let Some((field, wt)) = r.next_tag()? {
-        seen.check(field, &[1, 3, 4])?;
+        seen.check(field, &[1, 3, 4, 5, 6, 7])?;
         match field {
-            1 => folder_id = to_vec(r.bytes(wt, field, "folder_id", ID)?),
+            1 => f.folder_id = to_vec(r.bytes(wt, field, "folder_id", ID)?),
             2 => {
                 room(&records, MAX_PAGE_RECORDS, "records")?;
                 let (raw, signed) = signed_record(&mut r, wt, field)?;
                 records.push(keep(raw, signed));
             }
-            3 => more = r.boolean(wt, field, "more")?,
-            4 => request_id = r.uint32(wt, field, "request_id")?,
+            3 => f.more = r.boolean(wt, field, "more")?,
+            4 => f.request_id = r.uint32(wt, field, "request_id")?,
+            5 => f.epoch = r.fixed64(wt, field)?,
+            6 => f.through = r.uint64(wt, field)?,
+            7 => f.reset = r.boolean(wt, field, "reset")?,
             _ => r.skip(wt)?,
         }
     }
-    exact(&folder_id, ID, "folder_id")?;
-    if more && request_id == 0 {
-        return Err(WireError::Grammar {
-            what: "a push with more",
-        });
+    exact(&f.folder_id, ID, "folder_id")?;
+    let grammar = |what| Err(WireError::Grammar { what });
+    if f.epoch == 0 {
+        return Err(WireError::OutOfRange { what: "epoch" });
     }
-    if more && records.is_empty() {
-        return Err(WireError::Grammar {
-            what: "a page with more and no records",
-        });
+    if f.through > MAX_LOCAL_SEQ {
+        return Err(WireError::OutOfRange { what: "through" });
     }
-    Ok((folder_id, records, more, request_id))
+    if f.request_id == 0 && (f.more || f.reset) {
+        return grammar("a push with more or reset");
+    }
+    if f.more && records.is_empty() {
+        return grammar("a page with more and no records");
+    }
+    if f.reset && (!records.is_empty() || f.more || f.through != 0) {
+        return grammar("a reset with records, more or through");
+    }
+    Ok((f, records))
 }
 
 /// The connection's decoder of an `IndexRecords` body ([`RecordsPage`]).
 pub(crate) fn parse_records_page(body: &[u8]) -> Result<RecordsPage, WireError> {
-    let (folder_id, records, more, request_id) = records_page(body, |_, signed| signed)?;
+    let (f, records) = records_page(body, |_, signed| signed)?;
     Ok(RecordsPage {
-        folder_id,
+        folder_id: f.folder_id,
         records,
-        more,
-        request_id,
+        more: f.more,
+        request_id: f.request_id,
+        epoch: f.epoch,
+        through: f.through,
+        reset: f.reset,
     })
 }
 
 impl Parse for IndexRecords {
-    /// A page or push (4.5): at most `MAX_PAGE_RECORDS` records, each
+    /// A page or push under the rules of 4.5 the page alone decides (at most
+    /// `MAX_PAGE_RECORDS` records, an `epoch` that is not 0, a `through` of
+    /// at most `MAX_LOCAL_SEQ`, no push with `more` or `reset`, no page with
+    /// `more` and no record, no `reset` with records, `more` or `through`), each record
     /// accepted by the keys crate's envelope decoder and kept as the bytes
-    /// received; no push with `more`, and no page with `more` that holds no
-    /// record.
+    /// received.
     fn parse(body: &[u8]) -> Result<Self, WireError> {
-        let (folder_id, records, more, request_id) = records_page(body, |raw, _| raw.to_vec())?;
+        let (f, records) = records_page(body, |raw, _| raw.to_vec())?;
         Ok(Self {
-            folder_id,
+            folder_id: f.folder_id,
             records,
-            more,
-            request_id,
+            more: f.more,
+            request_id: f.request_id,
+            epoch: f.epoch,
+            through: f.through,
+            reset: f.reset,
         })
     }
 }
@@ -603,7 +846,7 @@ impl Parse for FolderStatus {
         let mut m = Self::default();
         let mut seen = Seen::default();
         while let Some((field, wt)) = r.next_tag()? {
-            seen.check(field, &[1, 2, 3, 4, 5, 6])?;
+            seen.check(field, &[1, 2, 3, 4, 5, 6, 7])?;
             match field {
                 1 => m.folder_id = to_vec(r.bytes(wt, field, "folders.folder_id", ID)?),
                 2 => m.index_records = r.uint64(wt, field)?,
@@ -611,6 +854,7 @@ impl Parse for FolderStatus {
                 4 => m.paused = r.boolean(wt, field, "folders.paused")?,
                 5 => m.free_disk_bytes = r.uint64(wt, field)?,
                 6 => m.chunks_stored = r.uint64(wt, field)?,
+                7 => m.extra_versions = r.uint64(wt, field)?,
                 _ => r.skip(wt)?,
             }
         }

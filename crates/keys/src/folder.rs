@@ -22,8 +22,9 @@
 //! the access. A holder derives the lower keys from its own
 //! ([`FolderKey::lowered`]). A read or sealed key is made only from a write
 //! key or from a payload (a key string, the stored form), never from loose
-//! halves: the chunk and handshake keys of [`crate::chunk`] and
-//! [`crate::handshake`] are built from these keys, so they always pair a key
+//! halves: the chunk keys, the record keys and the handshake keys
+//! ([`crate::chunk::ChunkKeys`], [`crate::sealed_meta::RecordKeys`],
+//! [`crate::handshake`]) are built from these keys, so they always pair a key
 //! with the folder ID it belongs to.
 
 use core::fmt;
@@ -928,6 +929,8 @@ pub(crate) mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::proptest_config(256))]
+
         /// The stored form of any key at any tier reads back to the same key.
         #[test]
         fn stored_forms_round_trip(ws in any::<[u8; 32]>(), tier in tier_strategy()) {

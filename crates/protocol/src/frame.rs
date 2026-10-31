@@ -32,9 +32,10 @@ pub const LENGTH_LEN: usize = 4;
 /// Bytes of the type field, counted in the length.
 pub const TYPE_LEN: usize = 2;
 
-/// The message types of major 1 (`protocol.md` section 4.1). 0x8006 and
-/// 0x800B carried the drafts' key records and are reserved, so they read as
-/// unknown critical types.
+/// The message types of major 1 (`protocol.md` section 4.1). 0x8006 (the
+/// drafts' key records) and 0x800D to 0x800F (0x800D a `Covered` message in
+/// an earlier draft of 2026-10-25) are reserved, so they read as unknown
+/// critical types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
 pub enum MessageType {
@@ -48,7 +49,7 @@ pub enum MessageType {
     FolderProof = 0x8004,
     /// Answer to one `FolderProof`.
     ProofResult = 0x8005,
-    /// "Send what I lack", by range and cursor.
+    /// "Send what you came to hold since", by epoch and local sequence.
     IndexRequest = 0x8007,
     /// Signed index records, paged or pushed.
     IndexRecords = 0x8008,
@@ -56,6 +57,10 @@ pub enum MessageType {
     ChunkRequest = 0x8009,
     /// The chunk, or why not.
     ChunkReply = 0x800A,
+    /// "Here is my digest of this subtree".
+    ReconcileRequest = 0x800B,
+    /// Equal, the subtree's 16 child digests, or its records.
+    ReconcileReply = 0x800C,
     /// Progress per open folder; non-critical.
     Status = 0x0001,
     /// "I do not know that non-critical type"; non-critical.
@@ -64,7 +69,7 @@ pub enum MessageType {
 
 impl MessageType {
     /// Every type of major 1.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::Hello,
         Self::Close,
         Self::DeviceProof,
@@ -74,6 +79,8 @@ impl MessageType {
         Self::IndexRecords,
         Self::ChunkRequest,
         Self::ChunkReply,
+        Self::ReconcileRequest,
+        Self::ReconcileReply,
         Self::Status,
         Self::Unsupported,
     ];
@@ -91,6 +98,8 @@ impl MessageType {
             0x8008 => Self::IndexRecords,
             0x8009 => Self::ChunkRequest,
             0x800A => Self::ChunkReply,
+            0x800B => Self::ReconcileRequest,
+            0x800C => Self::ReconcileReply,
             0x0001 => Self::Status,
             0x0002 => Self::Unsupported,
             _ => return None,
@@ -122,6 +131,8 @@ impl MessageType {
             Self::IndexRecords => "IndexRecords",
             Self::ChunkRequest => "ChunkRequest",
             Self::ChunkReply => "ChunkReply",
+            Self::ReconcileRequest => "ReconcileRequest",
+            Self::ReconcileReply => "ReconcileReply",
             Self::Status => "Status",
             Self::Unsupported => "Unsupported",
         }
@@ -531,8 +542,11 @@ mod tests {
             );
             assert_ne!(t.name(), "");
         }
-        // 0x8006 and 0x800B carried the drafts' key records: reserved now.
-        for n in [0x0000, 0x8000, 0x8006, 0x800B, 0x800C, 0x0003] {
+        assert_eq!(MessageType::ReconcileRequest.as_u16(), 0x800B);
+        assert_eq!(MessageType::ReconcileReply.as_u16(), 0x800C);
+        // 0x8006 carried the drafts' key records, 0x800D an earlier draft's
+        // Covered: reserved, like 0x800E and 0x800F.
+        for n in [0x0000, 0x8000, 0x8006, 0x800D, 0x800E, 0x800F, 0x0003] {
             assert_eq!(MessageType::from_u16(n), None);
         }
         assert_eq!(
@@ -759,6 +773,8 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::testkit::proptest_config(256))]
+
         #[test]
         fn any_frame_within_the_limit_round_trips(t in any::<u16>(), body in proptest::collection::vec(any::<u8>(), 0..=300)) {
             let f = Frame::new(t, body).unwrap();

@@ -12,6 +12,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+licketysync-index = { path = "../crates/index" }
 licketysync-keys = { path = "../crates/keys" }
 licketysync-protocol = { path = "../crates/protocol" }
 prost = "0.14"
@@ -131,6 +132,20 @@ bench = false
 [[bin]]
 name = "handshake"
 path = "fuzz_targets/handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reconcile"
+path = "fuzz_targets/reconcile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "index_ops"
+path = "fuzz_targets/index_ops.rs"
 test = false
 doc = false
 bench = false

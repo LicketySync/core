@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 87d919a49b1e60b2a9e71506b43eb7f5a9a406b34f072f096ad6fc7e9da74870 # shrinks to ops = [Write { dev: 0, path: 0, content: 0 }, Write { dev: 0, path: 1, content: 28 }, Write { dev: 14, path: 2, content: 222 }, Write { dev: 193, path: 1, content: 179 }, Write { dev: 55, path: 2, content: 251 }, Write { dev: 63, path: 3, content: 144 }, Write { dev: 125, path: 3, content: 170 }, Deliver { to: 161, pick: 12102 }, TreeDelete { dev: 163 }, Write { dev: 116, path: 1, content: 69 }, Deliver { to: 90, pick: 56907 }, Deliver { to: 60, pick: 38656 }], cap = 32
+cc 37e8fe619c456542635a62fc1f6c79476d460cc59c0a24858565a27e4447caf0 # shrinks to ops = [Write { dev: 127, path: 3, content: 0 }, Deliver { to: 195, pick: 6 }, Write { dev: 27, path: 3, content: 211 }, Write { dev: 30, path: 3, content: 224 }, Round { a: 180, b: 96 }], cap = 3
+cc c0693d5e4c13b474f20b52ad8469143e410bf196dc6d574d23b8f837447c46ed # shrinks to ops = [Round { a: 33, b: 104 }, Days { n: 366 }], cap = 3
+cc cea558bf54c07f297d90b586f458b264fd8bbe8a1bc4acb923faee7ff8845464 # shrinks to ops = [Write { dev: 136, path: 2, content: 0 }, Rename { dev: 16, from: 2, to: 0 }, Days { n: 366 }, Write { dev: 0, path: 0, content: 0 }, Write { dev: 0, path: 0, content: 0 }], seed = 7841562193165367489, ahead = 0, behind = 0
+cc 96786987551572cfff8ff3c1db8efb8b8a9a80ac5e2e0b2302ac58b77f538ad1 # shrinks to ops = [Round { a: 0, b: 2 }, Write { dev: 2, path: 0, content: 0 }, Round { a: 2, b: 0 }, Write { dev: 0, path: 2, content: 0 }, Round { a: 0, b: 2 }, Write { dev: 2, path: 0, content: 0 }, TreeDelete { dev: 2 }, Round { a: 2, b: 1 }, Write { dev: 1, path: 0, content: 0 }, Round { a: 1, b: 4 }, Write { dev: 4, path: 0, content: 0 }, Round { a: 4, b: 1 }, Write { dev: 1, path: 0, content: 0 }, TreeDelete { dev: 1 }, Round { a: 1, b: 0 }, Write { dev: 0, path: 2, content: 0 }, Round { a: 0, b: 4 }, Write { dev: 4, path: 0, content: 0 }, TreeDelete { dev: 4 }], cap = 2

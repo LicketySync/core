@@ -32,7 +32,7 @@ fn hello_of(p: &Pair, a: bool) -> Vec<u8> {
 /// The largest Hello major 1 sends: every list at its bound, every entry at
 /// its longest, the widest varints.
 fn largest_config(libp2p: [u8; 32]) -> Config {
-    let mut c = Config::new(libp2p);
+    let mut c = Config::new(libp2p, crate::limits::MAX_CLOCK_DAYS);
     c.suites = vec![Suite::ONE];
     c.compressions = std::iter::once("none".to_string())
         .chain((1..32).map(|i| format!("c{i:0>19}")))
@@ -86,6 +86,11 @@ fn vector_hello_transcript_and_device_proof() {
     .unwrap();
     let largest = out.frames[0].clone();
     assert!(largest.len() - 4 <= PRE_HELLO_LIMIT as usize);
+    // Section 2 states 2 668 bytes (2 672 with the length field); this
+    // release's largest is 81 bytes smaller (a spec gap reported with this
+    // change: main's spec said 2 664 against 2 583), and fits all the same.
+    assert_eq!((largest.len() - 4, largest.len()), (2_587, 2_591));
+    assert!(largest.len() <= 2_672);
     assert_eq!(big.state(), State::AwaitingHello);
     seed("hello_check", "largest", &largest[6..]);
 
@@ -155,6 +160,11 @@ fn vector_hello_transcript_and_device_proof() {
     );
     variant("nonce-31-bytes", &|v| v.nonce.truncate(31), pe);
     variant(
+        "clock-days-2097152",
+        &|v| v.clock_days = crate::limits::MAX_CLOCK_DAYS + 1,
+        pe,
+    );
+    variant(
         "max-requests-in-flight-0",
         &|v| v.max_requests_in_flight = 0,
         pe,
@@ -204,7 +214,7 @@ fn vector_hello_transcript_and_device_proof() {
     assert_eq!(ending(&t.a)["row"], "HelloTimeout");
 
     let value: Value = json!({
-        "description": "protocol.md 8 items 2 to 4: the Hellos of devices a0 and b0 (device seeds a0.. and b0..; the role depends only on the keys), the largest Hello, refused variants fed as a first frame, the transcript hash, the device proofs and the device-proof failures.",
+        "description": "protocol.md 8 items 2 to 4: the Hellos of devices a0 and b0 (device seeds a0.. and b0..; the role depends only on the keys; both clocks on day 20 751), the largest Hello (clock_days 2 097 151), refused variants fed as a first frame, the transcript hash, the device proofs and the device-proof failures.",
         "hello_a": h(&ha),
         "hello_b": h(&hb),
         "role_of_a": ra.as_u8(),

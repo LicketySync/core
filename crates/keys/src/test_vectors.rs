@@ -36,7 +36,7 @@ use crate::device::{DeviceKey, DhtKey, Libp2pIdentity};
 use crate::discovery;
 use crate::folder::{FolderKey, WriteKey};
 use crate::handshake::Role;
-use crate::ids::{PathTag, RecordHash, SetDigest, WriterDigest};
+use crate::ids::{PathTag, RecordHash, SetDigest};
 use crate::keystring::{bech32m_encode, Link, HRP_READ, HRP_SEALED, HRP_WRITE, LINK_PREFIX};
 use crate::labels::{self, derive_key, REGISTRY};
 use crate::linking::{self, LinkCode};
@@ -982,16 +982,6 @@ fn vector_index_record() {
     ];
     let sixteen: [SetDigest; 16] =
         core::array::from_fn(|i| SetDigest(fixed32(u8::try_from(i * 16).unwrap())));
-    // The old index exchange's writer digests, kept for one commit of this
-    // series with WriterDigest itself.
-    let mut d = WriterDigest::ZERO;
-    let digests: Vec<Value> = three
-        .iter()
-        .map(|rh| {
-            d = d.then(rh);
-            json!({ "record_hash": h(&rh.0), "digest": h(&d.0) })
-        })
-        .collect();
     check(
         "index_record",
         &json!({
@@ -1040,7 +1030,6 @@ fn vector_index_record() {
                     "digest": h(&SetDigest::node(&sixteen).0),
                 },
             },
-            "writer_digests": digests,
         }),
     );
 }

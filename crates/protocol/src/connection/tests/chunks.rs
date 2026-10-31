@@ -541,14 +541,15 @@ fn a_round_completed_while_the_pass_still_asks_is_a_trigger() {
     // Still asking: a second request of the pass.
     p.b.request_chunk(p.now, CipherHash([2; 32])).unwrap();
     p.now += s(2);
-    // An owed round of B's completes (A serves it by hand).
+    // An owed round of B's completes (A serves it by hand). Without state
+    // for A, the round is the Check alone.
+    p.b.store.peers.clear();
     p.a.serving = false;
     p.a.auto = true;
     let empty = Message::IndexRecords(crate::messages::IndexRecords {
         folder_id: f.0.to_vec(),
-        records: vec![],
-        more: false,
-        request_id: 0,
+        epoch: p.a.store.epoch,
+        ..crate::messages::IndexRecords::default()
     });
     p.b.receive(p.now, &frame(&empty));
     p.settle();
@@ -557,14 +558,15 @@ fn a_round_completed_while_the_pass_still_asks_is_a_trigger() {
             .iter()
             .rev()
             .find_map(|e| match e {
-                Event::Serve { request, .. } => Some(request.clone()),
+                Event::ServeReconcile { request, .. } => Some(*request),
                 _ => None,
             })
             .unwrap();
-    let mut reply = crate::testkit::Reply::new(f, &request, &p.a.store);
-    let page = reply.next_page(p.a.conn.peer_max_message_size());
-    let out = p.a.conn.send_page(Tick::at(p.now), &page, &[]).unwrap();
-    p.a.apply(p.now, out);
+    let parts =
+        p.a.store
+            .reconcile_reply(f, &request, p.a.conn.peer_max_message_size());
+    p.a.replies.extend(parts);
+    p.a.serve_replies(p.now);
     p.settle();
     assert!(p.b.saw(|e| matches!(e, Event::RoundCompleted { .. })));
     assert!(
@@ -632,12 +634,13 @@ fn a_completed_round_is_a_trigger_too() {
         Err(SendError::PassWaiting)
     );
     p.advance(s(2));
-    // An owed round completes: the pass may start.
+    // An owed round completes: the pass may start. Without state for A, the
+    // round is the Check alone.
+    p.b.store.peers.clear();
     let empty = Message::IndexRecords(crate::messages::IndexRecords {
         folder_id: f.0.to_vec(),
-        records: vec![],
-        more: false,
-        request_id: 0,
+        epoch: p.a.store.epoch,
+        ..crate::messages::IndexRecords::default()
     });
     p.b.receive(p.now, &frame(&empty));
     p.settle();

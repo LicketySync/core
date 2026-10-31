@@ -31,7 +31,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use crate::aead::{xchacha_open, xchacha_seal, AeadError, SealError};
 use crate::folder::{FolderKey, ReadKey, WriteKey};
 use crate::ids::{CipherHash, FolderId};
-use crate::labels::{self, keyed_hash, labelled_hash};
+use crate::labels::{self, keyed_hash, keyed_hash_into, labelled_hash};
 use crate::secret::{ChunkGearKey, ChunkHashKey, ChunkKey, ChunkNonceKey, DataKey, SecretBytes};
 use crate::suite::sizes;
 
@@ -193,7 +193,7 @@ impl ChunkKeys {
         let mut table = GearTable([0; GEAR_ENTRIES]);
         let mut out = Zeroizing::new([0u8; 32]);
         for (i, entry) in (0..=u8::MAX).zip(table.0.iter_mut()) {
-            crate::labels::keyed_hash_into(self.gk.expose(), &[&[i]], &mut out);
+            keyed_hash_into(self.gk.expose(), &[&[i]], &mut out);
             *entry = u64::from_be_bytes(crate::bytes::first(&out));
         }
         table
@@ -520,6 +520,8 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::proptest_config(256))]
+
         #[test]
         fn padme_bounds(l in 0u64..(1u64 << 40)) {
             let p = padme(l).unwrap();

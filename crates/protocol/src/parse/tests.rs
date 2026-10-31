@@ -40,6 +40,7 @@ fn hello() -> Hello {
         max_requests_in_flight: 64,
         nonce: vec![9; 32],
         libp2p_identity: vec![8; 32],
+        clock_days: 20_000,
     }
 }
 
@@ -52,38 +53,60 @@ fn record() -> IndexRecord {
         suite: 1,
         record_type: 16,
         folder_id: vec![1; 32],
-        device_id: vec![2; 32],
-        seq: 1,
-        supersedes: vec![vec![3; 32], vec![4; 32]],
-        deleted: false,
         chunks: vec![ChunkRef {
             cipher_hash: vec![6; 32],
             stored_len: 46,
         }],
-        sealed: vec![0; 40],
+        sealed: vec![0; 296],
+        path_tag: vec![2; 32],
+        replaces: vec![vec![3; 32], vec![4; 32]],
+    }
+}
+
+fn group(because: usize, names: &[u8]) -> CleanupGroup {
+    CleanupGroup {
+        because: vec![9; because],
+        forget: names.iter().map(|n| vec![*n; 32]).collect(),
+    }
+}
+
+fn cleanup() -> CleanupRecord {
+    CleanupRecord {
+        suite: 1,
+        record_type: 17,
+        folder_id: vec![1; 32],
+        groups: vec![group(32, &[1, 2]), group(0, &[3])],
+        sealed: vec![0; 296],
     }
 }
 
 fn request() -> IndexRequest {
     IndexRequest {
         folder_id: vec![1; 32],
-        have: vec![
-            Cursor {
-                device_id: vec![2; 32],
-                seq: 0,
-                digest: vec![],
-            },
-            Cursor {
-                device_id: vec![3; 32],
-                seq: 4,
-                digest: vec![5; 32],
-            },
-        ],
         max_records: 0,
         request_id: 1,
-        after: vec![],
-        through: vec![],
-        listed: false,
+        epoch: 7,
+        since: 3,
+    }
+}
+
+fn reconcile() -> ReconcileRequest {
+    ReconcileRequest {
+        folder_id: vec![1; 32],
+        request_id: 2,
+        prefix: vec![1, 15],
+        digest: vec![4; 32],
+    }
+}
+
+fn reply(outcome: u32, children: usize) -> ReconcileReply {
+    ReconcileReply {
+        folder_id: vec![1; 32],
+        request_id: 2,
+        outcome,
+        children: vec![vec![5; 32]; children],
+        epoch: 7,
+        through: 0,
     }
 }
 
@@ -116,6 +139,7 @@ fn every_message_round_trips() {
         status: 2,
     });
     round_trip(&record());
+    round_trip(&cleanup());
     round_trip(&SealedMeta {
         path: "a/b".into(),
         kind: 1,
@@ -124,13 +148,35 @@ fn every_message_round_trips() {
         mode: 0o644,
         plain_hashes: vec![vec![1; 32]],
         written_at: 77,
+        device_id: vec![2; 32],
+        counter: 5,
+        vector: vec![VectorEntry {
+            device_id: vec![3; 32],
+            counter: 4,
+        }],
+        deleted: true,
+        tree: true,
+    });
+    round_trip(&CleanupMeta {
+        device_id: vec![2; 32],
+        counter: 9,
     });
     round_trip(&request());
+    round_trip(&reconcile());
+    round_trip(&reply(1, 0));
+    round_trip(&reply(2, 16));
+    round_trip(&ReconcileReply {
+        through: MAX_LOCAL_SEQ,
+        ..reply(3, 0)
+    });
     round_trip(&IndexRecords {
         folder_id: vec![1; 32],
         records: vec![signed(&record())],
         more: true,
         request_id: 3,
+        epoch: u64::MAX,
+        through: MAX_LOCAL_SEQ,
+        reset: false,
     });
     round_trip(&Status {
         folders: vec![FolderStatus {
@@ -140,6 +186,7 @@ fn every_message_round_trips() {
             paused: true,
             free_disk_bytes: 3,
             chunks_stored: 4,
+            extra_versions: 5,
         }],
         device_name: "laptop".into(),
     });
@@ -177,11 +224,16 @@ fn decoder_rules_shared_by_every_body() {
     varint(&mut body, 9, 2);
     assert_eq!(Close::parse(&body).unwrap(), Close::default());
     // bool 2 and uint32 2^32 are malformed.
-    let mut body = request().encode_to_vec();
-    varint(&mut body, 7, 2);
+    let mut body = IndexRecords {
+        folder_id: vec![1; 32],
+        epoch: 1,
+        ..IndexRecords::default()
+    }
+    .encode_to_vec();
+    varint(&mut body, 3, 2);
     assert_eq!(
-        IndexRequest::parse(&body),
-        Err(WireError::OutOfRange { what: "listed" })
+        IndexRecords::parse(&body),
+        Err(WireError::OutOfRange { what: "more" })
     );
     let mut body = Vec::new();
     varint(&mut body, 1, 1 << 32);
@@ -289,6 +341,21 @@ fn hello_lists_and_grammar() {
     ] {
         assert_eq!(Hello::parse(&h.encode_to_vec()), Err(what));
     }
+    // clock_days: 2 097 151 is the bound, one more is malformed.
+    round_trip(&Hello {
+        clock_days: MAX_CLOCK_DAYS,
+        ..hello()
+    });
+    assert_eq!(
+        Hello::parse(
+            &Hello {
+                clock_days: MAX_CLOCK_DAYS + 1,
+                ..hello()
+            }
+            .encode_to_vec()
+        ),
+        Err(WireError::OutOfRange { what: "clock_days" })
+    );
     let long = Hello {
         compressions: vec!["c".repeat(21)],
         ..hello()
@@ -422,91 +489,134 @@ fn proof_messages_sizes() {
 
 #[test]
 fn index_record_step_one() {
-    let ok = record();
-    round_trip(&ok);
-    let at_max = IndexRecord {
-        seq: MAX_SEQ,
-        ..record()
+    round_trip(&record());
+    let names = |n: usize| -> Vec<Vec<u8>> {
+        (0..n)
+            .map(|i| {
+                let mut h = vec![0; 32];
+                h[31] = u8::try_from(i).unwrap();
+                h
+            })
+            .collect()
     };
-    round_trip(&at_max);
-    let cases: Vec<(IndexRecord, &str)> = vec![
+    round_trip(&IndexRecord {
+        replaces: names(MAX_REPLACES),
+        ..record()
+    });
+    round_trip(&IndexRecord {
+        sealed: vec![0; MAX_SEALED_BYTES],
+        ..record()
+    });
+    round_trip(&IndexRecord {
+        chunks: vec![],
+        replaces: vec![],
+        sealed: vec![0; 40 + 512],
+        ..record()
+    });
+    let cases: Vec<(IndexRecord, WireError)> = vec![
         (
             IndexRecord {
                 suite: 0,
                 ..record()
             },
-            "suite 0",
+            WireError::OutOfRange { what: "suite" },
         ),
         (
             IndexRecord {
                 suite: 65_536,
                 ..record()
             },
-            "suite too large",
+            WireError::OutOfRange { what: "suite" },
         ),
         (
             IndexRecord {
                 record_type: 1,
                 ..record()
             },
-            "record type",
-        ),
-        (IndexRecord { seq: 0, ..record() }, "seq 0"),
-        (
-            IndexRecord {
-                seq: MAX_SEQ + 1,
-                ..record()
+            WireError::OutOfRange {
+                what: "record_type",
             },
-            "seq over",
         ),
         (
             IndexRecord {
-                device_id: vec![2; 31],
+                record_type: 17,
                 ..record()
             },
-            "device id 31",
+            WireError::OutOfRange {
+                what: "record_type",
+            },
         ),
         (
             IndexRecord {
                 folder_id: vec![],
                 ..record()
             },
-            "folder id absent",
+            WireError::WrongLength {
+                what: "folder_id",
+                expected: 32,
+                got: 0,
+            },
         ),
         (
             IndexRecord {
-                deleted: true,
+                path_tag: vec![2; 31],
                 ..record()
             },
-            "deleted with chunks",
+            WireError::WrongLength {
+                what: "path_tag",
+                expected: 32,
+                got: 31,
+            },
         ),
         (
             IndexRecord {
-                supersedes: vec![vec![3; 32]; 17],
+                replaces: names(MAX_REPLACES + 1),
                 ..record()
             },
-            "17 supersedes",
+            WireError::LimitExceeded {
+                what: "replaces",
+                limit: MAX_REPLACES,
+                offered: MAX_REPLACES as u64 + 1,
+            },
         ),
         (
             IndexRecord {
-                supersedes: vec![vec![3; 31]],
+                replaces: vec![vec![4; 32], vec![3; 32]],
                 ..record()
             },
-            "supersedes 31",
+            WireError::Grammar {
+                what: "replaces: ascending, no repeats",
+            },
         ),
         (
             IndexRecord {
-                sealed: vec![0; 39],
+                replaces: vec![vec![3; 32], vec![3; 32]],
                 ..record()
             },
-            "sealed 39",
+            WireError::Grammar {
+                what: "replaces: ascending, no repeats",
+            },
         ),
         (
             IndexRecord {
-                sealed: vec![0; MAX_SEALED_BYTES + 1],
+                sealed: vec![0; 295],
                 ..record()
             },
-            "sealed over",
+            WireError::OutOfRange { what: "sealed" },
+        ),
+        (
+            IndexRecord {
+                sealed: vec![0; 297],
+                ..record()
+            },
+            WireError::OutOfRange { what: "sealed" },
+        ),
+        (
+            IndexRecord {
+                sealed: vec![0; 40 + 128],
+                ..record()
+            },
+            WireError::OutOfRange { what: "sealed" },
         ),
         (
             IndexRecord {
@@ -516,7 +626,28 @@ fn index_record_step_one() {
                 }],
                 ..record()
             },
-            "stored_len not padme + 40",
+            WireError::OutOfRange {
+                what: "chunks.stored_len",
+            },
+        ),
+    ];
+    for (bad, why) in cases {
+        assert_eq!(IndexRecord::parse(&bad.encode_to_vec()), Err(why));
+    }
+    for (bad, why) in [
+        (
+            IndexRecord {
+                replaces: vec![vec![3; 31]],
+                ..record()
+            },
+            "a name of 31 bytes",
+        ),
+        (
+            IndexRecord {
+                sealed: vec![0; MAX_SEALED_BYTES + 1],
+                ..record()
+            },
+            "sealed 2^21 + 41",
         ),
         (
             IndexRecord {
@@ -538,28 +669,18 @@ fn index_record_step_one() {
             },
             "cipher hash 31",
         ),
-    ];
-    for (bad, why) in cases {
+    ] {
         assert!(IndexRecord::parse(&bad.encode_to_vec()).is_err(), "{why}");
     }
-    let sealed_max = IndexRecord {
-        sealed: vec![0; MAX_SEALED_BYTES],
-        ..record()
-    };
-    round_trip(&sealed_max);
-    let tomb = IndexRecord {
-        deleted: true,
-        chunks: vec![],
-        ..record()
-    };
-    round_trip(&tomb);
-    // Reserved fields (4 writer_key_id, 7 previous, 9 version, 10 epoch, 14
-    // resumes) read as unknown fields: skipped.
+    // Reserved fields (4 to 11, 14, 16: the drafts' writer, sequence,
+    // supersedes and deletion fields) read as unknown fields: skipped.
     let mut body = record().encode_to_vec();
-    bytes_field(&mut body, 4, &[0; 16]);
+    bytes_field(&mut body, 4, &[0; 32]);
+    varint(&mut body, 5, 3);
     bytes_field(&mut body, 7, &[0; 32]);
-    varint(&mut body, 10, 3);
+    varint(&mut body, 11, 1);
     bytes_field(&mut body, 14, &[0; 32]);
+    varint(&mut body, 16, 1);
     assert_eq!(IndexRecord::parse(&body).unwrap(), record());
     // The largest and smallest stored lengths are fine.
     assert!(is_stored_len(46));
@@ -569,100 +690,326 @@ fn index_record_step_one() {
 }
 
 #[test]
-fn cursors_and_requests() {
-    let c = |device: u8, seq: u64, digest: usize| Cursor {
-        device_id: vec![device; 32],
-        seq,
-        digest: vec![7; digest],
-    };
-    round_trip(&c(1, 0, 0));
-    round_trip(&c(1, MAX_SEQ, 32));
-    for bad in [c(1, 0, 32), c(1, 1, 0), c(1, 1, 31), c(1, MAX_SEQ + 1, 32)] {
-        assert!(Cursor::parse(&bad.encode_to_vec()).is_err(), "{bad:?}");
+fn cleanup_record_step_one() {
+    round_trip(&cleanup());
+    for sealed in [296, 552, 1064] {
+        round_trip(&CleanupRecord {
+            sealed: vec![0; sealed],
+            ..cleanup()
+        });
     }
-    let with = |have: Vec<Cursor>, after: Vec<u8>, through: Vec<u8>, listed: bool| IndexRequest {
-        have,
-        after,
-        through,
-        listed,
+    // At the bounds: 1 024 groups, 16 384 names in all.
+    let name = |i: usize| -> Vec<u8> {
+        let mut h = vec![0; 32];
+        h[28..].copy_from_slice(&u32::try_from(i).unwrap().to_be_bytes());
+        h
+    };
+    let groups = |g: usize, per: usize| -> Vec<CleanupGroup> {
+        (0..g)
+            .map(|k| CleanupGroup {
+                because: vec![],
+                forget: (0..per).map(|i| name(k * per + i)).collect(),
+            })
+            .collect()
+    };
+    round_trip(&CleanupRecord {
+        groups: groups(MAX_CLEANUP_GROUPS, MAX_CLEANUP_ENTRIES / MAX_CLEANUP_GROUPS),
+        ..cleanup()
+    });
+    round_trip(&CleanupRecord {
+        groups: groups(2, MAX_CLEANUP_ENTRIES / 2),
+        ..cleanup()
+    });
+    let cases: Vec<(CleanupRecord, &str)> = vec![
+        (
+            CleanupRecord {
+                suite: 0,
+                ..cleanup()
+            },
+            "suite 0",
+        ),
+        (
+            CleanupRecord {
+                record_type: 16,
+                ..cleanup()
+            },
+            "record type 16",
+        ),
+        (
+            CleanupRecord {
+                record_type: 18,
+                ..cleanup()
+            },
+            "record type 18",
+        ),
+        (
+            CleanupRecord {
+                folder_id: vec![1; 31],
+                ..cleanup()
+            },
+            "folder id 31",
+        ),
+        (
+            CleanupRecord {
+                groups: vec![],
+                ..cleanup()
+            },
+            "no group",
+        ),
+        (
+            CleanupRecord {
+                groups: groups(MAX_CLEANUP_GROUPS + 1, 1),
+                ..cleanup()
+            },
+            "1 025 groups",
+        ),
+        (
+            CleanupRecord {
+                groups: groups(1, MAX_CLEANUP_ENTRIES + 1),
+                ..cleanup()
+            },
+            "16 385 names",
+        ),
+        (
+            CleanupRecord {
+                groups: groups(2, MAX_CLEANUP_ENTRIES / 2 + 1),
+                ..cleanup()
+            },
+            "16 386 names over two groups",
+        ),
+        (
+            CleanupRecord {
+                groups: vec![
+                    CleanupGroup {
+                        because: vec![],
+                        forget: (0..MAX_CLEANUP_ENTRIES / 2).map(name).collect(),
+                    },
+                    CleanupGroup {
+                        because: vec![],
+                        forget: (MAX_CLEANUP_ENTRIES / 2..=MAX_CLEANUP_ENTRIES)
+                            .map(name)
+                            .collect(),
+                    },
+                ],
+                ..cleanup()
+            },
+            "16 385 names over two groups (P-4)",
+        ),
+        (
+            CleanupRecord {
+                groups: vec![group(32, &[])],
+                ..cleanup()
+            },
+            "no name",
+        ),
+        (
+            CleanupRecord {
+                groups: vec![group(31, &[1])],
+                ..cleanup()
+            },
+            "a because of 31 bytes",
+        ),
+        (
+            CleanupRecord {
+                groups: vec![group(0, &[2, 1])],
+                ..cleanup()
+            },
+            "names out of order",
+        ),
+        (
+            CleanupRecord {
+                groups: vec![group(0, &[1, 1])],
+                ..cleanup()
+            },
+            "a repeated name",
+        ),
+        (
+            CleanupRecord {
+                groups: vec![CleanupGroup {
+                    because: vec![],
+                    forget: vec![vec![1; 31]],
+                }],
+                ..cleanup()
+            },
+            "a name of 31 bytes",
+        ),
+        (
+            CleanupRecord {
+                sealed: vec![0; 297],
+                ..cleanup()
+            },
+            "sealed 297",
+        ),
+        (
+            CleanupRecord {
+                sealed: vec![0; 40 + 2048],
+                ..cleanup()
+            },
+            "sealed past the cleanup cap",
+        ),
+    ];
+    for (bad, why) in cases {
+        assert!(CleanupRecord::parse(&bad.encode_to_vec()).is_err(), "{why}");
+    }
+    // A group and a vector entry on their own (the fuzz target's entries).
+    round_trip(&group(32, &[1, 2]));
+    round_trip(&group(0, &[1]));
+    assert!(CleanupGroup::parse(&group(31, &[1]).encode_to_vec()).is_err());
+    assert!(CleanupGroup::parse(&group(0, &[2, 1]).encode_to_vec()).is_err());
+    let many = CleanupGroup {
+        because: vec![],
+        forget: (0..=MAX_CLEANUP_ENTRIES).map(name).collect(),
+    };
+    assert!(CleanupGroup::parse(&many.encode_to_vec()).is_err());
+    round_trip(&VectorEntry {
+        device_id: vec![1; 7],
+        counter: 9,
+    });
+    // The same name in two groups, and an empty group beside a full one,
+    // are within the text of 4.4 (a spec point the CHANGELOG records): accepted.
+    round_trip(&CleanupRecord {
+        groups: vec![group(0, &[1]), group(32, &[1])],
+        ..cleanup()
+    });
+    round_trip(&CleanupRecord {
+        groups: vec![group(0, &[]), group(32, &[1])],
+        ..cleanup()
+    });
+}
+
+#[test]
+fn exchange_requests_and_replies() {
+    round_trip(&IndexRequest {
+        since: MAX_LOCAL_SEQ,
         ..request()
-    };
-    // Accepted shapes.
-    for ok in [
-        with(vec![], vec![], vec![], false),
-        with(vec![c(5, 1, 32)], vec![4; 32], vec![5; 32], false),
-        with(vec![c(5, 1, 32), c(6, 0, 0)], vec![], vec![], true),
-    ] {
-        round_trip(&ok);
-    }
-    // Refused shapes.
+    });
+    round_trip(&IndexRequest {
+        since: 0,
+        ..request()
+    });
     for (bad, why) in [
         (
-            with(vec![c(3, 0, 0), c(2, 0, 0)], vec![], vec![], false),
-            "unsorted",
+            IndexRequest {
+                epoch: 0,
+                ..request()
+            },
+            WireError::OutOfRange { what: "epoch" },
         ),
         (
-            with(vec![c(2, 0, 0), c(2, 0, 0)], vec![], vec![], false),
-            "twice",
+            IndexRequest {
+                since: MAX_LOCAL_SEQ + 1,
+                ..request()
+            },
+            WireError::OutOfRange { what: "since" },
         ),
         (
-            with(vec![c(4, 0, 0)], vec![4; 32], vec![], false),
-            "at after",
+            IndexRequest {
+                request_id: 0,
+                ..request()
+            },
+            WireError::OutOfRange { what: "request_id" },
         ),
-        (
-            with(vec![c(6, 0, 0)], vec![], vec![5; 32], false),
-            "past through",
-        ),
-        (
-            with(vec![], vec![5; 32], vec![5; 32], false),
-            "after = through",
-        ),
-        (
-            with(vec![], vec![6; 32], vec![5; 32], false),
-            "after > through",
-        ),
-        (
-            with(vec![c(5, 0, 0)], vec![4; 32], vec![], true),
-            "listed with a range",
-        ),
-        (with(vec![], vec![], vec![], true), "listed empty"),
-        (with(vec![], vec![4; 31], vec![], false), "after 31"),
-        (with(vec![], vec![], vec![4; 33], false), "through 33"),
     ] {
-        assert!(IndexRequest::parse(&bad.encode_to_vec()).is_err(), "{why}");
+        assert_eq!(IndexRequest::parse(&bad.encode_to_vec()), Err(why));
     }
-    assert!(IndexRequest::parse(
-        &IndexRequest {
-            request_id: 0,
-            ..request()
-        }
-        .encode_to_vec()
-    )
-    .is_err());
-    // MAX_CURSORS_PER_REQUEST cursors pass; one more is malformed.
-    let many = |n: usize| IndexRequest {
-        have: (0..n)
-            .map(|i| Cursor {
-                device_id: {
-                    let mut d = vec![0; 32];
-                    d[28..].copy_from_slice(&u32::try_from(i).unwrap().to_be_bytes());
-                    d
-                },
-                seq: 0,
+    // The drafts' cursor fields (2, 5, 6, 7) are reserved: skipped.
+    let mut body = request().encode_to_vec();
+    bytes_field(&mut body, 2, &[1, 2]);
+    bytes_field(&mut body, 5, &[0; 32]);
+    varint(&mut body, 7, 1);
+    assert_eq!(IndexRequest::parse(&body).unwrap(), request());
+    // ReconcileRequest: a prefix of 0 to 128 nibbles.
+    round_trip(&ReconcileRequest {
+        prefix: vec![],
+        ..reconcile()
+    });
+    round_trip(&ReconcileRequest {
+        prefix: vec![15; 64],
+        ..reconcile()
+    });
+    round_trip(&ReconcileRequest {
+        prefix: vec![15; 128],
+        ..reconcile()
+    });
+    for (bad, why) in [
+        (
+            ReconcileRequest {
+                prefix: vec![0; 129],
+                ..reconcile()
+            },
+            "a 129-byte prefix",
+        ),
+        (
+            ReconcileRequest {
+                prefix: vec![1, 16],
+                ..reconcile()
+            },
+            "a nibble of 16",
+        ),
+        (
+            ReconcileRequest {
+                digest: vec![4; 31],
+                ..reconcile()
+            },
+            "a digest of 31 bytes",
+        ),
+        (
+            ReconcileRequest {
                 digest: vec![],
-            })
-            .collect(),
-        ..request()
-    };
-    round_trip(&many(MAX_CURSORS_PER_REQUEST));
-    assert_eq!(
-        IndexRequest::parse(&many(MAX_CURSORS_PER_REQUEST + 1).encode_to_vec()),
-        Err(WireError::LimitExceeded {
-            what: "have",
-            limit: MAX_CURSORS_PER_REQUEST,
-            offered: MAX_CURSORS_PER_REQUEST as u64 + 1
-        })
-    );
+                ..reconcile()
+            },
+            "no digest",
+        ),
+        (
+            ReconcileRequest {
+                request_id: 0,
+                ..reconcile()
+            },
+            "request_id 0",
+        ),
+    ] {
+        assert!(
+            ReconcileRequest::parse(&bad.encode_to_vec()).is_err(),
+            "{why}"
+        );
+    }
+    // ReconcileReply.
+    for (bad, why) in [
+        (reply(4, 0), "outcome 4"),
+        (reply(0, 0), "outcome 0"),
+        (reply(2, 15), "15 children"),
+        (reply(1, 16), "children on EQUAL"),
+        (reply(3, 1), "children on RECORDS"),
+        (
+            ReconcileReply {
+                epoch: 0,
+                ..reply(1, 0)
+            },
+            "epoch 0",
+        ),
+        (
+            ReconcileReply {
+                through: MAX_LOCAL_SEQ + 1,
+                ..reply(1, 0)
+            },
+            "through past MAX_LOCAL_SEQ",
+        ),
+        (
+            ReconcileReply {
+                children: vec![vec![5; 31]; 16],
+                ..reply(2, 0)
+            },
+            "a child of 31 bytes",
+        ),
+    ] {
+        assert!(
+            ReconcileReply::parse(&bad.encode_to_vec()).is_err(),
+            "{why}"
+        );
+    }
+    let mut seventeen = reply(2, 16).encode_to_vec();
+    bytes_field(&mut seventeen, 4, &[5; 32]);
+    assert!(ReconcileReply::parse(&seventeen).is_err(), "17 children");
 }
 
 #[test]
@@ -672,24 +1019,89 @@ fn index_records_pages_and_embedded_envelopes() {
         records,
         more,
         request_id,
+        epoch: 5,
+        through: 0,
+        reset: false,
     };
     round_trip(&page(vec![], false, 0));
+    let grammar = |what| Err(WireError::Grammar { what });
     assert_eq!(
         IndexRecords::parse(&page(vec![], true, 0).encode_to_vec()),
-        Err(WireError::Grammar {
-            what: "a push with more"
-        })
+        grammar("a push with more or reset")
+    );
+    let one = signed(&record());
+    assert_eq!(
+        IndexRecords::parse(&page(vec![one.clone()], true, 0).encode_to_vec()),
+        grammar("a push with more or reset")
+    );
+    assert_eq!(
+        IndexRecords::parse(
+            &IndexRecords {
+                reset: true,
+                ..page(vec![], false, 0)
+            }
+            .encode_to_vec()
+        ),
+        grammar("a push with more or reset")
     );
     // A reply page with more must hold a record (4.5); the last may be empty.
     round_trip(&page(vec![], false, 9));
     assert_eq!(
         IndexRecords::parse(&page(vec![], true, 9).encode_to_vec()),
-        Err(WireError::Grammar {
-            what: "a page with more and no records"
-        })
+        grammar("a page with more and no records")
     );
-    let one = signed(&record());
     round_trip(&page(vec![one.clone()], true, 9));
+    // A reset: no records, more or through.
+    let reset = IndexRecords {
+        reset: true,
+        ..page(vec![], false, 9)
+    };
+    round_trip(&reset);
+    for bad in [
+        IndexRecords {
+            records: vec![one.clone()],
+            ..reset.clone()
+        },
+        IndexRecords {
+            through: 1,
+            ..reset.clone()
+        },
+        IndexRecords {
+            records: vec![one.clone()],
+            more: true,
+            ..reset.clone()
+        },
+    ] {
+        assert_eq!(
+            IndexRecords::parse(&bad.encode_to_vec()),
+            grammar("a reset with records, more or through")
+        );
+    }
+    // The epoch is never 0; through at most MAX_LOCAL_SEQ.
+    assert_eq!(
+        IndexRecords::parse(
+            &IndexRecords {
+                epoch: 0,
+                ..page(vec![], false, 0)
+            }
+            .encode_to_vec()
+        ),
+        Err(WireError::OutOfRange { what: "epoch" })
+    );
+    round_trip(&IndexRecords {
+        through: MAX_LOCAL_SEQ,
+        ..page(vec![], false, 0)
+    });
+    assert_eq!(
+        IndexRecords::parse(
+            &IndexRecords {
+                through: MAX_LOCAL_SEQ + 1,
+                ..page(vec![], false, 0)
+            }
+            .encode_to_vec()
+        ),
+        Err(WireError::OutOfRange { what: "through" })
+    );
     // Exactly MAX_PAGE_RECORDS records pass; one more is malformed.
     round_trip(&page(vec![one.clone(); MAX_PAGE_RECORDS], true, 9));
     assert!(matches!(
@@ -698,7 +1110,14 @@ fn index_records_pages_and_embedded_envelopes() {
         ),
         Err(WireError::LimitExceeded { .. })
     ));
-    // Every embedded record passes keys' envelope decoder.
+    // Every embedded record passes keys' envelope decoder, both types
+    // included, and the connection's form agrees.
+    let c = crate::testkit::envelope(&cleanup().encode_to_vec(), &[5; 64]);
+    let both = page(vec![one.clone(), c], false, 1).encode_to_vec();
+    assert_eq!(IndexRecords::parse(&both).unwrap().records.len(), 2);
+    let rp = parse_records_page(&both).unwrap();
+    assert_eq!(rp.records.len(), 2);
+    assert_eq!((rp.request_id, rp.epoch, rp.more), (1, 5, false));
     let short_sig = crate::testkit::envelope(&record().encode_to_vec(), &[0; 63]);
     assert_eq!(
         IndexRecords::parse(&page(vec![short_sig], false, 1).encode_to_vec()),
@@ -706,18 +1125,20 @@ fn index_records_pages_and_embedded_envelopes() {
             licketysync_keys::records::Malformed::SignatureSize(63)
         ))
     );
-    let not_index = crate::testkit::envelope(
-        &IndexRecord {
-            record_type: 2,
-            ..record()
-        }
-        .encode_to_vec(),
-        &[0; 64],
-    );
-    assert!(matches!(
-        IndexRecords::parse(&page(vec![not_index], false, 1).encode_to_vec()),
-        Err(WireError::Record(_))
-    ));
+    for record_type in [1, 18] {
+        let other = crate::testkit::envelope(
+            &IndexRecord {
+                record_type,
+                ..record()
+            }
+            .encode_to_vec(),
+            &[0; 64],
+        );
+        assert!(matches!(
+            IndexRecords::parse(&page(vec![other], false, 1).encode_to_vec()),
+            Err(WireError::Record(_))
+        ));
+    }
     let mut twice = one.clone();
     twice.extend_from_slice(&[0x12, 0]);
     assert!(matches!(
@@ -792,7 +1213,7 @@ fn status_and_chunks() {
 }
 
 #[test]
-fn sealed_meta_bounds() {
+fn sealed_meta_is_lax_where_step_seven_judges() {
     let meta = |hashes: usize| SealedMeta {
         path: "p".into(),
         kind: 1,
@@ -801,21 +1222,68 @@ fn sealed_meta_bounds() {
     };
     round_trip(&meta(MAX_CHUNKS));
     assert!(SealedMeta::parse(&meta(MAX_CHUNKS + 1).encode_to_vec()).is_err());
-    let long = SealedMeta {
-        path: "p".repeat(MAX_PATH_BYTES + 1),
-        ..SealedMeta::default()
-    };
-    assert!(SealedMeta::parse(&long.encode_to_vec()).is_err());
     let short_hash = SealedMeta {
         plain_hashes: vec![vec![1; 31]],
         ..SealedMeta::default()
     };
     assert!(SealedMeta::parse(&short_hash.encode_to_vec()).is_err());
+    // A long path, a device ID of any size, a counter of 0, a vector entry
+    // of any size: step 7's writer faults, not malformed here.
+    let lax = SealedMeta {
+        path: "p".repeat(crate::limits::MAX_PATH_BYTES + 1),
+        device_id: vec![2; 31],
+        counter: 0,
+        vector: vec![VectorEntry {
+            device_id: vec![1; 3],
+            counter: 0,
+        }],
+        ..SealedMeta::default()
+    };
+    round_trip(&lax);
+    // Past the 33rd vector entry the rest are read and skipped.
+    let long = SealedMeta {
+        vector: (0..40u8)
+            .map(|i| VectorEntry {
+                device_id: vec![i; 32],
+                counter: 1,
+            })
+            .collect(),
+        ..SealedMeta::default()
+    };
+    assert_eq!(
+        SealedMeta::parse(&long.encode_to_vec())
+            .unwrap()
+            .vector
+            .len(),
+        MAX_VECTOR_ENTRIES + 1
+    );
+    // A bool of 2 in the metadata, and a vector entry field twice, are
+    // malformed metadata.
+    let mut body = SealedMeta::default().encode_to_vec();
+    varint(&mut body, 11, 2);
+    assert!(SealedMeta::parse(&body).is_err());
+    let mut entry = Vec::new();
+    varint(&mut entry, 2, 1);
+    varint(&mut entry, 2, 2);
+    let mut body = Vec::new();
+    bytes_field(&mut body, 10, &entry);
+    assert!(SealedMeta::parse(&body).is_err());
+    // CleanupMeta: lax on its sizes too.
+    round_trip(&CleanupMeta {
+        device_id: vec![1; 5],
+        counter: 0,
+    });
+    let mut body = Vec::new();
+    varint(&mut body, 2, 1);
+    varint(&mut body, 2, 1);
+    assert!(CleanupMeta::parse(&body).is_err());
 }
 
 proptest! {
+    #![proptest_config(crate::testkit::proptest_config(256))]
+
     #[test]
-    fn random_bodies_never_panic_and_accepted_ones_reparse(t in 0usize..11, body in proptest::collection::vec(any::<u8>(), 0..=200)) {
+    fn random_bodies_never_panic_and_accepted_ones_reparse(t in 0usize..13, body in proptest::collection::vec(any::<u8>(), 0..=200)) {
         let message_type = MessageType::ALL[t];
         if let Ok(m) = Message::parse(message_type, &body) {
             // A body that parsed re-encodes canonically to one that parses to
@@ -826,14 +1294,37 @@ proptest! {
     }
 
     #[test]
-    fn index_records_round_trip(seq in 1u64..=MAX_SEQ, deleted in any::<bool>(), sealed in 40usize..200, n in 0usize..4) {
+    fn index_records_round_trip(n in 0usize..4, names in 0usize..65, bucket in 8u32..=21) {
         let m = IndexRecord {
-            seq,
-            deleted,
-            chunks: if deleted { vec![] } else { vec![ChunkRef { cipher_hash: vec![6; 32], stored_len: 46 }; n] },
-            sealed: vec![1; sealed],
+            chunks: vec![ChunkRef { cipher_hash: vec![6; 32], stored_len: 46 }; n],
+            sealed: vec![1; 40 + (1usize << bucket)],
+            replaces: (0..names).map(|i| { let mut h = vec![0; 32]; h[31] = u8::try_from(i).unwrap(); h }).collect(),
             ..record()
         };
         prop_assert_eq!(IndexRecord::parse(&m.encode_to_vec()).unwrap(), m);
+    }
+
+    #[test]
+    fn cleanups_round_trip(groups in proptest::collection::vec((any::<bool>(), 1usize..20), 1..20), bucket in 8u32..=10) {
+        let mut next = 0u32;
+        let m = CleanupRecord {
+            groups: groups.iter().map(|(because, n)| CleanupGroup {
+                because: if *because { vec![9; 32] } else { vec![] },
+                forget: (0..*n).map(|_| { next += 1; let mut h = vec![0; 32]; h[28..].copy_from_slice(&next.to_be_bytes()); h }).collect(),
+            }).collect(),
+            sealed: vec![1; 40 + (1usize << bucket)],
+            ..cleanup()
+        };
+        prop_assert_eq!(CleanupRecord::parse(&m.encode_to_vec()).unwrap(), m);
+    }
+
+    #[test]
+    fn exchange_messages_round_trip(epoch in 1u64.., since in 0u64..=MAX_LOCAL_SEQ, prefix in proptest::collection::vec(0u8..16, 0..=64), outcome in 1u32..=3) {
+        let r = IndexRequest { epoch, since, ..request() };
+        prop_assert_eq!(IndexRequest::parse(&r.encode_to_vec()).unwrap(), r);
+        let q = ReconcileRequest { prefix, ..reconcile() };
+        prop_assert_eq!(ReconcileRequest::parse(&q.encode_to_vec()).unwrap(), q);
+        let p = ReconcileReply { epoch, through: since, ..reply(outcome, if outcome == 2 { 16 } else { 0 }) };
+        prop_assert_eq!(ReconcileReply::parse(&p.encode_to_vec()).unwrap(), p);
     }
 }

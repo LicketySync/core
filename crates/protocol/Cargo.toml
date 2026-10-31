@@ -1,6 +1,6 @@
 [package]
 name = "licketysync-protocol"
-description = "The wire protocol /licketysync/sync/1: framing, every message with a bounded decoder, the handshake with the device proof and the folder proof, index records and sealed metadata, the index exchange and chunk rules, and the sans-IO state machine of one connection."
+description = "The wire protocol /licketysync/sync/1: framing, every message with a bounded decoder, the handshake with the device proof, the folder proof and the clock rule, index records and cleanups with their version vectors, the index exchange by set digests and chunk rules, and the sans-IO state machine of one connection."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

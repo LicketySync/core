@@ -139,11 +139,6 @@ pub const HASH_SET_LEAF: HashLabel = h("licketysync/v1/hash/set-leaf");
 /// The set digest of a subtree in node form (`protocol.md` 4.5), over its 16
 /// child digests.
 pub const HASH_SET_NODE: HashLabel = h("licketysync/v1/hash/set-node");
-/// A writer's cursor digest step. Retired by `keys.md` section 10 on
-/// 2026-10-25 and so not in [`REGISTRY`]; used only by
-/// [`crate::ids::WriterDigest`] for the old index exchange; removed in the next
-/// commit of this series.
-pub(crate) const HASH_WRITER_DIGEST: HashLabel = h("licketysync/v1/hash/writer-digest");
 /// The LAN beacon's peer tag (section 2.2).
 pub const HASH_DISCOVERY_PEER: HashLabel = h("licketysync/v1/hash/discovery-peer");
 /// The LAN beacon ID (section 2.2).
@@ -172,10 +167,7 @@ macro_rules! entry {
 }
 
 /// Every label in use, with its mode. Adding a label is a change to
-/// `keys.md` section 10 first. In this commit one label in use is not here:
-/// the retired `HASH_WRITER_DIGEST`, which `keys.md` section 10 no longer
-/// registers and which only the old index exchange still uses; the next commit
-/// of this series removes it, and then this list is every label in use.
+/// `keys.md` section 10 first.
 pub const REGISTRY: &[Entry] = &[
     entry!(FOLDER_SIGNING_KEY, DeriveKey, "write secret"),
     entry!(FOLDER_DATA_KEY, DeriveKey, "write secret"),
@@ -460,12 +452,5 @@ mod tests {
             signed_message(SIG_CLEANUP, b"body"),
             b"licketysync/v1/sig/cleanup\0body"
         );
-    }
-
-    /// The writer-digest label, kept for one commit of this series, is no
-    /// longer registered (`keys.md` section 10, 2026-10-25).
-    #[test]
-    fn the_retired_writer_digest_label_is_not_registered() {
-        assert!(REGISTRY.iter().all(|e| e.label != HASH_WRITER_DIGEST.0));
     }
 }

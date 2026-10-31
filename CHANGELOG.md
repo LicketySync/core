@@ -6,6 +6,299 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The protocol and index crates on the latest-only index of the commit before (`protocol.md` §4.4
+  to §4.7), and the keys crate's retired layout removed. On main the engine is the runtime only and
+  the simulator depends on nothing of these crates, so both are unchanged; the engine's port
+  follows (`wip/engine`), against the index API of brief R1 to R14.
+  - The protocol crate (`licketysync-protocol`):
+    - Records (§4.4): `Record` is an index record or a cleanup past step 1 (the envelope as
+      received, its record hash, its clear fields typed: `path_tag`, `replaces`, chunks, or the
+      cleanup's groups; its 64-byte key in the set digests, the path tag then the record hash, a
+      cleanup's record hash twice; its decoded body is crate-private). `Record::verify` is step 5
+      under the label of its type; `Record::open` is step 7 for read and write holders: the seal
+      under its aad, the metadata, the path and its tag, the dot, the vector and the deletion marks,
+      one `WriterFault` variant per check, the `kind` after every check that does not depend on it
+      and before the two that do, so that a record opaque only for an unknown kind is told apart
+      from a shared writer fault (`WriterFault::is_shared`), pinned by a row per later
+      kind-independent fault (the review's P-1). `Dot`, `Vector` (coverage reads one entry), `Meta`
+      (`written_at` in microseconds since the Unix epoch), `Applied`. `IndexDraft` and
+      `CleanupDraft` encode, seal and sign what the index decided and run a reader's steps 1 and 7
+      on the result before returning it, so a writer never emits what a reader refuses.
+    - Messages and decoders (§3.2, §4.1, §4.2, §4.5): Hello `clock_days` (at most 2 097 151) and
+      `CLOSE_REASON` 13 `CLOCK_OUT_OF_RANGE`; `IndexRecord` (fields 1, 2, 3, 12, 13, 15, 17),
+      `SealedMeta` (1 to 12, lax on what step 7 judges: entries past the 33rd are skipped),
+      `CleanupRecord` (at most 16 384 names across its groups, pinned at 16 385 over two groups,
+      P-4), `CleanupGroup`, `CleanupMeta`, `VectorEntry`; `IndexRequest` with `epoch` and `since`;
+      `IndexRecords` with `epoch`, `through` and `reset`; `ReconcileRequest` (a prefix of up to
+      128 nibbles) and `ReconcileReply` (0x800B, 0x800C); `FolderStatus.extra_versions`. `Cursor`,
+      the range and listed scopes and the round split are gone; 0x8006 and 0x800D to 0x800F are
+      reserved.
+    - The exchange (§4.5): `Prefix` (0 to 128 nibbles of a record's key, packed two to a byte, 65
+      bytes), the three conditions of a reply (`reconcile_outcome`), `IndexView`, pages with `epoch`
+      and `through` and `reset_page`. On a connection: rounds of Since, then the Check and up to
+      four passes of reconciliation over the trie with a depth-first work list (at most 1 921
+      prefixes) and `MAX_PASS_REQUESTS`; quiet, cut and skipped passes, a round that skipped a
+      record never caught up (P-2); resets and the epoch redraw at most once per connection, a
+      second claimed one refused (`SendError::RedrawSpent`); `RoundCompleted { caught_up, cursor }`;
+      the counting of pushes into the cursor (`CursorAdvanced`), stopped by an empty push, a push of
+      another epoch, which owes a round (P-3), or a skipped record, pushes numbered
+      (`Page::Push { push }`) so that a judgement finds its own pending entry, and a judgement that
+      finds an earlier entry still waiting stops the counting (it fails closed), while one whose
+      entry was forgotten leaves the later ones, at most `MAX_PENDING_PUSHES` (4 096, in `limits`)
+      waiting; the round owed (`owe_round`) and `set_paused`; one request per folder each way across
+      both kinds; `INDEX_REQUEST_MIN_INTERVAL` for `IndexRequest`s and root `ReconcileRequest`s
+      only; every sender violation of a reconciliation; the pushes of what a `RECORDS` reply lacked
+      (`PushSubtree`); the reply deadline and its restarts; no `through` above `MAX_LOCAL_SEQ` ever
+      sent (`send_page`, `send_reconcile_reply` and `push` refuse it, the review's IS-3); the
+      connection's memories (ruling Q3): `FolderMemory`, per folder, the records from the future
+      refused on it, and one `NoteBudget` for the connection, move-only (neither `Clone` nor `Copy`)
+      and made only by the connection (and `NoteBudget::for_tests`, hidden),
+      `MAX_NOTE_VERIFICATIONS` per window of `INDEX_RESYNC_INTERVAL` across every folder open on it
+      (`Connection::memories_mut`, the coordinator's ruling PS-1); and the clock rule when the first
+      folder opens (TM-40), both sides closing before anything of the folder crosses
+      (`ClockOutOfRange`, and `StrangerClockOutOfRange` for a connection that opened none, counted
+      also when the transport drops, `Connection::disconnected`). `Config::new` takes `clock_days`.
+    - Rules and limits (§5): one `Cause` per row, 30, among them Expired, Obsolete, Replaces held
+      records, Cleanup group waiting, From the future, Clock out of range, Reset, Digest differs,
+      Own counter ahead, Counter ahead of the clock and Counter exhausted; the six rows of the
+      cursor exchange gone. Every constant of §5's "Time" table defined once, with the horizons in
+      counter units (microseconds) and the clock rule in days and in microseconds; `KEY_BYTES`
+      (64) and `MAX_PREFIX_NIBBLES` (128).
+    - Vectors (§8 items 1 to 5, 10, and the decoder vectors of 6, 8, 9, 11, 12 and 13): canonical
+      index records and a cleanup with their sealed parts and aads, every step-1 variant of both
+      record types, every writer fault inside the seal beside the edge it is checked against, and
+      the forged cases; the `IndexRequest`, `ReconcileRequest` (128 nibbles accepted, 129 bytes
+      malformed), `ReconcileReply` and `IndexRecords` decoder vectors, `exchange.json` naming the
+      two `through` cases the connection judges; Hellos with `clock_days` and the largest Hello
+      (2 587 bytes, 2 591 with its length field); Status with `extra_versions`. The seal nonces of
+      the record vectors begin with a zero byte, so the fuzz seeds they write stay binary to the
+      typos check. Connection vectors are the engine's (§8, "Who checks what"); the connection's
+      unit tests cover rounds, passes, quiet, cut and skipped passes, every sender violation
+      (more than 64 records at a 64-nibble prefix answering a digest that is not zero among
+      them: only a full key may carry more), resets, counting (pushes with `through` 0
+      uncounted, an empty push uncounting what waits, a judgement out of order stopping it, the
+      bound on waiting pushes), the round owed, one request at a time (a request ID reused
+      across folders closes, messages for a folder not open close, a page after the last page
+      is malformed), which cursor a round keeps, the serving interval, the reply deadline, the
+      note budget across folders and windows, and the clock-rule close, with a toy index in the
+      testkit; property tests that a pass never sends more than its cap and its work list never
+      passes 1 921 whatever the responder answers, that every message round-trips, and that a
+      draft never emits what step 1 or step 7 refuses. The committed proptest-regressions seeds
+      are two failures of the pass-bound property shrunk during development; the named pass-cap
+      tests cover the same bug.
+  - The index crate (`licketysync-index`), written anew (`heads.rs`, the cursor digests and the
+    waiting records are gone):
+    - `Index`, `Txn` and `Pending` (rulings Q2 and I-8): every change of an engine handler is
+      staged in one transaction over an undo log; `Txn::finish` gives the `ChangeSet` to persist
+      in its one commit and a `Pending` that keeps the index borrowed until the commit's outcome
+      is known, `Pending::commit` keeping the changes and dropping it undoing them exactly,
+      nothing rebuilt, so the committed index never serves what is not yet durable; the
+      handler's own reads see its staged changes (`Txn::index`, the whole index, its serving
+      methods included), and serving only after the commit is the engine's duty; on any error a
+      method returns, the handler drops the transaction. `Index::create` returns the change set
+      that persists the first epoch (I-9). `Store`, `Stored`, `ChangeSet` (puts with local
+      sequence numbers, removals, records kept only as bases, base slots, metadata, per-peer state
+      and the chunk hashes freed) and `MemoryStore`, which can also refuse every commit or crash
+      between a change's records and its removals, writing the base slots with the metadata as a
+      store that cannot stage atomically does (the spec's twelfth fixup); such a store is reopened
+      before its folder resumes after a store failure.
+    - Arrival (`Txn::accept`, steps 2 to 9): a duplicate is ignored unverified; at a read or
+      write holder the seal is checked first, then expiry (before anything the record replaces is
+      looked at, the review's IS-1(a)); a record that replaces nothing held and that something
+      held names or covers is obsolete; both ignored unverified unless a write holder would note
+      it, which verifies it first; a record from the future is verified, refused and remembered
+      on the connection; everything else is verified, then held, held opaque or dropped at once
+      beneath a tree delete, dropping what it replaces, the groups whose `because` it is then
+      applying. `Accepted` gives the judgement, the rows, the records dropped, the paths whose
+      heads changed, whether the chunks wanted changed, the local sequence number and the issue
+      inputs, and why a record a write holder would have noted was not (`NotNoted::PeerNames`,
+      `NotNoted::Verifications`, the review's N9).
+    - Latest only (§4.4): coverage between applied records only, by tag and beneath tree deletes
+      (covered only by later tree deletes); names at the tag; cleanup groups that act only while
+      their `because` is held, with no memory of having acted; the sealed-peer rule; expiry by the
+      folder's own time `G`, strictly more than the horizon, tombstones and tree deletes after 365
+      days and cleanups after 30, records kept only as bases included; opaque records held,
+      counted and served, covering nothing, going only by a name.
+    - Judging a tree delete without a walk (the coordinator's ruling IS-1(b)): per device, the
+      applied records held in an AVL tree by path with least counters (`bypath.rs`), so that a
+      tree delete is judged with at most two queries per vector entry, `O(L log n)` each for paths
+      of `L` bytes, whatever lies beneath its directory (the runs compared in place, no path
+      copied), and holding it costs `O(log n)` per record it drops, at open as
+      on arrival and in a local tree delete. Whether a record lies beneath a held tree delete
+      that covers it is found in one pass down a trie of the held tree deletes by path component
+      (`dirs.rs`), `O(L)` for a path of `L` bytes up to the logarithm of the trie's fan-out (the
+      spec's thirteenth fixup).
+    - Writing (`Txn::write`, `Change`): `S` from the path's bases, never a tree delete, at most the
+      vector cap, its own records first; the vector its join pruned with `S`'s devices mandatory
+      (a vector that could not be one refuses the write rather than falling back silently); the
+      names `S`, then the shared writer faults no held cleanup names, then the noted stale copies
+      the vector covers, up to 64, while their peers are within `MAX_PEER_NAMES` (writes and
+      cleanups counted together, N10), the faults left over in a cleanup `because` the write;
+      renames, tree deletes with the tombstones their pruned vector leaves, one per path of the
+      kind of the base at the path itself (the review's IR-3), and their cleanup; conflict copies
+      made ordinary files (`Change::Promote`); consecutive counters from one reading of the clock
+      in the writer's order; `written_at` the clock in microseconds; each record the base of its
+      path. Bases (`Txn::set_base`, `Index::current`, `Index::bases`), kept only as bases once
+      replaced.
+    - Stale copies and the end of a round (`Txn::end_round`): notes made only after the signature
+      verifies, never of a record a held record names at its tag or a held cleanup names in any
+      group, at most `MAX_STALE_KNOWN` (the oldest dropped first), within the connection's
+      `MAX_NOTE_VERIFICATIONS` and the peer's `MAX_PEER_NAMES`; at a round's end every note, from
+      any peer, judged again and named in a group `because` what replaces it then, or with
+      `because` empty for a forgotten record, paged by `MAX_CLEANUP_GROUPS` and
+      `MAX_CLEANUP_ENTRIES`.
+    - Set digests (§4.5; the coordinator's ruling IS-2): a 16-way trie over the records' 64-byte
+      keys down to 128 nibbles, whose nodes cache their digests; the leaf form begins at the
+      shortest prefix whose subtree holds at most 64 records, beneath a file ID by the record-hash
+      nibbles, so a change rehashes one leaf of at most 64 record hashes (65, spread over new
+      leaves, when a subtree splits) and at most 128 nodes, however many records one file ID
+      holds. Serving from committed state, lazily: Since replies page by page, `ReconcileReply`
+      from the cache, and `RECORDS` pages in ascending key order from the last key sent (the
+      spec's fifteenth fixup, CR-1): the subtree is a range of the trie's keys, so a page reads
+      the keys it sends and the one that did not fit, `O(page · log n)`, in constant memory, with
+      nothing sorted, cached or held between pages; pushes with `through`, a reconciliation's
+      pushes without; `IndexView` for the connection. A change rehashes its path in one walk of
+      at most 129 levels.
+    - Opening (§4.4 "Opening a folder"; TM-9): every stored record and base kept only as a base
+      checked again across the cores, the same on any number; held again in its stored order, a
+      record another stored record replaces dropped without a report (the ordered crash
+      repaired); two stored copies of one record taken as one, at the first of their numbers;
+      stored local sequence numbers of 0, above `MAX_LOCAL_SEQ` or repeated, or a next
+      one past `MAX_LOCAL_SEQ + 1`, renumbered from 1 in stored order under a new epoch and put
+      again (`OpenReport::renumbered`, the review's IS-3), and dropping a record removes only its
+      own sequence entry; the high-water mark checked; a stored base whose record lies at another
+      file ID dropped and reported (`OpenReport::misplaced_bases`); per-peer state clamped to the
+      clock, capped at `MAX_PEER_STATES` and dropped past `PEER_STATE_HORIZON`; a new epoch once
+      if anything was dropped; and a store whose newest applied record lies more than a year ahead
+      of the clock kept closed (`OpenReport::opens_at`), nothing removed for its counter.
+    - Views (R10 to R12): heads in display order (one ordering function for heads and `S`) with
+      conflict copies and opaque records, record views, file content, `wanted` chunks per tier,
+      `names_chunk`, `extra_versions` (heads beyond one per path at a key holder, every head
+      counted, records beyond one per file ID at a sealed holder), and the fingerprint the
+      simulator compares. Holding a tree delete reads what lies beneath its directory, never every
+      path or base (TM-22; the engine port's security review, EP-S1: 51 ms a tree delete at 20 000
+      paths): `Index::paths_at_or_beneath(dir)` gives the paths `Index::paths` gives there, as two
+      ranges of the paths by name (`dir` itself, then `dir/` up to `dir0`, as the index by path
+      brackets them), for the engine to use in place of its walk of every path; and
+      `Txn::clear_bases_beneath` takes the slots there from a path-ordered index of the base slots,
+      a range rather than a scan. `Index::bases_beneath(dir)` gives those slots read-only, in path
+      order, each with its base record's path, its place and its record, whether or not the path
+      has heads, so that the engine's oracle can see a base without a head; the root, `""`, is
+      every slot (and every path for `Index::paths_at_or_beneath`).
+    - Tests: the index's vectors of §8 item 6 (`outcomes.json`, a forged writer fault among them),
+      item 7 whole (`heads.json`: every case that shows a write holder's heads checked on a read
+      holder, the display-order pairs on a write holder too; the tree delete over 20 000 held files
+      judged by the index with at most two queries, the held records it reads while judging metered
+      and far below the files beneath (CS-1), and the same verdict as a walk, the one at `d` beside
+      `d-x`, `d.x`, `d0` and `d/x`, the one covering only an earlier tree delete; expiry at exactly
+      the horizon; the open-time check of the stored mark), item 8 (`digests.json`: 65 records at
+      one tag, a 128-nibble prefix, a cleanup's key, 8 000 records at one tag held and dropped by
+      one cleanup with each change's cost counted) and item 12 (`cleanups.json`: a waiting group
+      whose `because` names nothing, the replayed old tombstone to its end, named again and the
+      version back, I-1); properties (a) to (m) over random histories by five writers, a reader and
+      a sealed peer at every tier, half of them lines of versions through more writers than the
+      vector cap, lowered to 2 and 3 (ruling Q7): no change drops what nothing explains (f, at every
+      tier), (k) against the bases at the path as `bases.py` states it, (l) the index by path
+      against a walk, (m) the cached digests against fresh ones, and, at every step, a dropped
+      transaction giving back the whole state, then K2 on every device, every store opening to what
+      memory holds and strict K3 (IR-6); drops by expiry checked against the horizon by the folder's
+      time after the change, and (e) run with the history's one shared clock ((d) is the test of
+      clocks apart); run from a fixed seed, 12 cases each for the histories, 64 and 48 for the
+      structures against their definitions and 24 for (m) on the index, in the gate,
+      `PROPTEST_CASES` and `LICKETYSYNC_PROPTEST_SEED=random` for longer runs (IR-4); the index by
+      path and the trie of tree deletes against definitions (`structures.rs`, the 4 096-byte path
+      walked once); the views (I-2), the write refusals (I-3), the lowered bounds reached
+      (`bounds.rs`, I-4), `RECORDS` pages by key at 1-, 2- and 3-nibble prefixes and below the root,
+      across page boundaries at page sizes of one record and the default, with the keys read per
+      page bounded (CR-1, CR2-1), over records that share file IDs and over cleanups, at 63 to 66,
+      127 and 128 nibbles, with records held and dropped between pages (FC-2), and over one-record
+      pages at the 64- and 65-nibble prefixes of one file ID holding 300 records (item 8's case of
+      the fifteenth fixup); a reconciliation's pushes kept to their subtree (FC-2);
+      `Index::bases_beneath` with heads and without, at the root and beside `dir-x`; holding a tree
+      delete at 20 000 paths metered, the paths and base slots read bounded by twice what it dropped
+      and equal to what a walk finds (EP-S1); a round's cleanups paged by groups alone; one test per
+      rule the review's IR-1 named, and regressions named after the findings
+      (`cleanup_group_acts_only_while_its_because_is_held_r1_b1`, `the_lost_update_r1_b2_s1`, the R2
+      S-B step-7 vector in both orders, `expiry_by_the_folders_own_time_b1`,
+      `a_stale_copy_is_verified_before_it_is_noted_c1_sc1`, the SC-2 and SR-1 cases, the IS-3, IR-3
+      and IR-5 tests). The committed proptest-regressions seeds are failures shrunk during
+      development, replayed first; their strategies have moved since, so they stand as extra cases.
+    - Found by these tests and fixed here: a Since reply with nothing to send built an empty range
+      whose start passed its end, which panics
+      (`a_since_reply_with_nothing_to_send_is_one_empty_page`); a note was named only at the end
+      of a round with the peer that offered it, while §4.4 (b) names every note at a round's end
+      (`a_note_from_a_peer_that_never_ends_a_round_is_named_at_another_peers_r7`); per-peer state
+      made by the names count at a round's end carried no round end, so the next open dropped it
+      (`per_peer_state_made_by_a_names_count_survives_a_reopen_round_ended_us`); undo did not
+      restore the note number; and the index by path took an empty run for a match at a counter
+      of `u64::MAX`.
+  - The keys crate: what the commit before kept for one commit is removed: `seal_meta`,
+    `open_meta`, the old `MAX_SEALED_BYTES` and `MetaError::TooShort` (`MetaError::is_malformed` is
+    now `SealedLength` alone), `WriterDigest` and the crate-private `HASH_WRITER_DIGEST` (so
+    `labels::REGISTRY` lists every label in use), the writer-digest entries of
+    `index_record.json`, and `bytes::join3`, which only the old aad used. `RecordKey` and
+    `DataKey::record_key` are crate-private; `Malformed::RecordType` reads "record type N is not
+    the type being signed or read"; `MIN_SEALED_BYTES` is documented as the nonce and tag a seal
+    adds; the gear table uses its imported hash function, and the crate and folder docs name
+    `RecordKeys` (the reviews' K-8).
+  - Fuzzing (TM-3): `index_record` takes both record types through step 1 and step 7 for a write
+    holder; `index_records` the new page fields with its decoder-agreement check; `sealed_meta` the
+    new fields, sealing what parses at its own path and opening it through step 7;
+    `sealed_meta_open` the one reader under both aads (its old-layout seeds deleted);
+    `message_parse` the 13 message types and `CleanupRecord`, `CleanupGroup`, `CleanupMeta` and
+    `VectorEntry`; `hello_check` checks `clock_days`; `handshake` drives the new exchange, its six
+    seeds that start inside it written and checked by `vector_exchange_fuzz_seeds` (the review's
+    PS-3) through the one harness both include (`vectors/handshake_harness.rs`); `reconcile` checks
+    the prefix and children rules of both reconcile messages; and the new `index_ops` drives the
+    index itself (the index security review's NIT 9): an index opened from fuzzed stored state at
+    every tier, fed signed, forged and garbage records, writes, bases, round ends, crashes and
+    reopens, asserting exact rollback, the same index after a reopen and the local-sequence bound
+    and order, its nine seeds written and checked by `vector_index_ops_fuzz_seeds`;
+    `fuzz/Cargo.lock` adds only the workspace's own index crate.
+  - Decisions for the plan (the author's, for review):
+    - The index API is a transaction overlay over an undo log, finished into a change set and a
+      `Pending` that keeps the index borrowed until the commit's outcome (Q2, I-8): the engine's
+      decide, commit and send phases. The borrow checker keeps everything outside the handler from
+      reading or serving the index until then; the handler's own reads (`Txn::index`) see staged
+      state, serving methods included, so sending only after the commit is the engine's duty, not
+      the types'.
+    - Base slots are keyed by file ID and place, `(PathTag, Place::Path | Place::Copy(name))`,
+      persisted as their own list in `Stored` and `ChangeSet` (Q8 said "with the store's
+      metadata"; a store that cannot stage atomically writes them with the metadata).
+    - Tombstones carry the kind the caller gives (the deleted version's), size 0, mode 0; a
+      rename's tombstone takes the new version's kind; a tree delete is kind 2 (directory), size
+      0, mode 0; the tombstones a pruned tree delete leaves take the kind of the base at the path
+      itself.
+    - The wanted set at a key holder is every held record with chunks, every conflict head and
+      opaque record included, the plain hashes withheld for opaque records.
+    - `written_at` is the writer's clock in microseconds (the owner's choice; spec fixup 9).
+    - The connection keeps the per-folder memory of records from the future and one note budget
+      per connection, refilled per fixed window of `INDEX_RESYNC_INTERVAL` (Q3, PS-1).
+    - The vector cap, the names and groups of one cleanup, the notes kept and the names per peer
+      are crate-private test parameters (Q7); the tests at the real bounds are item 7's vectors,
+      the paging test, the note-verification test and the ignored 100 000-record tree delete
+      (`cargo test --release -p licketysync-index -- --ignored`).
+    - The O(L) ancestor lookup is the spec's trie by path, not a one-pass keyed hasher, which
+      would need the path-tag key outside the keys crate.
+    - A tree delete with no base at or beneath its directory is written with an empty vector,
+      covering nothing (documented, not refused).
+    - Property tests run from the fixed seed `0x6c69_636b_6574_7379` unless
+      `LICKETYSYNC_PROPTEST_SEED` names another or `random`, in the keys crate's eight
+      `proptest!` blocks too (256 cases each, as before).
+  - Spec points raised with this change, none blocking: §2 gives the largest Hello as 2 668 bytes
+    (2 672 with its length field), 81 more than this release's largest; §4.4's text allows a
+    cleanup group with no names beside one with names, and one name in two groups (both accepted
+    here, as written); an opaque cleanup is never forgotten at a key holder (no counter to expire
+    it by); two records that name each other, from a dishonest write-key holder, make a sealed
+    peer's outcome depend on their order of arrival; §8 item 8 says a change rehashes one leaf of
+    at most 64 record hashes, while a split reads 65 into new leaves; `extra_versions` at a key
+    holder counts a tombstone beside a version and two heads of one content as extra heads.
+  - Dependencies: none new.
+  - Reviewed 2026-10-26 to 2026-10-31; every finding fixed, every reviewer clean. Protocol: R1
+    aaed68195a3ce5865, R2 a94d1733f363aed1b, security a81b056d67f1bad40. Index: R1
+    a7e0193629e57048e, R2 a91ff989482b809b8, security a9d1b8d0ad69e901a (last checks clean on
+    e9e38ad). Author af36a5e76af7d9dbc; the merge agent wrote this line.
+
 - Spec: the index keeps only the latest versions of each path, ordered by version vectors of at most
   32 entries that only read and write holders can read; sealed peers see almost nothing and replace
   a version only when a signed record or cleanup names it; deletions are forgotten by the folder's

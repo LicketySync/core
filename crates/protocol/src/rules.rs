@@ -17,8 +17,8 @@
 //! (TM-9). [`Cause::outcome`] is the table for the rows it names;
 //! [`Cause::report`] says what each row leaves behind, since nothing is
 //! dropped without trace. The connection acts on the outcomes it can see
-//! itself; the index judges the records of each page and hands its
-//! judgements to it through [`crate::connection::Connection::judged`].
+//! itself; the index judges the records of each page and the engine hands
+//! those judgements to it through [`crate::connection::Connection::judged`].
 
 use crate::messages::CloseReason;
 
@@ -31,9 +31,8 @@ pub enum Cause {
     /// violated, a fixed-size field absent or of another size, a message out
     /// of order or for a folder not open here, more proofs or chunk requests
     /// than allowed, a stray `ProofResult`, a second request before the reply
-    /// to the first has queued its last page, a page for no outstanding
-    /// request, a reply page with `more` and no records, an unsolicited
-    /// `ChunkReply`.
+    /// to the first has queued its end, a page or reply for no outstanding
+    /// request or of the wrong kind for it, an unsolicited `ChunkReply`.
     Malformed,
     /// A frame longer than the limit; nothing was allocated.
     FrameOverLimit,
@@ -52,49 +51,66 @@ pub enum Cause {
     /// `IDLE_TIMEOUT` elapsed with no frame, or with unsent bytes and none
     /// delivered.
     IdleTimeout,
-    /// The reply to this side's outstanding `IndexRequest` brought no page for
+    /// The reply to this side's outstanding request brought nothing for
     /// `REPLY_PAGE_TIMEOUT`.
     ReplyPageTimeout,
     /// `PROOF_TIMEOUT` elapsed with nothing opened.
     ProofTimeout,
-    /// An index record, neither a duplicate nor a gap, whose signature does
-    /// not verify under the folder key; a chunk whose ciphertext hash fails.
+    /// A record that is neither a duplicate, nor expired, nor obsolete, or
+    /// that a write holder verifies before noting it, whose signature does
+    /// not verify under the folder key with its record type's label; a chunk
+    /// whose ciphertext hash fails.
     Forged,
-    /// Inside a reply: a gap (a record whose `seq` is above the requester's
-    /// cursor for its writer plus one), or a record of a writer outside the
-    /// request's range or list. The sender's, whatever the signature.
+    /// Inside a reconciliation: a `RECORDS` record whose key does not begin
+    /// with the request's prefix, `CHILDREN` for a 128-nibble prefix or
+    /// answering a zero digest, or `RECORDS` of more than
+    /// `RECONCILE_LEAF_MAX` records at a shorter prefix answering a non-zero
+    /// digest. The sender's, whatever the signature.
     SenderViolation,
     /// A `FolderProof` that fails for any reason (hint, seal, payload, the
     /// folder's suite missing from the peer's Hello, the open-folder bound).
     FolderProofRejected,
-    /// A pushed record with `seq > cursor + 1`.
-    PushGap,
-    /// An index record whose record hash is already held.
+    /// A record whose record hash is already held.
     Duplicate,
-    /// A record of a writer at a `seq` where another record of that writer
-    /// is held (ruling R-K5).
-    ConcurrentVersion,
-    /// A record whose `supersedes` names a record not held (ruling R-K6).
-    Waiting,
-    /// While serving: the requester's digest at its `seq` differs from this
-    /// side's (4.5 case (c)).
-    DigestMismatch,
+    /// At a read or write holder, a tombstone or tree delete that the folder's
+    /// own time has passed by `TOMBSTONE_HORIZON`, or a cleanup it has passed
+    /// by `CLEANUP_HORIZON`.
+    Expired,
+    /// A record that something held replaces, and that replaces nothing held.
+    Obsolete,
+    /// A record that names, covers or (for a cleanup) forgets records held.
+    ReplacesHeld,
+    /// A cleanup group whose `because` names a record not held.
+    CleanupGroupWaiting,
+    /// At a read or write holder, a record whose counter is more than
+    /// `CLOCK_RULE_LIMIT` ahead of this device's clock.
+    FromTheFuture,
+    /// The two Hellos' `clock_days` differ by more than `CLOCK_RULE_LIMIT`,
+    /// judged when the first folder opens on the connection.
+    ClockOutOfRange,
+    /// An `IndexRequest` whose epoch is not this side's, or whose `since` is
+    /// above its local sequence.
+    Reset,
+    /// A `ReconcileRequest` whose digest is not this side's.
+    DigestDiffers,
     /// An empty push: the sender dropped pushes for the folder.
     EmptyPush,
-    /// A peer offers cursors below those stored here.
-    Rollback,
-    /// What a valid signature covers but a key holder cannot apply: a seal
-    /// that will not open, bad padding, a malformed path, an unknown kind or a
-    /// hash-count mismatch; a chunk with a correct ciphertext hash whose
-    /// length, seal, padding, compression or plaintext hash fails.
+    /// What a valid signature covers but a key holder cannot apply (4.4 step
+    /// 7); a chunk with a correct ciphertext hash whose length, seal,
+    /// padding, compression or plaintext hash fails.
     WriterFault,
     /// The holder answered `CHUNK_BUSY`.
     ChunkBusy,
     /// The holder answered `CHUNK_NOT_FOUND`.
     ChunkNotFound,
-    /// A record under this device's own device ID at or above the next `seq`
-    /// it would use (4.5, "Durability before transmission").
-    OwnSequenceAhead,
+    /// A record under this device's own device ID with a counter above its
+    /// high-water mark (4.5, "Durability before transmission").
+    OwnCounterAhead,
+    /// A held record whose counter is more than `CLOCK_AHEAD_WARNING` ahead
+    /// of this device's clock (4.4, "A fast clock carries forward").
+    ClockAhead,
+    /// This device's next counter would pass `MAX_COUNTER` (4.4).
+    CounterExhausted,
 }
 
 /// What happens to the item, the connection kept.
@@ -106,40 +122,46 @@ pub enum Keep {
     /// Answer `ProofResult(REJECTED)`; nothing of any folder is sent before it
     /// is open.
     ProofRejected,
-    /// Ignore without verifying; mark the writer for a listed request.
-    IgnoreAndMark,
-    /// Ignore (without verifying, for a record).
+    /// Ignore without verifying (a write holder that would note it as a stale
+    /// copy or forgotten record verifies it first).
     Ignore,
-    /// Store, and apply unless step 6 finds a writer fault; the writer's
-    /// cached digests recomputed from the record's `seq` up.
-    Store,
-    /// Store; it takes no part in heads until every record it names is held
-    /// and none of them waits.
-    StoreWaiting,
-    /// Send every record of the writer and mark it for a listed request.
-    ResendAndMark,
-    /// Owe a round.
+    /// Verify; drop what it replaces; hold it unless something held replaces
+    /// it.
+    Replace,
+    /// Hold the cleanup; the group applies while its `because` is held.
+    HoldWaiting,
+    /// Verify; neither hold nor relay it.
+    Refuse,
+    /// Answer one page with `reset` (and, for a `since` above the local
+    /// sequence, draw a new epoch); the requester reconciles.
+    AnswerReset,
+    /// Answer `CHILDREN` or `RECORDS`; the requester descends.
+    Descend,
+    /// Stop counting the peer's pushes and owe a round.
     OweRound,
     /// Send no chunk request on the connection for `CHUNK_BUSY_BACKOFF`; ask
     /// other peers meanwhile.
     BackOff,
     /// Ask other peers for the chunk; the pass to this peer goes on.
     AskElsewhere,
-    /// Store and apply; move this device's sequence counter past it before
-    /// writing again.
-    MoveCounter,
+    /// Hold and apply; raise the high-water mark to it; draw a new epoch.
+    RaiseMark,
+    /// Judge it as any record.
+    Judge,
+    /// Write nothing more in the folder; keep syncing what others write.
+    StopWriting,
 }
 
 /// The three-way outcome of section 5.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Outcome {
-    /// Close the connection with this reason: only the sender can be blamed.
+    /// Close the connection with this reason.
     Close(CloseReason),
     /// Keep the connection; the item is handled as `Keep` says.
     Keep(Keep),
     /// Keep the connection; raise an issue naming the record (never a
-    /// device), store the record opaque or mark the chunk corrupt for that
+    /// device), hold the record opaque or mark the chunk corrupt for that
     /// record.
     IssueAgainstRecord,
 }
@@ -154,17 +176,22 @@ pub enum Report {
     /// An issue naming the record, by hash (and by path where the seal
     /// opened), never a device.
     IssueNamingRecord,
-    /// An informational issue that names no one.
+    /// The clock-rule issue, which blames no device and offers the remedy:
+    /// for a peer, naming its proven device ID and both readings; for a
+    /// record, naming the device ID it claims as where it came from.
+    ClockRuleIssue,
+    /// An informational issue that blames no one.
     InformationalIssue,
-    /// A log line naming the cause (a waiting record also raises an
-    /// informational issue later, the index's rule of 4.4).
+    /// An issue about the folder itself (it must be shared again).
+    FolderIssue,
+    /// A log line naming the cause.
     Log,
 }
 
 impl Cause {
     /// Every row it names, in the order of section 5's table: all but the
     /// two rows about this device's own index store.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 30] = [
         Self::Malformed,
         Self::FrameOverLimit,
         Self::UnknownCriticalType,
@@ -179,17 +206,22 @@ impl Cause {
         Self::Forged,
         Self::SenderViolation,
         Self::FolderProofRejected,
-        Self::PushGap,
         Self::Duplicate,
-        Self::ConcurrentVersion,
-        Self::Waiting,
-        Self::DigestMismatch,
+        Self::Expired,
+        Self::Obsolete,
+        Self::ReplacesHeld,
+        Self::CleanupGroupWaiting,
+        Self::FromTheFuture,
+        Self::ClockOutOfRange,
+        Self::Reset,
+        Self::DigestDiffers,
         Self::EmptyPush,
-        Self::Rollback,
         Self::WriterFault,
         Self::ChunkBusy,
         Self::ChunkNotFound,
-        Self::OwnSequenceAhead,
+        Self::OwnCounterAhead,
+        Self::ClockAhead,
+        Self::CounterExhausted,
     ];
 
     /// The row of the section 5 table for this cause.
@@ -207,17 +239,21 @@ impl Cause {
             }
             Self::ProofTimeout => Outcome::Close(CloseReason::NoCommonFolder),
             Self::Forged => Outcome::Close(CloseReason::VerificationFailed),
+            Self::ClockOutOfRange => Outcome::Close(CloseReason::ClockOutOfRange),
             Self::UnknownNonCriticalType => Outcome::Keep(Keep::ReplyUnsupported),
             Self::FolderProofRejected => Outcome::Keep(Keep::ProofRejected),
-            Self::PushGap => Outcome::Keep(Keep::IgnoreAndMark),
-            Self::Duplicate | Self::Rollback => Outcome::Keep(Keep::Ignore),
-            Self::ConcurrentVersion => Outcome::Keep(Keep::Store),
-            Self::Waiting => Outcome::Keep(Keep::StoreWaiting),
-            Self::DigestMismatch => Outcome::Keep(Keep::ResendAndMark),
+            Self::Duplicate | Self::Expired | Self::Obsolete => Outcome::Keep(Keep::Ignore),
+            Self::ReplacesHeld => Outcome::Keep(Keep::Replace),
+            Self::CleanupGroupWaiting => Outcome::Keep(Keep::HoldWaiting),
+            Self::FromTheFuture => Outcome::Keep(Keep::Refuse),
+            Self::Reset => Outcome::Keep(Keep::AnswerReset),
+            Self::DigestDiffers => Outcome::Keep(Keep::Descend),
             Self::EmptyPush => Outcome::Keep(Keep::OweRound),
             Self::ChunkBusy => Outcome::Keep(Keep::BackOff),
             Self::ChunkNotFound => Outcome::Keep(Keep::AskElsewhere),
-            Self::OwnSequenceAhead => Outcome::Keep(Keep::MoveCounter),
+            Self::OwnCounterAhead => Outcome::Keep(Keep::RaiseMark),
+            Self::ClockAhead => Outcome::Keep(Keep::Judge),
+            Self::CounterExhausted => Outcome::Keep(Keep::StopWriting),
             Self::WriterFault => Outcome::IssueAgainstRecord,
         }
     }
@@ -225,9 +261,10 @@ impl Cause {
     /// What the outcome leaves behind. A close for the sender's fault raises
     /// an issue naming the peer (TM-10); a timeout, which an honest peer on a
     /// bad network can cause, and every difference in knowledge, a log line;
-    /// a writer fault, an issue naming the record; a record under this
-    /// device's own ID ahead of its counter, an informational issue naming no
-    /// one.
+    /// a writer fault, an issue naming the record; the clock rule, its issue,
+    /// which blames no device; a record under this device's own ID ahead of
+    /// its mark and a fast clock, an informational issue naming no one; an
+    /// exhausted counter, an issue about the folder.
     #[must_use]
     pub const fn report(self) -> Report {
         match self {
@@ -240,20 +277,23 @@ impl Cause {
             | Self::Forged
             | Self::SenderViolation => Report::IssueNamingPeer,
             Self::WriterFault => Report::IssueNamingRecord,
-            Self::OwnSequenceAhead => Report::InformationalIssue,
+            Self::FromTheFuture | Self::ClockOutOfRange => Report::ClockRuleIssue,
+            Self::OwnCounterAhead | Self::ClockAhead => Report::InformationalIssue,
+            Self::CounterExhausted => Report::FolderIssue,
             Self::HelloTimeout
             | Self::IdleTimeout
             | Self::ReplyPageTimeout
             | Self::ProofTimeout
             | Self::UnknownNonCriticalType
             | Self::FolderProofRejected
-            | Self::PushGap
             | Self::Duplicate
-            | Self::ConcurrentVersion
-            | Self::Waiting
-            | Self::DigestMismatch
+            | Self::Expired
+            | Self::Obsolete
+            | Self::ReplacesHeld
+            | Self::CleanupGroupWaiting
+            | Self::Reset
+            | Self::DigestDiffers
             | Self::EmptyPush
-            | Self::Rollback
             | Self::ChunkBusy
             | Self::ChunkNotFound => Report::Log,
         }
@@ -286,6 +326,7 @@ mod tests {
             (Cause::ReplyPageTimeout, R::Timeout),
             (Cause::ProofTimeout, R::NoCommonFolder),
             (Cause::Forged, R::VerificationFailed),
+            (Cause::ClockOutOfRange, R::ClockOutOfRange),
         ];
         for (cause, reason) in closes {
             assert_eq!(cause.outcome(), Outcome::Close(reason), "{cause:?}");
@@ -294,16 +335,20 @@ mod tests {
         let keeps = [
             (Cause::UnknownNonCriticalType, Keep::ReplyUnsupported),
             (Cause::FolderProofRejected, Keep::ProofRejected),
-            (Cause::PushGap, Keep::IgnoreAndMark),
             (Cause::Duplicate, Keep::Ignore),
-            (Cause::Rollback, Keep::Ignore),
-            (Cause::ConcurrentVersion, Keep::Store),
-            (Cause::Waiting, Keep::StoreWaiting),
-            (Cause::DigestMismatch, Keep::ResendAndMark),
+            (Cause::Expired, Keep::Ignore),
+            (Cause::Obsolete, Keep::Ignore),
+            (Cause::ReplacesHeld, Keep::Replace),
+            (Cause::CleanupGroupWaiting, Keep::HoldWaiting),
+            (Cause::FromTheFuture, Keep::Refuse),
+            (Cause::Reset, Keep::AnswerReset),
+            (Cause::DigestDiffers, Keep::Descend),
             (Cause::EmptyPush, Keep::OweRound),
             (Cause::ChunkBusy, Keep::BackOff),
             (Cause::ChunkNotFound, Keep::AskElsewhere),
-            (Cause::OwnSequenceAhead, Keep::MoveCounter),
+            (Cause::OwnCounterAhead, Keep::RaiseMark),
+            (Cause::ClockAhead, Keep::Judge),
+            (Cause::CounterExhausted, Keep::StopWriting),
         ];
         for (cause, keep) in keeps {
             assert_eq!(cause.outcome(), Outcome::Keep(keep), "{cause:?}");
@@ -321,11 +366,16 @@ mod tests {
                 Outcome::Close(CloseReason::Timeout | CloseReason::NoCommonFolder) => {
                     assert_eq!(report, Report::Log, "{cause:?}");
                 }
+                Outcome::Close(CloseReason::ClockOutOfRange) => {
+                    assert_eq!(report, Report::ClockRuleIssue);
+                }
                 Outcome::Close(_) => assert_eq!(report, Report::IssueNamingPeer, "{cause:?}"),
                 Outcome::IssueAgainstRecord => assert_eq!(report, Report::IssueNamingRecord),
-                Outcome::Keep(Keep::MoveCounter) => {
-                    assert_eq!(report, Report::InformationalIssue);
+                Outcome::Keep(Keep::Refuse) => assert_eq!(report, Report::ClockRuleIssue),
+                Outcome::Keep(Keep::RaiseMark | Keep::Judge) => {
+                    assert_eq!(report, Report::InformationalIssue, "{cause:?}");
                 }
+                Outcome::Keep(Keep::StopWriting) => assert_eq!(report, Report::FolderIssue),
                 Outcome::Keep(_) => assert_eq!(report, Report::Log, "{cause:?}"),
             }
         }

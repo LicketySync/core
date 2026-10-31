@@ -192,6 +192,7 @@ mod tests {
             max_requests_in_flight: 1,
             nonce: vec![7; 32],
             libp2p_identity: vec![9; 32],
+            clock_days: 20_000,
         }
     }
 

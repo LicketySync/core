@@ -2,13 +2,17 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Test fixtures: fixed devices, folders and randomness; a toy index that
-//! implements [`Held`] and [`Cursors`] with the cached digests of 4.4; and a
-//! [`Pair`] of real [`Connection`]s wired through a simulated clock, with a
+//! Test fixtures: fixed devices, folders and randomness; records signed
+//! with fixed nonces; a toy index (records by local sequence and by key, an
+//! epoch, the set digests of 4.5 computed from the records, and the peer's
+//! cursor) that implements [`IndexView`] and serves both request kinds; and
+//! a [`Pair`] of real [`Connection`]s wired through a simulated clock, with a
 //! small reference engine that answers what the connection asks (requests
 //! due, requests to serve, page by page as the send queue has room, records
-//! to judge, Status), so that tests drive whole exchanges. The engine stops
-//! reacting once its connection is closed.
+//! to judge, the subtrees to push, cursors to keep, Status), so that tests
+//! drive whole rounds. The engine stops reacting once its connection is
+//! closed. The toy index holds every record it is given that verifies:
+//! latest only is the index crate's, not the connection's.
 
 #![allow(
     clippy::unwrap_used,
@@ -31,21 +35,55 @@ use licketysync_keys::folder::FolderKey;
 use licketysync_keys::records::SignedRecord;
 use licketysync_keys::secret::{DeviceSeed, WriteSecret};
 use licketysync_keys::{
-    DeviceId, FolderId, FolderVerifier, RecordHash, Suite, WriteKey, WriterDigest,
+    DeviceId, FolderId, FolderVerifier, RecordHash, SetDigest, Suite, WriteKey,
 };
 
 use prost::Message as _;
 
-use crate::connection::{Config, Connection, Event, Keys, Output, SendError, State, Tick};
-use crate::exchange::{serve, Cursors, Pager, Serve, ServeRequest, WriterCursor};
-use crate::messages::{FolderStatus, IndexRecords};
+use crate::connection::{
+    Config, Connection, Event, IndexServe, Judgement, Keys, Output, ReconcileServe, SendError,
+    State, Tick,
+};
+use crate::exchange::{reconcile_outcome, IndexView, Pager, Prefix};
+use crate::limits::{MAX_PAGE_RECORDS, RECONCILE_LEAF_MAX};
+use crate::messages::{FolderStatus, IndexRecords, ReconcileOutcome, ReconcileReply};
 use crate::proof::FolderCredential;
-use crate::record::{judge, writer_digests, Chunk, Draft, Held, Kind, Meta, Record};
+use crate::record::{Chunk, CleanupDraft, Dot, Group, IndexDraft, Kind, Meta, Record, Vector};
 use crate::rules::Cause;
 
 /// `n, n+1, … n+31`.
 pub(crate) fn fixed32(start: u8) -> [u8; 32] {
     core::array::from_fn(|i| start.wrapping_add(u8::try_from(i).unwrap()))
+}
+
+/// The fixed seed every property test of this crate runs from in the gate,
+/// so that the gate is deterministic; the keys and index crates' tests run
+/// from the same one.
+pub(crate) const PROPTEST_SEED: u64 = 0x6c69_636b_6574_7379;
+
+/// The proptest configuration of every property test of this crate: `cases` cases, or
+/// `PROPTEST_CASES` when it is set, from the fixed [`PROPTEST_SEED`], or
+/// from the seed `LICKETYSYNC_PROPTEST_SEED` names: `random` for a random
+/// one (a long run outside the gate), or a number.
+pub(crate) fn proptest_config(cases: u32) -> proptest::test_runner::Config {
+    use proptest::test_runner::{Config, RngSeed};
+    let cases = std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(cases);
+    let rng_seed = match std::env::var("LICKETYSYNC_PROPTEST_SEED") {
+        Ok(v) if v == "random" => RngSeed::Random,
+        Ok(v) => RngSeed::Fixed(
+            v.parse()
+                .unwrap_or_else(|_| panic!("LICKETYSYNC_PROPTEST_SEED={v}: random or a u64")),
+        ),
+        Err(_) => RngSeed::Fixed(PROPTEST_SEED),
+    };
+    Config {
+        cases,
+        rng_seed,
+        ..Config::default()
+    }
 }
 
 /// The device of `seed` (the keys crate's vectors use `0xa0`).
@@ -78,53 +116,86 @@ impl Rng {
     }
 }
 
-/// One record a writer signs at `seq` with a recognisable path.
-pub(crate) fn signed(key: &WriteKey, writer: u8, seq: u64, salt: u8) -> SignedRecord {
-    Draft {
-        device_id: DeviceId([writer; 32]),
-        seq,
-        supersedes: vec![],
-        deleted: false,
-        chunks: vec![],
-        meta: Meta {
-            path: format!("w{writer}/s{seq}/{salt}"),
-            kind: Kind::File,
-            size: 0,
-            mtime_ns: i64::from(salt),
-            mode: 0,
-            plain_hashes: vec![],
-            written_at: 0,
+/// The metadata of a file at `path` written by `writer` at `counter`, with
+/// an empty vector.
+pub(crate) fn meta(path: &str, writer: u8, counter: u64) -> Meta {
+    Meta {
+        path: path.to_owned(),
+        kind: Kind::File,
+        size: 0,
+        mtime_ns: 0,
+        mode: 0,
+        plain_hashes: vec![],
+        written_at: 0,
+        dot: Dot {
+            device: DeviceId([writer; 32]),
+            counter,
         },
+        vector: Vector::default(),
+        deleted: false,
+        tree: false,
     }
-    .sign(key, &mut |b: &mut [u8]| b.fill(salt))
-    .unwrap()
+}
+
+/// Signs `draft` with fixed seal nonces of `salt`.
+pub(crate) fn sign(key: &WriteKey, draft: &IndexDraft, salt: u8) -> SignedRecord {
+    draft
+        .sign(key, &key.record_keys(), &mut |b: &mut [u8]| b.fill(salt))
+        .unwrap()
+}
+
+/// One record a writer signs at `counter` with a recognisable path.
+pub(crate) fn signed(key: &WriteKey, writer: u8, counter: u64, salt: u8) -> SignedRecord {
+    let mut m = meta(&format!("w{writer}/c{counter}/{salt}"), writer, counter);
+    m.mtime_ns = i64::from(salt);
+    sign(
+        key,
+        &IndexDraft {
+            meta: m,
+            chunks: vec![],
+            replaces: vec![],
+        },
+        salt,
+    )
 }
 
 /// A record with one chunk named `cipher_hash`.
 pub(crate) fn with_chunk(
     key: &WriteKey,
     writer: u8,
-    seq: u64,
+    counter: u64,
     chunk: Chunk,
     plain: [u8; 32],
 ) -> SignedRecord {
-    Draft {
-        device_id: DeviceId([writer; 32]),
-        seq,
-        supersedes: vec![],
-        deleted: false,
-        chunks: vec![chunk],
-        meta: Meta {
-            path: format!("c/{seq}"),
-            kind: Kind::File,
-            size: 1,
-            mtime_ns: 0,
-            mode: 0,
-            plain_hashes: vec![licketysync_keys::chunk::PlainHash(plain)],
-            written_at: 0,
+    let mut m = meta(&format!("c/{counter}"), writer, counter);
+    m.size = 1;
+    m.plain_hashes = vec![licketysync_keys::chunk::PlainHash(plain)];
+    sign(
+        key,
+        &IndexDraft {
+            meta: m,
+            chunks: vec![chunk],
+            replaces: vec![],
         },
+        9,
+    )
+}
+
+/// A cleanup by `writer` at `counter` with these groups.
+pub(crate) fn cleanup(
+    key: &WriteKey,
+    writer: u8,
+    counter: u64,
+    groups: Vec<Group>,
+) -> SignedRecord {
+    CleanupDraft {
+        dot: Dot {
+            device: DeviceId([writer; 32]),
+            counter,
+        },
+        groups,
     }
-    .sign(key, &mut |b: &mut [u8]| b.fill(9))
+    .sign(key, &key.record_keys(), &mut |b: &mut [u8]| b.fill(7))
     .unwrap()
 }
 
@@ -172,151 +243,234 @@ pub(crate) fn flipped(r: &SignedRecord, byte: usize) -> SignedRecord {
     resigned(r, sig)
 }
 
-/// A toy index of one folder: every record by writer, in canonical order,
-/// with the cached digests of 4.4.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Store {
-    pub(crate) by_writer: BTreeMap<DeviceId, BTreeMap<(u64, RecordHash), SignedRecord>>,
-    pub(crate) hashes: BTreeSet<RecordHash>,
+/// One record the toy index holds.
+#[derive(Clone, Debug)]
+pub(crate) struct Held {
+    pub(crate) seq: u64,
+    pub(crate) key: crate::exchange::Key,
+    pub(crate) signed: SignedRecord,
 }
 
-impl Held for Store {
-    fn holds(&self, record: &RecordHash) -> bool {
-        self.hashes.contains(record)
+/// A toy index of one folder: every record it was given that verified, by
+/// local sequence and by key, its epoch, and the cursor of each peer.
+#[derive(Clone, Debug)]
+pub(crate) struct Store {
+    pub(crate) held: BTreeMap<RecordHash, Held>,
+    pub(crate) by_seq: BTreeMap<u64, RecordHash>,
+    pub(crate) next_seq: u64,
+    pub(crate) epoch: u64,
+    pub(crate) peers: BTreeMap<DeviceId, (u64, u64)>,
+    /// Records that change nothing when they arrive: the store refuses
+    /// (judged [`Judgement::Skipped`]).
+    pub(crate) refusing: bool,
+    /// The toy index lies about every digest: none is ever zero, nor any
+    /// real set's (for tests that need a requester to descend anywhere).
+    pub(crate) lying: bool,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self::with_epoch(1)
     }
-    fn cursor(&self, writer: &DeviceId) -> u64 {
-        self.by_writer
-            .get(writer)
-            .and_then(|r| r.keys().next_back())
-            .map_or(0, |(s, _)| *s)
+}
+
+impl IndexView for Store {
+    fn digest(&self, prefix: &Prefix) -> SetDigest {
+        if self.lying {
+            let mut d = [0x6c; 32];
+            for (i, n) in prefix.nibbles().enumerate() {
+                d[(i / 2) % 31] ^= if i % 2 == 0 { n << 4 } else { n };
+            }
+            d[31] = u8::try_from(prefix.depth()).unwrap();
+            return SetDigest(d);
+        }
+        let hashes = self.hashes_in(prefix);
+        if hashes.is_empty() {
+            SetDigest::EMPTY
+        } else if hashes.len() <= RECONCILE_LEAF_MAX || prefix.is_full() {
+            SetDigest::leaf(&hashes)
+        } else {
+            let children: [SetDigest; 16] =
+                core::array::from_fn(|i| self.digest(&prefix.child(i as u8).unwrap()));
+            SetDigest::node(&children)
+        }
+    }
+
+    fn peer_cursor(&self, peer: &DeviceId) -> Option<(u64, u64)> {
+        self.peers.get(peer).copied()
     }
 }
 
 impl Store {
-    pub(crate) fn insert(&mut self, record: &Record) {
-        self.hashes.insert(record.hash());
-        self.by_writer
-            .entry(record.device_id())
-            .or_default()
-            .insert((record.seq(), record.hash()), record.signed().clone());
-    }
-
-    pub(crate) fn insert_signed(&mut self, signed: &SignedRecord, folder: &FolderVerifier) {
-        self.insert(&Record::parse(signed.clone(), folder).unwrap());
-    }
-
-    pub(crate) fn digest_at(&self, writer: &DeviceId, seq: u64) -> Option<WriterDigest> {
-        let records = self.by_writer.get(writer)?;
-        writer_digests(records.keys().copied())
-            .range(..=seq)
-            .next_back()
-            .map(|(_, d)| *d)
-    }
-
-    pub(crate) fn cursor_of(&self, writer: &DeviceId) -> WriterCursor {
-        let seq = self.cursor(writer);
-        WriterCursor {
-            writer: *writer,
-            seq,
-            digest: (seq > 0).then(|| self.digest_at(writer, seq)).flatten(),
+    pub(crate) fn with_epoch(epoch: u64) -> Self {
+        Self {
+            held: BTreeMap::new(),
+            by_seq: BTreeMap::new(),
+            next_seq: 1,
+            epoch,
+            peers: BTreeMap::new(),
+            refusing: false,
+            lying: false,
         }
     }
 
-    /// The records of every writer in `scope` this side serves for
-    /// `request`, in the order of 4.5, and the writers resent in full (case
-    /// (c)).
-    pub(crate) fn reply(&self, request: &ServeRequest) -> (Vec<SignedRecord>, Vec<DeviceId>) {
-        let mut records = Vec::new();
-        let mut resent = Vec::new();
-        for (w, held) in &self.by_writer {
-            if !request.scope.contains(w) {
-                continue;
+    /// Holds `record` (once), numbering it next; its local sequence.
+    pub(crate) fn insert(&mut self, record: &Record) -> u64 {
+        if let Some(h) = self.held.get(&record.hash()) {
+            return h.seq;
+        }
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.by_seq.insert(seq, record.hash());
+        self.held.insert(
+            record.hash(),
+            Held {
+                seq,
+                key: record.key(),
+                signed: record.signed().clone(),
+            },
+        );
+        seq
+    }
+
+    pub(crate) fn insert_signed(&mut self, signed: &SignedRecord, folder: &FolderVerifier) -> u64 {
+        self.insert(&Record::parse(signed.clone(), folder).unwrap())
+    }
+
+    pub(crate) fn holds(&self, hash: &RecordHash) -> bool {
+        self.held.contains_key(hash)
+    }
+
+    /// The local sequence: the greatest number given.
+    pub(crate) fn local_seq(&self) -> u64 {
+        self.next_seq - 1
+    }
+
+    /// The records in the subtree at `prefix`, ascending by record hash.
+    pub(crate) fn in_prefix(&self, prefix: &Prefix) -> Vec<(RecordHash, SignedRecord)> {
+        self.held
+            .iter()
+            .filter(|(_, h)| prefix.contains(&h.key))
+            .map(|(hash, h)| (*hash, h.signed.clone()))
+            .collect()
+    }
+
+    fn hashes_in(&self, prefix: &Prefix) -> Vec<RecordHash> {
+        self.in_prefix(prefix).into_iter().map(|(h, _)| h).collect()
+    }
+
+    /// The parts of the reply to an `IndexRequest` (4.5, "Serving an
+    /// `IndexRequest`"), drawing a new epoch for a `since` above the local
+    /// sequence when that is allowed.
+    pub(crate) fn index_reply(
+        &mut self,
+        folder: FolderId,
+        request: &IndexServe,
+        max_message_size: u32,
+    ) -> Vec<Part> {
+        let local = self.local_seq();
+        if request.epoch != self.epoch || request.since > local {
+            let redrew =
+                request.epoch == self.epoch && request.since > local && request.redraw_allowed;
+            if redrew {
+                self.epoch = self.epoch.wrapping_mul(31).wrapping_add(7).max(1);
             }
-            let requester = request.requester(w);
-            let from = match serve(requester, self.cursor(w), self.digest_at(w, requester.0)) {
-                Serve::All { mark } => {
-                    if mark {
-                        resent.push(*w);
-                    }
-                    0
-                }
-                Serve::After(s) => s,
-                Serve::Nothing => continue,
-            };
-            records.extend(
-                held.iter()
-                    .filter(|((s, _), _)| *s > from)
-                    .map(|(_, r)| r.clone()),
-            );
+            return vec![Part::Reset {
+                folder,
+                request_id: request.request_id,
+                epoch: self.epoch,
+                redrew,
+            }];
         }
-        (records, resent)
+        let records: Vec<(u64, SignedRecord)> = self
+            .by_seq
+            .range(request.since + 1..)
+            .map(|(seq, h)| (*seq, self.held[h].signed.clone()))
+            .collect();
+        let mut pages = Vec::new();
+        let mut pager = Pager::new(request.page_limit, max_message_size);
+        let mut last = request.since;
+        for (seq, r) in records {
+            if !pager.push(&r).unwrap() {
+                pages.push(pager.page(&folder, request.request_id, true, self.epoch, last));
+                assert!(pager.push(&r).unwrap());
+            }
+            last = seq;
+        }
+        pages.push(pager.page(&folder, request.request_id, false, self.epoch, local));
+        pages.into_iter().map(Part::Page).collect()
+    }
+
+    /// The parts of the reply to a `ReconcileRequest` (4.5, "Serving a
+    /// `ReconcileRequest`").
+    pub(crate) fn reconcile_reply(
+        &self,
+        folder: FolderId,
+        request: &ReconcileServe,
+        max_message_size: u32,
+    ) -> Vec<Part> {
+        let own = self.digest(&request.prefix);
+        let records = self.in_prefix(&request.prefix);
+        let outcome =
+            reconcile_outcome(request.prefix.depth(), &request.digest, &own, records.len());
+        let children = if outcome == ReconcileOutcome::Children {
+            (0..16u8)
+                .map(|i| self.digest(&request.prefix.child(i).unwrap()).0.to_vec())
+                .collect()
+        } else {
+            vec![]
+        };
+        let mut parts = vec![Part::Reconcile(ReconcileReply {
+            folder_id: folder.0.to_vec(),
+            request_id: request.request_id,
+            outcome: outcome.as_u32(),
+            children,
+            epoch: self.epoch,
+            through: if request.prefix.is_root() {
+                self.local_seq()
+            } else {
+                0
+            },
+        })];
+        if outcome == ReconcileOutcome::Records {
+            // In ascending key order (4.5, "Serving a `ReconcileRequest`").
+            let mut records = records;
+            records.sort_by_key(|(h, _)| self.held[h].key);
+            let mut pages = Vec::new();
+            let mut pager = Pager::new(MAX_PAGE_RECORDS, max_message_size);
+            for (_, r) in records {
+                if !pager.push(&r).unwrap() {
+                    pages.push(pager.page(&folder, request.request_id, true, self.epoch, 0));
+                    assert!(pager.push(&r).unwrap());
+                }
+            }
+            pages.push(pager.page(&folder, request.request_id, false, self.epoch, 0));
+            parts.extend(pages.into_iter().map(Part::Page));
+        }
+        parts
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.hashes.len()
+        self.held.len()
     }
 
     /// Every record held, for convergence checks.
     pub(crate) fn all(&self) -> BTreeSet<RecordHash> {
-        self.hashes.clone()
+        self.held.keys().copied().collect()
     }
 }
 
-impl Cursors for Store {
-    fn cursors_after(&self, after: Option<DeviceId>) -> impl Iterator<Item = WriterCursor> + '_ {
-        let from = after.map_or(core::ops::Bound::Unbounded, core::ops::Bound::Excluded);
-        self.by_writer
-            .range((from, core::ops::Bound::Unbounded))
-            .map(|(w, _)| self.cursor_of(w))
-    }
-
-    fn cursor_of(&self, writer: &DeviceId) -> WriterCursor {
-        Store::cursor_of(self, writer)
-    }
-}
-
-/// A reply the reference engine is sending, page by page.
+/// One part of a reply the reference engine is sending.
 #[derive(Clone, Debug)]
-pub(crate) struct Reply {
-    pub(crate) folder: FolderId,
-    pub(crate) request_id: u32,
-    pub(crate) page_limit: usize,
-    /// The records not yet on a page.
-    pub(crate) records: VecDeque<SignedRecord>,
-    /// The writers resent in full, marked with the first page.
-    pub(crate) resent: Vec<DeviceId>,
-    /// A page built and refused for want of room.
-    pub(crate) built: Option<IndexRecords>,
-}
-
-impl Reply {
-    pub(crate) fn new(folder: FolderId, request: &ServeRequest, store: &Store) -> Self {
-        let (records, resent) = store.reply(request);
-        Self {
-            folder,
-            request_id: request.request_id,
-            page_limit: request.page_limit,
-            records: records.into(),
-            resent,
-            built: None,
-        }
-    }
-
-    /// The next page for a peer that accepts frames of `max_message_size`.
-    pub(crate) fn next_page(&mut self, max_message_size: u32) -> IndexRecords {
-        if let Some(page) = self.built.take() {
-            return page;
-        }
-        let mut pager = Pager::new(self.page_limit, max_message_size);
-        while let Some(r) = self.records.front() {
-            if !pager.push(r).unwrap() {
-                break;
-            }
-            self.records.pop_front();
-        }
-        let more = !self.records.is_empty();
-        pager.page(&self.folder, self.request_id, more)
-    }
+pub(crate) enum Part {
+    Page(IndexRecords),
+    Reset {
+        folder: FolderId,
+        request_id: u32,
+        epoch: u64,
+        redrew: bool,
+    },
+    Reconcile(ReconcileReply),
 }
 
 /// One side of a [`Pair`]: its device, folder, connection, toy index and
@@ -333,8 +487,8 @@ pub(crate) struct Side {
     pub(crate) outbox: Vec<u8>,
     /// Frames this side handed to the transport, with the time.
     pub(crate) sent: Vec<(Duration, Vec<u8>)>,
-    /// Replies under way, page by page.
-    pub(crate) replies: VecDeque<Reply>,
+    /// The parts of replies under way, in order.
+    pub(crate) replies: VecDeque<Part>,
     /// The engine reacts to events when set; tests that script one side by
     /// hand turn it off.
     pub(crate) auto: bool,
@@ -352,7 +506,8 @@ pub(crate) struct Side {
 impl Side {
     fn new(seed: u8, folders: &[FolderKey], config: impl FnOnce(&mut Config)) -> (Self, Output) {
         let (key, libp2p) = device(seed);
-        let mut cfg = Config::new(libp2p);
+        // 2026-10-25, the day these vectors were made.
+        let mut cfg = Config::new(libp2p, 20_751);
         cfg.device_name = format!("device-{seed:02x}");
         config(&mut cfg);
         let mut rng = Rng(u64::from(seed));
@@ -363,7 +518,7 @@ impl Side {
             key,
             conn,
             rng,
-            store: Store::default(),
+            store: Store::with_epoch(u64::from(seed) << 8 | 1),
             events: Vec::new(),
             wake: None,
             transport_closed: false,
@@ -528,6 +683,7 @@ impl Side {
 
     /// The reference engine's reaction to one event.
     fn react(&mut self, now: Duration, event: &Event) {
+        let mms = self.conn.peer_max_message_size();
         match event {
             Event::RequestDue { .. } => {
                 let _ = self.request(now);
@@ -536,9 +692,14 @@ impl Side {
             Event::StatusDue => {
                 let _ = self.status(now);
             }
-            Event::Serve { folder, request } if self.serving => {
-                let reply = Reply::new(*folder, request, &self.store);
-                self.replies.push_back(reply);
+            Event::ServeIndex { folder, request } if self.serving => {
+                let parts = self.store.index_reply(*folder, request, mms);
+                self.replies.extend(parts);
+                self.serve_replies(now);
+            }
+            Event::ServeReconcile { folder, request } if self.serving => {
+                let parts = self.store.reconcile_reply(*folder, request, mms);
+                self.replies.extend(parts);
                 self.serve_replies(now);
             }
             Event::Room => self.serve_replies(now),
@@ -547,45 +708,90 @@ impl Side {
                 records,
                 page,
             } => {
-                let verifier = self.verifier();
-                let mut results = Vec::new();
-                for r in records {
-                    let judged = judge(&r.record, r.arrival, &self.store, &verifier);
-                    if judged.is_ok_and(crate::record::Judgement::stores) {
-                        self.store.insert(&r.record);
-                    }
-                    results.push((r.record.device_id(), judged));
-                    if let Err(cause) = judged {
-                        self.reported.push(cause);
-                        break;
-                    }
-                }
+                let results = self.judge(records);
                 let tick = self.tick(now);
                 let out = self.conn.judged(tick, *folder, *page, &results);
                 self.apply(now, out);
+            }
+            Event::PushSubtree {
+                prefix, carried, ..
+            } => {
+                let carried: BTreeSet<RecordHash> = carried.iter().flatten().copied().collect();
+                let records: Vec<SignedRecord> = self
+                    .store
+                    .in_prefix(prefix)
+                    .into_iter()
+                    .filter(|(h, _)| !carried.contains(h))
+                    .map(|(_, r)| r)
+                    .collect();
+                for chunk in records.chunks(MAX_PAGE_RECORDS) {
+                    self.push_page(now, chunk, 0);
+                }
+            }
+            Event::RoundCompleted {
+                cursor: Some(c), ..
+            } => {
+                if let Some(peer) = self.conn.peer_device() {
+                    self.store.peers.insert(peer, *c);
+                }
+            }
+            Event::CursorAdvanced { epoch, through, .. } => {
+                if let Some(peer) = self.conn.peer_device() {
+                    self.store.peers.insert(peer, (*epoch, *through));
+                }
             }
             _ => {}
         }
     }
 
-    /// Sends the pages of the replies under way while the send queue has
+    /// The toy index's judgements of a page's records, in order, stopping
+    /// at the first that closes.
+    pub(crate) fn judge(&mut self, records: &[Record]) -> Vec<Result<Judgement, Cause>> {
+        let verifier = self.verifier();
+        let mut results = Vec::new();
+        for r in records {
+            let judged = if self.store.holds(&r.hash()) {
+                Ok(Judgement::Duplicate)
+            } else if let Err(cause) = r.verify(&verifier) {
+                Err(cause)
+            } else if self.store.refusing {
+                Ok(Judgement::Skipped)
+            } else {
+                self.store.insert(r);
+                Ok(Judgement::Held)
+            };
+            results.push(judged);
+            if let Err(cause) = judged {
+                self.reported.push(cause);
+                break;
+            }
+        }
+        results
+    }
+
+    /// Sends the parts of the replies under way while the send queue has
     /// room; on a refusal for room, waits for [`Event::Room`].
     pub(crate) fn serve_replies(&mut self, now: Duration) {
-        while let Some(mut reply) = self.replies.pop_front() {
-            let page = reply.next_page(self.conn.peer_max_message_size());
-            let resent = core::mem::take(&mut reply.resent);
+        while let Some(part) = self.replies.pop_front() {
             let tick = self.tick(now);
-            match self.conn.send_page(tick, &page, &resent) {
+            let result = match &part {
+                Part::Page(page) => self.conn.send_page(tick, page),
+                Part::Reset {
+                    folder,
+                    request_id,
+                    epoch,
+                    redrew,
+                } => self
+                    .conn
+                    .send_reset(tick, *folder, *request_id, *epoch, *redrew),
+                Part::Reconcile(reply) => self.conn.send_reconcile_reply(tick, reply),
+            };
+            match result {
                 Ok(out) => {
                     self.apply(now, out);
-                    if page.more {
-                        self.replies.push_front(reply);
-                    }
                 }
                 Err(SendError::WouldBlock { len }) => {
-                    reply.resent = resent;
-                    reply.built = Some(page);
-                    self.replies.push_front(reply);
+                    self.replies.push_front(part);
                     let out = self.conn.want_room(tick, len);
                     self.apply(now, out);
                     return;
@@ -596,23 +802,36 @@ impl Side {
         }
     }
 
-    /// Pushes records this side newly accepted (it wrote them); the frames
-    /// it handed over (the push, the empty push owed, or none).
-    pub(crate) fn push(&mut self, now: Duration, records: &[SignedRecord]) -> Vec<Vec<u8>> {
+    /// Pushes one page of `records` with `through`; the frames it handed
+    /// over (the push, the empty push owed, or none).
+    pub(crate) fn push_page(
+        &mut self,
+        now: Duration,
+        records: &[SignedRecord],
+        through: u64,
+    ) -> Vec<Vec<u8>> {
         let folder = self.folder_id();
-        let mut pager = Pager::new(
-            crate::limits::MAX_PAGE_RECORDS,
-            self.conn.peer_max_message_size(),
-        );
+        let mut pager = Pager::new(MAX_PAGE_RECORDS, self.conn.peer_max_message_size());
         for r in records {
             assert!(pager.push(r).unwrap());
         }
-        let page: IndexRecords = pager.page(&folder, 0, false);
+        let page: IndexRecords = pager.page(&folder, 0, false, self.store.epoch, through);
         let before = self.sent.len();
         let tick = self.tick(now);
         let out = self.conn.push(tick, &page).unwrap();
         self.apply(now, out);
         self.sent[before..].iter().map(|(_, f)| f.clone()).collect()
+    }
+
+    /// This side comes to hold `records` (it wrote them) and pushes them,
+    /// `through` the local sequence of the last; the frames it handed over.
+    pub(crate) fn push(&mut self, now: Duration, records: &[SignedRecord]) -> Vec<Vec<u8>> {
+        let verifier = self.verifier();
+        let mut through = 0;
+        for r in records {
+            through = self.store.insert_signed(r, &verifier);
+        }
+        self.push_page(now, records, through)
     }
 
     /// Whether the event list holds an event matching `f`.

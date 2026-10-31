@@ -60,7 +60,7 @@ use core::fmt;
 use prost::bytes::Buf;
 
 use crate::folder::{FolderVerifier, WriteKey};
-use crate::ids::{RecordHash, WriterDigest};
+use crate::ids::RecordHash;
 use crate::labels::{self, labelled_hash, SigLabel};
 use crate::sig::{self, Signature, SignatureError};
 
@@ -165,10 +165,9 @@ impl fmt::Display for Malformed {
         match self {
             Self::Decode => f.write_str("does not parse"),
             Self::TooLarge(n) => write!(f, "record of {n} bytes is too large"),
-            // This wording, from when 16 was the one record type, stays for
-            // one commit: the protocol crate's vectors quote it, and the next
-            // commit of this series, which rewrites them, rewords it.
-            Self::RecordType(n) => write!(f, "record type {n} is not an index record"),
+            Self::RecordType(n) => {
+                write!(f, "record type {n} is not the type being signed or read")
+            }
             Self::DuplicateField(n) => write!(f, "field number {n} occurs more than once"),
             Self::VarintRange(n) => write!(f, "the value of field number {n} does not fit 32 bits"),
             Self::SignatureSize(n) => write!(f, "signature is {n} bytes, not 64"),
@@ -364,25 +363,6 @@ impl FolderVerifier {
             &record.body,
             &record.signature,
         )
-    }
-}
-
-/// The old index exchange's writer digests: retired by `keys.md` section 10
-/// on 2026-10-25, used only by that exchange, and removed in the next commit
-/// of this series.
-impl WriterDigest {
-    /// The digest before any record: 32 zero bytes.
-    pub const ZERO: WriterDigest = WriterDigest([0u8; 32]);
-
-    /// The digest after one more record, `H("licketysync/v1/hash/writer-digest",
-    /// D || record_hash)` (`protocol.md` 4.4), the records taken in canonical
-    /// order: ascending `seq`, then ascending record hash.
-    #[must_use]
-    pub fn then(&self, record: &RecordHash) -> WriterDigest {
-        WriterDigest(labelled_hash(
-            labels::HASH_WRITER_DIGEST,
-            &[&self.0, record.as_bytes()],
-        ))
     }
 }
 
@@ -813,20 +793,6 @@ mod tests {
     }
 
     #[test]
-    fn writer_digests_chain_record_hashes() {
-        let a = RecordHash(labelled_hash(labels::HASH_RECORD, &[b"a"]));
-        let b = RecordHash(labelled_hash(labels::HASH_RECORD, &[b"b"]));
-        let d1 = WriterDigest::ZERO.then(&a);
-        assert_eq!(
-            d1.0,
-            labelled_hash(labels::HASH_WRITER_DIGEST, &[&[0u8; 32], &a.0])
-        );
-        let d2 = d1.then(&b);
-        assert_ne!(d2, WriterDigest::ZERO.then(&b).then(&a), "order matters");
-        assert_ne!(d1, d2);
-    }
-
-    #[test]
     fn errors_display() {
         for m in [
             Malformed::Decode,
@@ -878,6 +844,8 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::proptest_config(256))]
+
         /// Any body that begins with an index record's prefix, followed by any
         /// unknown fields, signs, encodes, decodes to the same record and
         /// verifies; the body comes back byte for byte.

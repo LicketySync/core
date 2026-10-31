@@ -2,563 +2,1125 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Properties over arrival orders (`protocol.md` 4.4: "every peer that holds
-//! the same records applies the same ones and computes the same heads, in
-//! any arrival order"): the same set of held records gives the same cursors,
-//! digests, waiting records and heads whatever the order, after a restart,
-//! and as a naive reference computes them from the set alone; histories with
-//! no concurrent edit, whose records the index's own drafts make, never show
-//! a conflict on the way, renames and paths written again after a rename
-//! included; and two indexes that exchange end with the same records and
-//! heads; and a store with records changed at rest opens to exactly what
-//! accepting the genuine ones builds, on one thread or several.
-//!
-//! Records are signed for real, which a debug build makes slow, so the cases
-//! are few and small; each covers concurrent versions, out-of-order
-//! `supersedes`, renames, tombstones, opaque records and records that wait
-//! for good.
+//! The property tests of `protocol.md` section 8 item 7, (a) to (l) ((m),
+//! the digests' property, is `structures`' and `digests`'), over
+//! random histories of writes, deletes, tree deletes and renames by several
+//! devices at every tier, with deliveries in any order (replays of old
+//! records included), rounds of exchange with their notes and cleanups,
+//! clocks that move by days and by horizons, and restored stores. Signing is
+//! slow in a debug build, so histories are short and cases few; the vector
+//! cap is lowered to 2 and 3, and half the histories are lines of versions
+//! through more writers than that, so that pruning takes place; the tests
+//! at the real cap are item 7's vectors. Every device of a history moves its
+//! clock by the same days, so the holders (e) compares share one clock;
+//! clocks apart within the clock rule are (d)'s.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use licketysync_keys::{DeviceId, FolderKey, RecordHash};
-use licketysync_protocol::record::{writer_digests, Arrival, Judgement, Kind, Record};
+use licketysync_keys::{DeviceId, RecordHash};
+use licketysync_protocol::limits::{CLEANUP_HORIZON, CLOCK_RULE_LIMIT, TOMBSTONE_HORIZON};
+use licketysync_protocol::record::{Applied, Dot, Meta, Record};
 use proptest::prelude::*;
 
-use super::kit::{
-    converge, dev, display_order, flipped_body, flipped_signature, index_as, key, push, reopen,
-    snapshot, with_set_aside, write_key, Fault, Snapshot, Spec, OWN,
-};
-use crate::{Index, Kept, MemoryStore, OpenReport, Store};
+use super::kit::{converge, round, take_unexplained, write_key, Dev, DAY, T0};
+use super::open::snapshot;
+use crate::Change;
 
-/// One generated record: indices are reduced modulo what exists when it is
-/// built, so every generated list is valid.
+const PATHS: [&str; 5] = ["a", "b", "d/x", "d/y", "d/e/z"];
+
+/// The writers of a history: more than the lowered vector caps of 2 and 3,
+/// so that a line of versions at one path, or the bases beneath a tree
+/// delete, can hold more devices than the cap and pruning takes place.
+const WRITERS: usize = 5;
+
+/// One step of a history. Device and record indexes are taken modulo what
+/// exists.
 #[derive(Clone, Debug)]
-struct Gen {
-    writer: u8,
-    /// Reuse a `seq` at or below the writer's top (a concurrent version).
-    concurrent: Option<u8>,
-    path: u8,
-    shape: u8,
-    mtime: i8,
-    content: u8,
-    names: Vec<u8>,
-    phantom: bool,
+enum Op {
+    Write { dev: u8, path: u8, content: u8 },
+    Delete { dev: u8, path: u8 },
+    TreeDelete { dev: u8 },
+    Rename { dev: u8, from: u8, to: u8 },
+    Apply { dev: u8 },
+    Deliver { to: u8, pick: u16 },
+    Round { a: u8, b: u8 },
+    Days { n: u16 },
 }
 
-fn gen() -> impl Strategy<Value = Gen> {
-    (
-        0..3u8,
-        prop::option::weighted(0.2, any::<u8>()),
-        0..3u8,
-        0..10u8,
-        -2..3i8,
-        1..3u8,
-        prop::collection::vec(any::<u8>(), 0..3),
-        prop::bool::weighted(0.08),
-    )
-        .prop_map(
-            |(writer, concurrent, path, shape, mtime, content, names, phantom)| Gen {
-                writer,
-                concurrent,
-                path,
-                shape,
-                mtime,
-                content,
-                names,
-                phantom,
-            },
-        )
+fn op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        5 => (any::<u8>(), 0u8..5, any::<u8>()).prop_map(|(dev, path, content)| Op::Write { dev, path, content }),
+        2 => (any::<u8>(), 0u8..5).prop_map(|(dev, path)| Op::Delete { dev, path }),
+        1 => any::<u8>().prop_map(|dev| Op::TreeDelete { dev }),
+        1 => (any::<u8>(), 0u8..5, 0u8..5).prop_map(|(dev, from, to)| Op::Rename { dev, from, to }),
+        3 => any::<u8>().prop_map(|dev| Op::Apply { dev }),
+        6 => (any::<u8>(), any::<u16>()).prop_map(|(to, pick)| Op::Deliver { to, pick }),
+        2 => (any::<u8>(), any::<u8>()).prop_map(|(a, b)| Op::Round { a, b }),
+        1 => prop_oneof![1u16..40, Just(366u16), Just(31u16)].prop_map(|n| Op::Days { n }),
+    ]
 }
 
-/// Signs the generated records in order, so that `supersedes` only names
-/// records built before (or a hash no one holds).
-fn build(gens: &[Gen]) -> Vec<Record> {
-    let mut top: BTreeMap<u8, u64> = BTreeMap::new();
-    let mut out: Vec<Record> = Vec::new();
-    for (i, g) in gens.iter().enumerate() {
-        let t = top.entry(g.writer).or_insert(0);
-        let seq = match g.concurrent {
-            Some(k) if *t > 0 => 1 + u64::from(k) % *t,
-            _ => {
-                *t += 1;
-                *t
-            }
-        };
-        let writer = dev(g.writer + 1);
-        let path = ["a", "b", "c/d"][usize::from(g.path)];
-        let base = match g.shape {
-            0 => Spec::tombstone(writer, seq, path),
-            1 => Spec::dir(writer, seq, path),
-            2 => Spec::file(writer, seq, path).fault(Fault::Seal),
-            _ => Spec::file(writer, seq, path).content(g.content),
-        };
-        let mut names: Vec<RecordHash> = g
-            .names
-            .iter()
-            .filter(|_| !out.is_empty())
-            .map(|n| out[usize::from(*n) % out.len()].hash())
-            .collect();
-        if g.phantom {
-            names.push(RecordHash([0xee; 32]));
-        }
-        let spec = base
-            .names(&names)
-            .mtime(i64::from(g.mtime))
-            .salt(u8::try_from(i).unwrap());
-        out.push(spec.record());
-    }
-    out
-}
-
-/// Delivers `records` in the order `order` gives, as pushes; a record that
-/// is a gap is ignored, as the protocol does, and comes again later, as the
-/// exchange brings it, until a pass stores nothing more (a subset may leave
-/// some records gaps for good). `again` re-delivers an already held record
-/// after a delivery (a duplicate). Returns the index and checks `each` after
-/// every step.
-fn deliver(
-    records: &[Record],
-    order: &[usize],
-    again: &[bool],
-    mut each: impl FnMut(&Index<MemoryStore>),
-) -> Index<MemoryStore> {
-    let mut ix = index_as(OWN);
-    let mut queue: Vec<usize> = order.to_vec();
-    let mut delivered: Vec<usize> = Vec::new();
-    let mut step = 0;
-    while !queue.is_empty() {
-        let before = queue.len();
-        let mut later = Vec::new();
-        for i in queue {
-            let o = ix.accept(records[i].clone(), Arrival::Push).unwrap();
-            match o.judgement {
-                Judgement::PushGap => later.push(i),
-                Judgement::Duplicate => {}
-                Judgement::Next | Judgement::Concurrent => delivered.push(i),
-            }
-            if again.get(step).copied().unwrap_or(false) && !delivered.is_empty() {
-                let d = delivered[step % delivered.len()];
-                let o = ix.accept(records[d].clone(), Arrival::Push).unwrap();
-                assert_eq!(o.judgement, Judgement::Duplicate);
-            }
-            step += 1;
-            each(&ix);
-        }
-        if later.len() == before {
-            break;
-        }
-        queue = later;
-    }
-    ix
-}
-
-/// What the spec's definitions give for a set of held records, computed
-/// directly: a record is resolved when it is held and either opaque or
-/// applied with every record it names resolved; the heads of a path are its
-/// applied, resolved records that no applied, resolved record names; and its
-/// last known versions beside the heads are those that some such record
-/// names but none at the path itself.
-fn reference(records: &[Record]) -> Snapshot {
-    let data_key = key().data_key();
-    let held: BTreeMap<RecordHash, &Record> = records.iter().map(|r| (r.hash(), r)).collect();
-    let opened: BTreeMap<RecordHash, Option<String>> = held
-        .iter()
-        .map(|(h, r)| (*h, r.open(data_key).ok().map(|m| m.path)))
-        .collect();
-    // The records form a DAG in build order, so one pass in that order
-    // resolves each after everything it names.
-    let mut resolved: BTreeSet<RecordHash> = BTreeSet::new();
-    for r in records {
-        let ok = match opened[&r.hash()] {
-            None => true,
-            Some(_) => r.supersedes().iter().all(|n| resolved.contains(n)),
-        };
-        if ok {
-            resolved.insert(r.hash());
-        }
-    }
-    let active: Vec<&Record> = records
-        .iter()
-        .filter(|r| opened[&r.hash()].is_some() && resolved.contains(&r.hash()))
-        .collect();
-    let opened_ref = &opened;
-    let path_of = |h: &RecordHash| opened_ref[h].clone().unwrap();
-    let superseded: BTreeSet<RecordHash> = active
-        .iter()
-        .flat_map(|r| r.supersedes().iter().copied())
-        .collect();
-    let replaced_at_own_path: BTreeSet<RecordHash> = active
-        .iter()
-        .flat_map(|r| {
-            let path = path_of(&r.hash());
-            r.supersedes()
-                .iter()
-                .filter(move |n| {
-                    opened_ref
-                        .get(*n)
-                        .is_some_and(|p| p.as_ref() == Some(&path))
-                })
-                .copied()
-        })
-        .collect();
-    let mut heads: BTreeMap<String, BTreeSet<RecordHash>> = BTreeMap::new();
-    let mut renamed_away: BTreeMap<String, Vec<&Record>> = BTreeMap::new();
-    for r in &active {
-        let path = path_of(&r.hash());
-        if !superseded.contains(&r.hash()) {
-            heads.entry(path).or_default().insert(r.hash());
-        } else if !replaced_at_own_path.contains(&r.hash()) {
-            renamed_away.entry(path).or_default().push(r);
-        }
-    }
-    // In display order, which for these versions (none a head) the reference
-    // takes from their metadata directly.
-    let data_key = key().data_key();
-    let renamed_away: Vec<(String, Vec<RecordHash>)> = renamed_away
-        .into_iter()
-        .map(|(path, mut rs)| {
-            rs.sort_by_key(|r| {
-                let m = r.open(data_key).unwrap();
-                (
-                    r.deleted(),
-                    !r.deleted() && m.kind == Kind::File,
-                    core::cmp::Reverse(m.mtime_ns),
-                    r.hash(),
-                )
-            });
-            (path, rs.iter().map(|r| r.hash()).collect())
-        })
-        .collect();
-    let mut by_writer: BTreeMap<DeviceId, Vec<&Record>> = BTreeMap::new();
-    for r in held.values() {
-        by_writer.entry(r.device_id()).or_default().push(r);
-    }
-    let writers = by_writer
-        .into_iter()
-        .map(|(w, rs)| {
-            let digests = writer_digests(rs.iter().map(|r| (r.seq(), r.hash())));
-            let mut order: Vec<(u64, RecordHash)> =
-                rs.iter().map(|r| (r.seq(), r.hash())).collect();
-            order.sort();
-            let cursor = *digests.keys().next_back().unwrap();
-            (
-                w,
-                cursor,
-                digests.values().copied().collect(),
-                order.into_iter().map(|(_, h)| h).collect(),
-            )
-        })
-        .collect();
-    Snapshot {
-        held: held.keys().copied().collect(),
-        writers,
-        waiting: held
-            .keys()
-            .filter(|h| opened[h].is_some() && !resolved.contains(h))
-            .copied()
-            .collect(),
-        // Heads compare as sets here; their display order is checked apart.
-        heads: heads
-            .into_iter()
-            .map(|(p, hs)| (p, hs.into_iter().collect()))
-            .collect(),
-        renamed_away,
-        opaque: held
-            .keys()
-            .filter(|h| opened[h].is_none())
-            .copied()
-            .collect(),
-        set_aside: Vec::new(),
-    }
-}
-
-/// The snapshot with each path's heads sorted by hash, to compare with the
-/// reference; and a check that the index's own order is the display order.
-fn as_sets(index: &Index<MemoryStore>) -> Snapshot {
-    for path in index.paths() {
-        let heads = index.heads(path);
-        assert!(!heads.is_empty(), "a listed path has a head");
-        let versions: Vec<_> = heads.versions().collect();
-        assert!(versions
-            .windows(2)
-            .all(|w| display_order(&w[0], &w[1]).is_lt()));
-        assert!(heads.versions().all(|v| !index.is_waiting(&v.hash())));
-        assert!(heads
-            .versions()
-            .all(|v| matches!(index.kept(&v.hash()), Some(Kept::Applied(m)) if m.path == path)));
-    }
-    let mut s = snapshot(index);
-    for (_, hs) in &mut s.heads {
-        hs.sort();
-    }
-    s
-}
-
-/// Two arrival orders and where duplicates come (or how a set is split).
-type Orders = (Vec<usize>, Vec<usize>, Vec<bool>);
-
-fn orders(n: usize) -> impl Strategy<Value = Orders> {
-    let indices: Vec<usize> = (0..n).collect();
-    (
-        Just(indices.clone()).prop_shuffle(),
-        Just(indices).prop_shuffle(),
-        prop::collection::vec(prop::bool::weighted(0.2), n * 2),
-    )
-}
-
-fn case() -> impl Strategy<Value = (Vec<Gen>, Orders)> {
-    prop::collection::vec(gen(), 1..10).prop_flat_map(|gens| {
-        let n = gens.len();
-        (Just(gens), orders(n))
-    })
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
-
-    /// Arrival order never changes cursors, digests, waiting records or
-    /// heads; neither does a restart; and all equal the reference.
-    #[test]
-    fn arrival_order_never_changes_heads_or_digests((gens, (first, second, again)) in case()) {
-        let records = build(&gens);
-        let one = deliver(&records, &first, &again, |_| {});
-        let two = deliver(&records, &second, &[], |_| {});
-        let s1 = snapshot(&one);
-        prop_assert_eq!(&s1, &snapshot(&two));
-        prop_assert_eq!(as_sets(&one), reference(&records));
-        prop_assert_eq!(s1.held.len(), records.len());
-        let reopened = reopen(FolderKey::from(write_key()), OWN, one.into_store());
-        prop_assert_eq!(&snapshot(&reopened), &s1);
-    }
-
-    /// Two indexes that each hold part of a set of records, and exchange
-    /// through rounds of range and listed requests, end with the same
-    /// records, digests and heads: those of an index that holds them all.
-    #[test]
-    fn indexes_that_exchange_converge((gens, (order, _, split)) in case()) {
-        let records = build(&gens);
-        let (to_a, to_b): (Vec<usize>, Vec<usize>) = order
-            .iter()
-            .copied()
-            .partition(|i| split.get(*i).copied().unwrap_or(false));
-        let mut a = deliver(&records, &to_a, &[], |_| {});
-        let mut b = deliver(&records, &to_b, &[], |_| {});
-        // What the two hold between them (a record either side refused as a
-        // gap reaches neither).
-        let union: BTreeSet<RecordHash> = snapshot(&a).held.union(&snapshot(&b).held).copied().collect();
-        converge(&mut a, &mut b);
-        let both: Vec<usize> = order
-            .iter()
-            .copied()
-            .filter(|i| union.contains(&records[*i].hash()))
-            .collect();
-        let expected = deliver(&records, &both, &[], |_| {});
-        prop_assert_eq!(snapshot(&a), snapshot(&b));
-        prop_assert_eq!(&snapshot(&a).held, &union);
-        prop_assert_eq!(snapshot(&a), snapshot(&expected));
-    }
-}
-
-/// For each record: whether it changed at rest, and if so whether in its
-/// signature (rather than its body); and how many threads verify.
-fn changed_case() -> impl Strategy<Value = (Vec<Gen>, Vec<(bool, bool)>, usize)> {
-    prop::collection::vec(gen(), 1..10).prop_flat_map(|gens| {
-        let n = gens.len();
-        (
-            Just(gens),
-            prop::collection::vec((prop::bool::weighted(0.25), any::<bool>()), n),
-            2..9usize,
-        )
-    })
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
-
-    /// Opening checks every stored record (the owner's decision of
-    /// 2026-10-25): a store with some records changed at rest, by one bit
-    /// of the signature or of the body, opens to the index that accepting
-    /// only the genuine ones builds, names exactly the changed ones as
-    /// dropped and the genuine ones past the gaps they leave as set aside,
-    /// and gives the same on one thread and on several. With none changed,
-    /// that is the index accepting them all builds, and the report is clean.
-    /// When the changed records' originals come back, the records set aside
-    /// land and the index is the one accepting every record builds.
-    #[test]
-    fn opening_applies_exactly_what_accepting_the_genuine_records_builds(
-        (gens, changes, threads) in changed_case()
-    ) {
-        let records = build(&gens);
-        let mut store = MemoryStore::new();
-        let mut dropped = Vec::new();
-        let mut genuine = Vec::new();
-        for (i, (r, (changed, in_signature))) in records.iter().zip(&changes).enumerate() {
-            let stored = match (changed, in_signature) {
-                (false, _) => {
-                    genuine.push(i);
-                    r.clone()
+/// A history that grows lines of versions (property (c)): each step a round
+/// between the last writer and a random writer, then that writer's write at
+/// one of two paths (one beneath the directory tree deletes take), now and
+/// then a tree delete, a delete or a stray delivery. Each write's base has
+/// passed through the writers before it, so a line soon holds more devices
+/// than the lowered cap and pruning takes place.
+fn line() -> impl Strategy<Value = Vec<Op>> {
+    proptest::collection::vec((0u8..5, 0u8..8, any::<u8>(), any::<u16>()), 4..14).prop_map(
+        |steps| {
+            let mut ops = Vec::new();
+            let mut prev = 0u8;
+            for (dev, extra, content, pick) in steps {
+                ops.push(Op::Round { a: prev, b: dev });
+                let path = if extra % 4 == 3 { 2 } else { 0 };
+                ops.push(Op::Write { dev, path, content });
+                match extra {
+                    0 => ops.push(Op::TreeDelete { dev }),
+                    1 => ops.push(Op::Deliver { to: content, pick }),
+                    2 => ops.push(Op::Delete { dev, path: 0 }),
+                    _ => {}
                 }
-                (true, true) => flipped_signature(r),
-                (true, false) => flipped_body(r),
-            };
-            if *changed {
-                dropped.push(stored.hash());
+                prev = dev;
             }
-            store.append(&stored).unwrap();
+            ops
+        },
+    )
+}
+
+/// A history: random steps of every kind, or a line of versions (half
+/// each), so that every property also meets pruning.
+fn history(max: usize) -> impl Strategy<Value = Vec<Op>> {
+    prop_oneof![proptest::collection::vec(op(), 1..max), line()]
+}
+
+/// A drop observed at a device: what was dropped, the records that may
+/// have dropped it (the one accepted or the ones written), and the device's
+/// folder time after the change, by which expiry is judged.
+#[derive(Clone, Debug)]
+struct Drop {
+    dropped: RecordHash,
+    by: Vec<RecordHash>,
+    sealed: bool,
+    folder_time: u64,
+}
+
+/// The world of a history: its devices (writers first, then a reader and a
+/// sealed peer), every record any of them signed, what each record's writer
+/// knew as it wrote it, and every drop seen.
+struct World {
+    devs: Vec<Dev>,
+    writers: usize,
+    archive: BTreeMap<RecordHash, licketysync_keys::records::SignedRecord>,
+    order: Vec<RecordHash>,
+    knows: BTreeMap<RecordHash, BTreeSet<RecordHash>>,
+    seen: Vec<BTreeSet<RecordHash>>,
+    drops: Vec<Drop>,
+    meta: BTreeMap<RecordHash, Option<Applied>>,
+    /// Property (k)'s check failed at this write.
+    k_failures: Vec<String>,
+    /// Property (c)'s check failed at this write.
+    c_failures: Vec<String>,
+    /// Drops nothing explained (the kit's check, every change).
+    unexplained: Vec<String>,
+    /// The records written whose vector pruning shortened.
+    pruned: usize,
+}
+
+impl World {
+    fn new(writers: usize, cap: usize) -> Self {
+        let mut devs: Vec<Dev> = (0..writers).map(|i| Dev::writer(0x10 + i as u8)).collect();
+        devs.push(Dev::reader(0x80));
+        devs.push(Dev::sealed(0x90));
+        for d in &mut devs {
+            d.ix.bounds.vector = cap;
         }
-        dropped.sort_unstable();
-        let expected = deliver(&records, &genuine, &[], |_| {});
-        let held = snapshot(&expected).held;
-        let mut set_aside: Vec<&Record> = genuine
-            .iter()
-            .map(|i| &records[*i])
-            .filter(|r| !held.contains(&r.hash()))
+        let n = devs.len();
+        Self {
+            devs,
+            writers,
+            archive: BTreeMap::new(),
+            order: Vec::new(),
+            knows: BTreeMap::new(),
+            seen: vec![BTreeSet::new(); n],
+            drops: Vec::new(),
+            meta: BTreeMap::new(),
+            k_failures: Vec::new(),
+            c_failures: Vec::new(),
+            unexplained: Vec::new(),
+            pruned: 0,
+        }
+    }
+
+    fn opened(&mut self, h: RecordHash) {
+        if self.meta.contains_key(&h) {
+            return;
+        }
+        let keys = write_key().record_keys();
+        let r = Record::parse(self.archive[&h].clone(), write_key().verifier()).unwrap();
+        self.meta.insert(h, r.open(&keys).ok());
+    }
+
+    fn closure(&self, of: &BTreeSet<RecordHash>) -> BTreeSet<RecordHash> {
+        let mut out = of.clone();
+        for h in of {
+            if let Some(k) = self.knows.get(h) {
+                out.extend(k.iter().copied());
+            }
+        }
+        out
+    }
+
+    fn note_held(&mut self, i: usize) {
+        let held: Vec<RecordHash> = self.devs[i]
+            .all()
+            .into_iter()
+            .chain(self.devs[i].ix.s.base_only.keys().copied())
             .collect();
-        set_aside.sort_by_key(|r| (r.device_id(), r.seq(), r.hash()));
-        let report = OpenReport {
-            dropped,
-            set_aside: set_aside.iter().map(|r| r.hash()).collect(),
+        self.seen[i].extend(held);
+    }
+
+    fn write(&mut self, i: usize, changes: &[Change]) {
+        let before_seen = self.closure(&self.seen[i]);
+        let held_before: BTreeMap<RecordHash, Meta> = self.devs[i]
+            .ix
+            .s
+            .held
+            .iter()
+            .filter_map(|(h, r)| Some((*h, r.meta()?.clone())))
+            .collect();
+        let bases: Vec<Meta> = self.devs[i]
+            .ix
+            .s
+            .bases
+            .values()
+            .filter_map(|h| self.devs[i].ix.s.base_meta(h).cloned())
+            .collect();
+        let Ok(w) = self.devs[i].write(changes) else {
+            return;
         };
-        for t in [1, threads] {
-            let (ix, got) =
-                Index::open_with_threads(FolderKey::from(write_key()), OWN, store.clone(), t)
-                    .unwrap();
-            prop_assert_eq!(&got, &report);
-            prop_assert_eq!(
-                snapshot(&ix),
-                with_set_aside(snapshot(&expected), &report.set_aside)
-            );
+        for (h, _) in &w.records {
+            let s = self.devs[i].signed(h).clone();
+            self.archive.insert(*h, s);
+            self.order.push(*h);
+            self.knows.insert(*h, before_seen.clone());
+            self.opened(*h);
+            self.check_c(h, &bases);
         }
-        if changes.iter().all(|(changed, _)| !changed) {
-            prop_assert!(report.is_clean());
-            prop_assert_eq!(held.len(), records.len());
-        }
-        // The originals of the changed records come back, as index sync
-        // brings them (a gap comes again later): every record set aside lands
-        // on the way, and the index is the one accepting every record builds,
-        // as a reopen of its store gives, whose report names only the bodies
-        // changed under new hashes.
-        let (mut ix, _) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-        let mut queue: Vec<usize> = (0..records.len()).filter(|i| changes[*i].0).collect();
-        let mut flipped_bodies: Vec<RecordHash> = queue
+        // Property (k), as bases.py states it (the R1 review's IR-6): a
+        // version the write dropped was on the disk there, a base at its own
+        // path (or, for a scan's tree delete, at or beneath its directory),
+        // or a base there covered it, or a base there is a later record of
+        // its device.
+        let tree_dirs: Vec<&str> = changes
             .iter()
-            .filter(|i| !changes[**i].1)
-            .map(|i| flipped_body(&records[*i]).hash())
+            .filter_map(|c| match c {
+                Change::TreeDelete { path, .. } => Some(path.as_str()),
+                _ => None,
+            })
             .collect();
-        flipped_bodies.sort_unstable();
-        loop {
-            let before = queue.len();
-            queue.retain(|i| {
-                let o = ix.accept(records[*i].clone(), Arrival::Push).unwrap();
-                o.judgement == Judgement::PushGap
+        for u in &w.dropped {
+            if let Some(m) = held_before.get(u) {
+                if m.deleted {
+                    continue;
+                }
+                let there = |b: &&Meta| {
+                    b.path == m.path
+                        || tree_dirs.iter().any(|d| {
+                            licketysync_protocol::record::at_or_beneath(&m.path, d)
+                                && licketysync_protocol::record::at_or_beneath(&b.path, d)
+                        })
+                };
+                let ok = bases.iter().filter(there).any(|b| {
+                    b.dot == m.dot
+                        || b.vector.covers(&m.dot)
+                        || (b.dot.device == m.dot.device && b.dot.counter >= m.dot.counter)
+                });
+                if !ok {
+                    self.k_failures.push(format!("{u:?} at {}", m.path));
+                }
+            }
+        }
+        let by: Vec<RecordHash> = w.records.iter().map(|(h, _)| *h).collect();
+        let folder_time = self.devs[i].ix.s.folder_time();
+        for u in w.dropped {
+            self.drops.push(Drop {
+                dropped: u,
+                by: by.clone(),
+                sealed: false,
+                folder_time,
             });
-            if queue.is_empty() || queue.len() == before {
+        }
+        self.note_held(i);
+    }
+
+    fn accept(&mut self, i: usize, h: RecordHash) {
+        let s = self.archive[&h].clone();
+        let from = super::kit::dev(0xee);
+        let Ok(a) = self.devs[i].accept_from(from, &s) else {
+            panic!("an honest record refused");
+        };
+        let sealed = self.devs[i].ix.tier() == licketysync_keys::Tier::Sealed;
+        let folder_time = self.devs[i].ix.s.folder_time();
+        for u in a.dropped {
+            self.drops.push(Drop {
+                dropped: u,
+                by: vec![h],
+                sealed,
+                folder_time,
+            });
+        }
+        self.note_held(i);
+    }
+
+    fn apply(&mut self, op: &Op) {
+        let n = self.devs.len();
+        let w = self.writers;
+        let pick = |x: u8, m: usize| usize::from(x) % m;
+        match *op {
+            Op::Write { dev, path, content } => {
+                let i = pick(dev, w);
+                self.devs[i].apply(PATHS[usize::from(path)]);
+                let m = self.devs[i].mtime + 1_000;
+                self.devs[i].mtime = m;
+                self.write(
+                    i,
+                    &[Change::Put(super::kit::file(
+                        PATHS[usize::from(path)],
+                        content,
+                        m,
+                    ))],
+                );
+            }
+            Op::Delete { dev, path } => {
+                let i = pick(dev, w);
+                let p = PATHS[usize::from(path)];
+                self.devs[i].apply(p);
+                if self.devs[i].ix.current(p).is_some_and(|c| !c.deleted) {
+                    let kind = self.devs[i].ix.current(p).unwrap().kind;
+                    self.write(i, &[Change::Put(super::kit::tombstone(p, kind, 77))]);
+                }
+            }
+            Op::TreeDelete { dev } => {
+                let i = pick(dev, w);
+                self.devs[i].apply_all();
+                self.write(
+                    i,
+                    &[Change::TreeDelete {
+                        path: "d".into(),
+                        mtime_ns: 88,
+                    }],
+                );
+            }
+            Op::Rename { dev, from, to } => {
+                let i = pick(dev, w);
+                let (f, t) = (PATHS[usize::from(from)], PATHS[usize::from(to)]);
+                self.devs[i].apply(f);
+                self.devs[i].apply(t);
+                if f != t {
+                    if let Some(c) = self.devs[i].ix.current(f).filter(|c| !c.deleted) {
+                        let put = crate::Put {
+                            path: t.into(),
+                            kind: c.kind,
+                            size: c.size,
+                            mtime_ns: 99,
+                            mode: 0,
+                            chunks: c.chunks,
+                            plain_hashes: c.plain_hashes,
+                            deleted: false,
+                        };
+                        self.write(
+                            i,
+                            &[Change::Rename {
+                                from: f.into(),
+                                to: put,
+                            }],
+                        );
+                    }
+                }
+            }
+            Op::Apply { dev } => {
+                let i = pick(dev, n);
+                if self.devs[i].ix.tier() != licketysync_keys::Tier::Sealed {
+                    self.devs[i].apply_all();
+                    self.note_held(i);
+                }
+            }
+            Op::Deliver { to, pick: p } => {
+                if self.order.is_empty() {
+                    return;
+                }
+                let h = self.order[usize::from(p) % self.order.len()];
+                self.accept(pick(to, n), h);
+            }
+            Op::Round { a, b } => {
+                let (i, j) = (pick(a, n), pick(b, n));
+                if i == j {
+                    return;
+                }
+                self.exchange(i, j);
+            }
+            Op::Days { n: days } => {
+                for d in &mut self.devs {
+                    d.clock += u64::from(days) * DAY;
+                }
+            }
+        }
+    }
+
+    /// One round of `i`'s with `j`, observing every drop and record.
+    fn exchange(&mut self, i: usize, j: usize) {
+        let (lo, hi) = (i.min(j), i.max(j));
+        let (left, right) = self.devs.split_at_mut(hi);
+        let (a, b) = if i < j {
+            (&mut left[lo], &mut right[0])
+        } else {
+            (&mut right[0], &mut left[lo])
+        };
+        let before_a = a.all();
+        let before_b = b.all();
+        let seen_a = self.seen[i].clone();
+        round(a, b);
+        // Cleanups `a` issued: what its writer knew.
+        for (h, s) in &a.archive {
+            if !self.archive.contains_key(h) {
+                self.archive.insert(*h, s.clone());
+                self.order.push(*h);
+                self.knows.insert(*h, seen_a.clone());
+            }
+        }
+        let (after_a, after_b) = (a.all(), b.all());
+        let (sa, sb) = (
+            a.ix.tier() == licketysync_keys::Tier::Sealed,
+            b.ix.tier() == licketysync_keys::Tier::Sealed,
+        );
+        let (ga, gb) = (a.ix.s.folder_time(), b.ix.s.folder_time());
+        let offered_by_b: BTreeSet<RecordHash> = before_b.union(&after_b).copied().collect();
+        let offered_by_a: BTreeSet<RecordHash> = before_a.union(&after_a).copied().collect();
+        for (before, after, sealed, offered, folder_time) in [
+            (before_a, after_a, sa, offered_by_b, ga),
+            (before_b, after_b, sb, offered_by_a, gb),
+        ] {
+            for u in before.difference(&after) {
+                // Dropped during the exchange: by any record that may have
+                // come in, held after or not (one dropped beneath a tree
+                // delete at step 8 has dropped what it names at step 6).
+                let by: Vec<RecordHash> = offered.difference(&before).copied().collect();
+                self.drops.push(Drop {
+                    dropped: *u,
+                    by,
+                    sealed,
+                    folder_time,
+                });
+            }
+        }
+        let new: Vec<RecordHash> = self.order.clone();
+        for h in new {
+            self.opened(h);
+        }
+        self.note_held(i);
+        self.note_held(j);
+    }
+
+    /// Property (c), for a record just written from `bases` (the writer's
+    /// bases before the write): its vector is the full join of the bases it
+    /// was written from (at its path, or at and beneath a tree delete's
+    /// directory), with entries taken out and none added or raised, so it
+    /// covers a subset of what that join covers, and what it drops with
+    /// pruning it drops without (4.4 "Why it is safe" 5 and 7).
+    fn check_c(&mut self, h: &RecordHash, bases: &[Meta]) {
+        let Some(m) = self.index_meta(h) else {
+            return; // a cleanup: no vector
+        };
+        let mut full: BTreeMap<DeviceId, u64> = BTreeMap::new();
+        let from = bases.iter().filter(|b| {
+            if m.tree {
+                b.path == m.path || b.path.starts_with(&format!("{}/", m.path))
+            } else {
+                b.path == m.path && !b.tree
+            }
+        });
+        for b in from {
+            for d in b.vector.entries().iter().chain(core::iter::once(&b.dot)) {
+                let e = full.entry(d.device).or_insert(0);
+                *e = (*e).max(d.counter);
+            }
+        }
+        let mut failures = Vec::new();
+        for e in m.vector.entries() {
+            if full.get(&e.device).is_none_or(|c| *c < e.counter) {
+                failures.push(format!("{h:?} at {}: {e:?} beyond the full join", m.path));
+            }
+        }
+        let pruned = full.keys().any(|d| m.vector.get(d) == 0);
+        self.c_failures.extend(failures);
+        self.pruned += usize::from(pruned);
+    }
+
+    fn dot(&self, h: &RecordHash) -> Option<Dot> {
+        self.meta.get(h).and_then(|m| m.as_ref().map(|a| *a.dot()))
+    }
+
+    fn index_meta(&self, h: &RecordHash) -> Option<&Meta> {
+        self.meta
+            .get(h)
+            .and_then(|m| m.as_ref())
+            .and_then(Applied::meta)
+    }
+
+    /// Property (a), for a read or write holder's drop: by a record that
+    /// knows it, or that knows a later record of its device at its path or
+    /// beneath the deleted directory; or by a name of a cleanup group whose
+    /// `because` does; or by expiry, for a deletion or a cleanup the
+    /// device's folder time after the change has passed by more than its
+    /// horizon (4.4, "Expiry"; that time only grows within a change, so one
+    /// dropped early in a change that ends past the horizon passes too).
+    fn justified(&self, d: &Drop) -> bool {
+        let u = d.dropped;
+        let Some(ud) = self.dot(&u) else {
+            return true; // opaque or unknown: goes only by a name
+        };
+        let um = self.index_meta(&u);
+        let horizon = match um {
+            None => Some(CLEANUP_HORIZON),
+            Some(m) if m.deleted => Some(TOMBSTONE_HORIZON),
+            Some(_) => None,
+        };
+        if horizon.is_some_and(|h| d.folder_time.saturating_sub(ud.counter) > h) {
+            return true;
+        }
+        let Some(um) = um else {
+            return self.named_by_a_group(&u, |_| true);
+        };
+        let knows_it = |r: &RecordHash| -> bool {
+            let Some(k) = self.knows.get(r) else {
+                return false;
+            };
+            let rm = self.index_meta(r);
+            k.contains(&u)
+                || k.iter().any(|x| {
+                    self.index_meta(x).is_some_and(|xm| {
+                        xm.dot.device == ud.device
+                            && xm.dot.counter > ud.counter
+                            && (xm.path == um.path
+                                || rm.is_some_and(|rm| {
+                                    rm.tree
+                                        && licketysync_protocol::record::at_or_beneath(
+                                            &xm.path, &rm.path,
+                                        )
+                                }))
+                    })
+                })
+        };
+        if d.by.iter().any(knows_it) {
+            return true;
+        }
+        // By a cleanup's group: its because (any record that names u in a
+        // group).
+        self.named_by_a_group(&u, knows_it)
+    }
+
+    /// Whether a cleanup of the history names `u` in a group whose
+    /// `because` passes `because`.
+    fn named_by_a_group(&self, u: &RecordHash, because: impl Fn(&RecordHash) -> bool) -> bool {
+        self.archive.values().any(|s| {
+            let r = Record::parse(s.clone(), write_key().verifier()).unwrap();
+            r.groups()
+                .iter()
+                .any(|g| g.forget.contains(u) && g.because.as_ref().is_some_and(&because))
+        })
+    }
+}
+
+fn run(ops: &[Op], writers: usize, cap: usize) -> World {
+    let _ = take_unexplained();
+    let mut w = World::new(writers, cap);
+    for op in ops {
+        w.apply(op);
+    }
+    w.unexplained = take_unexplained();
+    w
+}
+
+/// Property (l): for every tree delete of the history, at every read or
+/// write holder, the index by path finds exactly the held records a walk
+/// over every record held at or beneath its directory finds covered.
+fn check_l(w: &World) -> Result<(), String> {
+    for (h, m) in w.archive.keys().filter_map(|h| Some((h, w.index_meta(h)?))) {
+        if !m.tree {
+            continue;
+        }
+        for d in w
+            .devs
+            .iter()
+            .filter(|d| d.ix.tier() != licketysync_keys::Tier::Sealed)
+        {
+            let ours: BTreeSet<RecordHash> =
+                d.ix.s
+                    .covered_beneath(&m.path, &m.vector)
+                    .into_iter()
+                    .collect();
+            let walk: BTreeSet<RecordHash> =
+                d.ix.s
+                    .held
+                    .iter()
+                    .filter_map(|(x, r)| Some((*x, r.meta()?)))
+                    .filter(|(_, um)| {
+                        licketysync_protocol::record::at_or_beneath(&um.path, &m.path)
+                            && m.vector.covers(&um.dot)
+                    })
+                    .map(|(x, _)| x)
+                    .collect();
+            if ours != walk {
+                return Err(format!(
+                    "(l) {h:?} at {:?}: index {ours:?}, walk {walk:?}",
+                    d.id()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A line of versions through five writers at one path prunes at caps of
+/// 2 and 3 (each write's base carries the devices before it), and each
+/// pruned vector is still within the full join (property (c)), so that the
+/// gate meets pruning whatever the random cases are.
+#[test]
+fn a_line_through_five_writers_prunes_c() {
+    let ops = [
+        Op::Write {
+            dev: 0,
+            path: 0,
+            content: 1,
+        },
+        Op::Round { a: 0, b: 1 },
+        Op::Write {
+            dev: 1,
+            path: 0,
+            content: 2,
+        },
+        Op::Round { a: 1, b: 2 },
+        Op::Write {
+            dev: 2,
+            path: 0,
+            content: 3,
+        },
+        Op::Round { a: 2, b: 3 },
+        Op::Write {
+            dev: 3,
+            path: 0,
+            content: 4,
+        },
+        Op::Round { a: 3, b: 4 },
+        Op::Write {
+            dev: 4,
+            path: 0,
+            content: 5,
+        },
+    ];
+    for (cap, pruned) in [(2, 2), (3, 1), (32, 0)] {
+        let w = run(&ops, WRITERS, cap);
+        assert!(w.c_failures.is_empty(), "(c) at {cap}: {:?}", w.c_failures);
+        assert_eq!(w.pruned, pruned, "the writes pruning shortened at {cap}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { max_shrink_iters: 256, ..super::proptest_config(12) })]
+
+    /// (a) no record is dropped except by a record that knows it or a later
+    /// record of its device at its path or beneath the deleted directory;
+    /// (b) no record covers a record that knows it; (f) a sealed peer drops a
+    /// record only when a held record or an applying group names it; (k) no
+    /// write covers a held version whose content was not on the writer's
+    /// disk unless a base there covered it; (j) a reopen of the store gives
+    /// the same index, on every device.
+    #[test]
+    fn histories_keep_claims_a_b_c_f_j_k(ops in history(28), cap in prop_oneof![Just(2usize), Just(3), Just(32)]) {
+        let mut w = run(&ops, WRITERS, cap);
+        // (f), and no silent loss on any tier: every drop is explained by
+        // the change that made it (a name at the tag, an applying group, its
+        // `because` arriving, coverage at a key holder, expiry of a deletion
+        // or cleanup), the kit's check of every change.
+        prop_assert!(w.unexplained.is_empty(), "(f) {:#?}", w.unexplained);
+        for d in w.drops.iter().filter(|d| !d.sealed) {
+            prop_assert!(w.justified(d), "(a) {d:?}");
+        }
+        // (l)
+        if let Err(e) = check_l(&w) {
+            prop_assert!(false, "{}", e);
+        }
+        // (b)
+        for (r, k) in &w.knows {
+            let Some(rm) = w.index_meta(r) else { continue };
+            for u in k {
+                if let Some(um) = w.index_meta(u) {
+                    prop_assert!(!um.vector.covers(&rm.dot), "(b) {u:?} covers {r:?}, which knows it");
+                }
+            }
+        }
+        prop_assert!(w.k_failures.is_empty(), "(k) {:?}", w.k_failures);
+        // (c)
+        prop_assert!(w.c_failures.is_empty(), "(c) {:?}", w.c_failures);
+        // (j), at each device's clock: per-peer state past its horizon goes
+        // in memory as at open.
+        for d in &mut w.devs {
+            let clock = d.clock;
+            let mut txn = d.ix.begin();
+            txn.forget_peers(clock);
+            let (ch, pending) = txn.finish();
+            crate::Store::commit(&mut d.store, &ch).unwrap();
+            pending.commit();
+            let before = snapshot(&d.ix);
+            let report = d.reopen();
+            prop_assert!(report.dropped.is_empty());
+            prop_assert_eq!(snapshot(&d.ix), before);
+        }
+    }
+
+    /// (c) with pruning on, a record's vector is the full join it was
+    /// written from with entries taken out, none added or raised, so the
+    /// records dropped are a subset of those the full join drops; with (a)
+    /// and (b) on the same histories, at the caps of 2 and 3.
+    #[test]
+    fn pruning_takes_entries_out_only_c(ops in line(), cap in prop_oneof![Just(2usize), Just(3)]) {
+        let w = run(&ops, WRITERS, cap);
+        prop_assert!(w.unexplained.is_empty(), "{:#?}", w.unexplained);
+        if let Err(e) = check_l(&w) {
+            prop_assert!(false, "{}", e);
+        }
+        prop_assert!(w.c_failures.is_empty(), "(c) {:?}", w.c_failures);
+        for d in w.drops.iter().filter(|d| !d.sealed) {
+            prop_assert!(w.justified(d), "(a) {d:?}");
+        }
+        for (r, k) in &w.knows {
+            let Some(rm) = w.index_meta(r) else { continue };
+            for u in k {
+                if let Some(um) = w.index_meta(u) {
+                    prop_assert!(!um.vector.covers(&rm.dot), "(b) {u:?} covers {r:?}, which knows it");
+                }
+            }
+        }
+    }
+
+    /// (d) the live records, the expired ones, the heads and the records
+    /// refused depend only on the records held: a read holder fed every
+    /// record of a history in its order, and a fresh one fed what the first
+    /// holds in another order, with clocks apart within the clock rule, hold
+    /// exactly the same records and heads, and judge every record of the
+    /// history alike afterwards, one by one, staying alike (the models' K2
+    /// and K4).
+    #[test]
+    fn order_and_clock_do_not_matter_d(ops in history(24), seed in any::<u64>(), ahead in 0u64..200, behind in 0u64..200, cap in prop_oneof![Just(2usize), Just(3), Just(32)]) {
+        let w = run(&ops, WRITERS, cap);
+        let newest = w.order.iter().filter_map(|h| w.dot(h)).map(|d| d.counter).max().unwrap_or(T0);
+        let mut x = Dev::reader(0xa1);
+        let mut y = Dev::reader(0xa2);
+        x.clock = newest + ahead * DAY;
+        y.clock = newest.saturating_sub(behind * DAY).max(newest.saturating_sub(CLOCK_RULE_LIMIT));
+        for h in &w.order {
+            x.accept(&w.archive[h]).unwrap();
+        }
+        let mut held: Vec<RecordHash> = x.all().into_iter().collect();
+        let mut s = seed;
+        for i in (1..held.len()).rev() {
+            s = s.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            held.swap(i, (s >> 33) as usize % (i + 1));
+        }
+        for h in &held {
+            y.accept(&w.archive[h]).unwrap();
+        }
+        prop_assert_eq!(x.all(), y.all());
+        for p in PATHS {
+            prop_assert_eq!(x.heads(p), y.heads(p));
+        }
+        for h in &w.order {
+            let a = x.judge(&w.archive[h]).unwrap();
+            let b = y.judge(&w.archive[h]).unwrap();
+            prop_assert_eq!(a, b);
+            prop_assert_eq!(x.all(), y.all());
+        }
+    }
+
+    /// (e) two read or write holders that end caught-up rounds with each
+    /// other hold the same records and heads; (g) a sealed peer a write
+    /// holder meets holds what it holds after the rounds its cleanups owe,
+    /// short of stale copies a cleanup it holds names in a group that no
+    /// longer applies. The devices of a history share one clock, not the
+    /// spec's random clocks within the clock rule: (d) is the test of
+    /// clocks apart.
+    #[test]
+    fn caught_up_holders_agree_e_g(ops in history(24), cap in prop_oneof![Just(2usize), Just(3)]) {
+        let mut w = run(&ops, WRITERS, cap);
+        let (left, right) = w.devs.split_at_mut(1);
+        let a = &mut left[0];
+        let b = &mut right[0];
+        converge(a, b, 6);
+        prop_assert_eq!(a.all(), b.all());
+        for p in PATHS {
+            prop_assert_eq!(a.heads(p), b.heads(p));
+        }
+        let sealed = w.devs.len() - 1;
+        let (left, right) = w.devs.split_at_mut(sealed);
+        let wh = &mut left[0];
+        let s = &mut right[0];
+        for _ in 0..4 {
+            let x = round(wh, s);
+            round(s, wh);
+            if x.caught_up && !x.cleanup {
                 break;
             }
         }
-        let all: Vec<usize> = (0..records.len()).collect();
-        let everything = snapshot(&deliver(&records, &all, &[], |_| {}));
-        prop_assert_eq!(&snapshot(&ix), &everything);
-        let (reopened, again) =
-            Index::open(FolderKey::from(write_key()), OWN, ix.into_store()).unwrap();
-        prop_assert_eq!(&snapshot(&reopened), &everything);
-        prop_assert_eq!(again.dropped, flipped_bodies);
-        prop_assert_eq!(again.set_aside, Vec::<RecordHash>::new());
-    }
-}
-
-/// One step of a history without concurrent edits.
-#[derive(Clone, Debug)]
-enum Op {
-    Edit(u8),
-    Delete(u8),
-    Rename(u8, u8),
-}
-
-fn op() -> impl Strategy<Value = (u8, Op)> {
-    (
-        0..3u8,
-        prop_oneof![
-            4 => (0..3u8).prop_map(Op::Edit),
-            1 => (0..3u8).prop_map(Op::Delete),
-            2 => (0..3u8, 0..3u8).prop_map(|(a, b)| Op::Rename(a, b)),
-        ],
-    )
-}
-
-/// Builds a history without concurrent edits: each write is drafted by an
-/// index that holds every record before it, so it names the last known
-/// versions of the paths it writes (`protocol.md` 4.4), and a path a rename
-/// vacated may be written again; the draft is then signed under its writer's
-/// device ID and next `seq`. No conflict should ever show. Returns the
-/// records and each path's final head, as the operations alone give it.
-fn linear(ops: &[(u8, Op)]) -> (Vec<Record>, BTreeMap<String, RecordHash>) {
-    let paths = ["a", "b", "c"];
-    let mut author = index_as(dev(0xaa));
-    let mut seq: BTreeMap<u8, u64> = BTreeMap::new();
-    let mut head: BTreeMap<String, RecordHash> = BTreeMap::new();
-    let mut out = Vec::new();
-    for (i, (writer, op)) in ops.iter().enumerate() {
-        let (to, from) = match op {
-            Op::Edit(p) | Op::Delete(p) => (paths[usize::from(*p)], None),
-            Op::Rename(f, t) => (paths[usize::from(*t)], Some(paths[usize::from(*f)])),
-        };
-        let salt = u8::try_from(i).unwrap();
-        // Only the metadata and chunks are read from the Spec.
-        let spec = match op {
-            Op::Edit(_) => Spec::file(OWN, 1, to).content(salt % 3 + 1),
-            Op::Delete(_) => Spec::tombstone(OWN, 1, to),
-            Op::Rename(..) => Spec::file(OWN, 1, to),
-        };
-        let mut draft = match from {
-            Some(f) => author.draft_rename(f, spec.meta(), spec.chunks()),
-            None => author.draft(spec.meta(), spec.chunks(), spec.deleted),
+        let extra: Vec<RecordHash> = s.all().difference(&wh.all()).copied().collect();
+        for u in extra {
+            let named_by_dead_group = wh.ix.s.held.values().any(|c| {
+                c.record.groups().iter().any(|g| g.forget.contains(&u) && g.because.as_ref().is_some_and(|b| !wh.holds(b)))
+            });
+            prop_assert!(named_by_dead_group, "(g) {u:?} only at the sealed peer");
         }
-        .unwrap();
-        let s = seq.entry(*writer).or_insert(0);
-        *s += 1;
-        draft.device_id = dev(writer + 1);
-        draft.seq = *s;
-        let signed = draft.sign(key(), &mut |b: &mut [u8]| b.fill(salt)).unwrap();
-        let r = Record::parse(signed, key().verifier()).unwrap();
-        push(&mut author, &r);
-        if let Some(f) = from {
-            head.remove(f);
-        }
-        head.insert(to.to_string(), r.hash());
-        out.push(r);
+        prop_assert!(wh.all().is_subset(&s.all()));
     }
-    (out, head)
-}
 
-fn linear_case() -> impl Strategy<Value = (Vec<(u8, Op)>, Vec<usize>)> {
-    prop::collection::vec(op(), 1..10).prop_flat_map(|ops| {
-        let n = ops.len();
-        (Just(ops), Just((0..n).collect::<Vec<_>>()).prop_shuffle())
-    })
+    /// (h) a cleanup replayed at any later point removes no record written
+    /// after it.
+    #[test]
+    fn a_replayed_cleanup_removes_nothing_newer_h(ops in history(24), cap in prop_oneof![Just(2usize), Just(32)]) {
+        let mut w = run(&ops, WRITERS, cap);
+        let cleanups: Vec<RecordHash> = w
+            .order
+            .iter()
+            .copied()
+            .filter(|h| w.index_meta(h).is_none() && w.dot(h).is_some())
+            .collect();
+        for c in cleanups {
+            let cd = w.dot(&c).unwrap();
+            for i in 0..w.devs.len() {
+                let s = w.archive[&c].clone();
+                if let Ok(a) = w.devs[i].accept(&s) {
+                    for u in a.dropped {
+                        let ud = w.dot(&u);
+                        prop_assert!(ud.is_none_or(|d| d.counter < cd.counter), "(h) {u:?} after {c:?}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+    #![proptest_config(super::proptest_config(12))]
 
-    /// Out-of-order chains never make a false conflict: at every step of
-    /// every arrival order, no path of a history without concurrent edits
-    /// has two heads, a path renamed away and written again included, and at
-    /// the end each path's head is the history's.
+    /// (i) two records with one dot are both held on every tier, and two
+    /// devices that hold one each find the difference and end holding both
+    /// (a restored store writing again under its old counter).
     #[test]
-    fn out_of_order_chains_never_make_a_false_conflict((ops, order) in linear_case()) {
-        let (records, last) = linear(&ops);
-        let ix = deliver(&records, &order, &[], |ix| {
-            for path in ix.paths() {
-                assert!(ix.heads(path).len() <= 1, "a false conflict at {path}");
+    fn two_records_with_one_dot_i(content in any::<u8>(), path in 0usize..5) {
+        let p = PATHS[path];
+        let mut d = Dev::writer(0x20);
+        d.put("seed", 1);
+        let backup = d.store.clone();
+        let one = d.put(p, content);
+        d.store = backup;
+        d.reopen();
+        let other = d.put(p, content.wrapping_add(1));
+        let dot = |dev: &Dev, h: &RecordHash| dev.ix.record(h).unwrap().dot.unwrap();
+        let mut a = Dev::writer(0x30);
+        a.accept(d.signed(&one)).unwrap();
+        prop_assert_eq!(dot(&a, &one), dot(&d, &other), "one dot");
+        for tier in [licketysync_keys::Tier::Write, licketysync_keys::Tier::Read, licketysync_keys::Tier::Sealed] {
+            let mut x = Dev::new(tier, 0x40);
+            let mut y = Dev::new(tier, 0x41);
+            x.accept(d.signed(&one)).unwrap();
+            y.accept(d.signed(&other)).unwrap();
+            prop_assert_ne!(x.root(), y.root());
+            round(&mut x, &mut y);
+            round(&mut y, &mut x);
+            prop_assert!(x.holds(&one) && x.holds(&other));
+            prop_assert_eq!(x.all(), y.all());
+        }
+    }
+
+    /// (j) after the ordered crash between a change's records and its
+    /// removals, the next open gives the index the change would have made,
+    /// its bases included. The device is reopened first, so that it and the
+    /// copy it is compared with hold the same notes (none: notes live in
+    /// memory only), as the review's IR-4 found.
+    #[test]
+    fn a_reopen_after_the_crash_is_the_change_j(ops in proptest::collection::vec(op(), 1..12), content in any::<u8>()) {
+        let mut w = run(&ops, 2, 32);
+        let d = &mut w.devs[0];
+        d.reopen();
+        d.apply("a");
+        let want = {
+            let mut copy = Dev::writer(0x10);
+            copy.store = d.store.clone();
+            copy.clock = d.clock;
+            copy.rng = d.rng.clone();
+            copy.reopen();
+            copy.apply("a");
+            copy.write(&[Change::Put(super::kit::file("a", content, 5))]).unwrap();
+            copy
+        };
+        d.store.mode = crate::Commit::CrashBeforeRemovals;
+        {
+            let Dev { ix, store, rng, clock, .. } = &mut *d;
+            let mut txn = ix.begin();
+            let _ = txn.write(&[Change::Put(super::kit::file("a", content, 5))], *clock, &mut |b| rng.fill(b));
+            let (changes, pending) = txn.finish();
+            let _ = crate::Store::commit(store, &changes);
+            drop(pending);
+        }
+        d.reopen();
+        let mut fp = Vec::new();
+        d.ix.fingerprint(&mut |b| fp.extend_from_slice(b));
+        let mut fw = Vec::new();
+        want.ix.fingerprint(&mut |b| fw.extend_from_slice(b));
+        prop_assert_eq!(fp, fw);
+        prop_assert_eq!(d.ix.bases("a"), want.ix.bases("a"), "the write is the base of its path");
+    }
+}
+
+/// `v` shuffled by a seeded generator.
+fn shuffled(mut v: Vec<RecordHash>, seed: u64) -> Vec<RecordHash> {
+    let mut s = seed | 1;
+    for i in (1..v.len()).rev() {
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        v.swap(i, (s >> 33) as usize % (i + 1));
+    }
+    v
+}
+
+/// K2 (and so K1) of the models: a fresh holder of the device's kind (a
+/// reader for a writer) fed the device's records in a shuffled order holds
+/// exactly them, with the same heads.
+fn k2(d: &Dev, seed: u64) -> Result<(), String> {
+    use licketysync_keys::Tier;
+    let tier = match d.ix.tier() {
+        Tier::Write => Tier::Read,
+        t => t,
+    };
+    let mut f = Dev::new(tier, 0xb7);
+    f.clock = d.clock;
+    f.ix.bounds = d.ix.bounds;
+    for h in shuffled(d.all().into_iter().collect(), seed) {
+        f.accept(d.signed(&h))
+            .map_err(|e| format!("K2 refused {e:?}"))?;
+    }
+    if f.all() != d.all() {
+        return Err(format!(
+            "K2 at {:?} {:?}: fresh and device differ",
+            d.ix.tier(),
+            d.id()
+        ));
+    }
+    if tier != Tier::Sealed {
+        for p in PATHS {
+            if f.heads(p) != d.heads(p) {
+                return Err(format!("K2 heads at {p}"));
             }
-        });
-        let end: BTreeMap<String, RecordHash> = ix
-            .paths()
-            .map(|p| (p.to_string(), ix.heads(p).first().unwrap().hash()))
+        }
+    }
+    Ok(())
+}
+
+/// What the store holds, opened again, is what memory holds (per-peer state
+/// aside, which an open ages).
+fn store_matches(d: &Dev) -> Result<(), String> {
+    let strip = |ix: &crate::Index| -> String {
+        let mut fp = Vec::new();
+        ix.fingerprint(&mut |b| fp.extend_from_slice(b));
+        let mut out = format!("{fp:?}");
+        for r in ix.records() {
+            out.push_str(&format!("\n{r:?}"));
+        }
+        out.push_str(&format!(
+            "\n{:?}\n{:?}\n{:?}",
+            ix.s.meta,
+            ix.s.bases,
+            ix.s.base_only.keys().collect::<Vec<_>>()
+        ));
+        out
+    };
+    let stored = crate::Store::load(&d.store).unwrap();
+    let mut rng = d.rng.clone();
+    let (ix, report) = crate::Index::open(
+        super::kit::folder_key(d.ix.tier()),
+        d.id(),
+        stored,
+        d.clock,
+        &mut |b| rng.fill(b),
+    );
+    if !report.dropped.is_empty() || report.hw_corrupt || report.epoch_redrawn {
+        return Err(format!("the store differs: {report:?}"));
+    }
+    if strip(&d.ix) != strip(&ix) {
+        return Err("the store differs from memory".into());
+    }
+    Ok(())
+}
+
+/// Runs `f` in a transaction that is dropped, and checks that the whole
+/// state (every derived table, the trie, the index by path, the notes) is
+/// exactly as before.
+fn dry(
+    d: &mut Dev,
+    what: &str,
+    f: impl FnOnce(&mut crate::Txn<'_>, &mut super::kit::Rng, u64),
+) -> Result<(), String> {
+    let before = format!("{:#?}", d.ix.s);
+    let mut rng = d.rng.clone();
+    let clock = d.clock;
+    {
+        let mut txn = d.ix.begin();
+        f(&mut txn, &mut rng, clock);
+    }
+    if format!("{:#?}", d.ix.s) == before {
+        Ok(())
+    } else {
+        Err(format!("the rollback of {what} is not exact"))
+    }
+}
+
+impl World {
+    /// Before `op` is done, what it would do is done in a transaction that
+    /// is dropped: the state must come back exactly.
+    fn dry_run(&mut self, op: &Op) -> Result<(), String> {
+        let n = self.devs.len();
+        let wr = self.writers;
+        let pick = |x: u8, m: usize| usize::from(x) % m;
+        match *op {
+            Op::Deliver { to, pick: p } if !self.order.is_empty() => {
+                let h = self.order[usize::from(p) % self.order.len()];
+                let s = self.archive[&h].clone();
+                let d = &mut self.devs[pick(to, n)];
+                let record = Record::parse(s, d.ix.key().verifier()).unwrap();
+                let mut memory = d.memory.clone();
+                // A budget of the dry run's own: the device's stays unspent.
+                let mut notes = licketysync_protocol::connection::NoteBudget::for_tests();
+                dry(d, "an accept", |txn, rng, clock| {
+                    let mut fill = |b: &mut [u8]| rng.fill(b);
+                    let mut arrival = crate::Arrival {
+                        peer: super::kit::dev(0xee),
+                        memory: &mut memory,
+                        notes: &mut notes,
+                        clock_us: clock,
+                        rng: &mut fill,
+                    };
+                    let _ = txn.accept(record, &mut arrival);
+                })
+            }
+            Op::Write { dev, path, content } => {
+                let d = &mut self.devs[pick(dev, wr)];
+                let m = d.mtime + 1_000;
+                let change = Change::Put(super::kit::file(PATHS[usize::from(path)], content, m));
+                dry(d, "a write", |txn, rng, clock| {
+                    let _ = txn.write(&[change], clock, &mut |b| rng.fill(b));
+                })
+            }
+            Op::TreeDelete { dev } => {
+                let d = &mut self.devs[pick(dev, wr)];
+                dry(d, "a tree delete", |txn, rng, clock| {
+                    let _ = txn.write(
+                        &[Change::TreeDelete {
+                            path: "d".into(),
+                            mtime_ns: 88,
+                        }],
+                        clock,
+                        &mut |b| rng.fill(b),
+                    );
+                })
+            }
+            Op::Round { a, .. } => {
+                let d = &mut self.devs[pick(a, n)];
+                dry(d, "a round's end", |txn, rng, clock| {
+                    let _ = txn.end_round(clock, &mut |b| rng.fill(b));
+                    txn.round_ended(super::kit::dev(0x55), true, Some((7, 3)), clock);
+                    txn.cursor_advanced(super::kit::dev(0x55), 7, 9);
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { max_shrink_iters: 256, ..super::proptest_config(12) })]
+
+    /// The models' checks, as strictly as the R1 review's probes put them
+    /// (IR-6): every step's change, dropped, gives the state back exactly;
+    /// no change drops a record nothing explains; at the end K2 holds on
+    /// every device, every store opens to what memory holds, and two key
+    /// holders whose rounds with each other both end caught up hold the same
+    /// records (K3 strictly).
+    #[test]
+    fn every_step_rolls_back_exactly_and_holders_agree_k1_k2_k3(ops in history(24), cap in prop_oneof![Just(2usize), Just(3), Just(32)]) {
+        let _ = take_unexplained();
+        let mut w = World::new(WRITERS, cap);
+        let mut fails = Vec::new();
+        for op in &ops {
+            if let Err(e) = w.dry_run(op) {
+                fails.push(format!("{op:?}: {e}"));
+            }
+            w.apply(op);
+        }
+        fails.extend(take_unexplained());
+        for (i, d) in w.devs.iter().enumerate() {
+            if let Err(e) = k2(d, i as u64 + 7) {
+                fails.push(e);
+            }
+            if let Err(e) = store_matches(d) {
+                fails.push(format!("device {i}: {e}"));
+            }
+        }
+        let holders: Vec<usize> = (0..w.devs.len())
+            .filter(|i| w.devs[*i].ix.tier() != licketysync_keys::Tier::Sealed)
             .collect();
-        prop_assert_eq!(end, last);
-        prop_assert_eq!(ix.waiting().count(), 0);
-        prop_assert!(ix.paths().all(|p| ix.heads(p).first().unwrap().meta().kind == Kind::File));
+        for &i in &holders {
+            for &j in holders.iter().filter(|j| **j > i) {
+                let (left, right) = w.devs.split_at_mut(j);
+                let (a, b) = (&mut left[i], &mut right[0]);
+                let x = round(a, b);
+                let y = round(b, a);
+                if x.caught_up && y.caught_up && a.all() != b.all() {
+                    fails.push(format!("K3: {i} and {j} both caught up, holding different records"));
+                }
+            }
+        }
+        fails.extend(take_unexplained());
+        prop_assert!(fails.is_empty(), "{:#?}", fails);
+    }
+
+    /// Pruning at the real cap: the mandatory devices' entries kept, then the
+    /// greatest counters, the smaller device ID first; counters unchanged
+    /// (the R1 review's `probe_prune`).
+    #[test]
+    fn pruning_keeps_the_mandatory_then_the_greatest(
+        entries in proptest::collection::btree_map(any::<u8>(), 1u64..50, 0..64),
+        mand in proptest::collection::btree_set(any::<u8>(), 0..32),
+    ) {
+        use licketysync_keys::DeviceId;
+        let joined: BTreeMap<DeviceId, u64> = entries.iter().map(|(d, c)| (DeviceId([*d; 32]), *c)).collect();
+        let mandatory: BTreeSet<DeviceId> = mand.iter().map(|d| DeviceId([*d; 32])).collect();
+        let v = crate::write::prune(&joined, &mandatory, 32).unwrap();
+        let present = mandatory.iter().filter(|d| joined.contains_key(d)).count();
+        prop_assert_eq!(v.len(), joined.len().min(32.max(present)));
+        for d in mandatory.iter().filter(|d| joined.contains_key(d)) {
+            prop_assert_eq!(v.get(d), joined[d], "mandatory kept");
+        }
+        for e in v.entries() {
+            prop_assert_eq!(Some(&e.counter), joined.get(&e.device));
+        }
+        let kept: BTreeSet<DeviceId> = v.entries().iter().map(|e| e.device).collect();
+        for (d, c) in &joined {
+            if kept.contains(d) || mandatory.contains(d) {
+                continue;
+            }
+            for e in v.entries().iter().filter(|e| !mandatory.contains(&e.device)) {
+                prop_assert!((e.counter, core::cmp::Reverse(e.device)) > (*c, core::cmp::Reverse(*d)), "a dropped entry outranks a kept one");
+            }
+        }
     }
 }

@@ -57,13 +57,25 @@ fn vector_chunks() {
         seed(
             "message_parse",
             &format!("chunk-reply-{name}"),
-            &[&[8u8], &m.encode_to_vec()[..]].concat(),
+            &[
+                &[super::frames::selector(
+                    crate::frame::MessageType::ChunkReply,
+                )],
+                &m.encode_to_vec()[..],
+            ]
+            .concat(),
         );
     }
     seed(
         "message_parse",
         "chunk-request",
-        &[&[7u8], &req.encode_to_vec()[..]].concat(),
+        &[
+            &[super::frames::selector(
+                crate::frame::MessageType::ChunkRequest,
+            )],
+            &req.encode_to_vec()[..],
+        ]
+        .concat(),
     );
     // Two records name the chunk; only one's stored_len and plain hash fit it.
     let good = Record::parse(

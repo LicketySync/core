@@ -14,8 +14,8 @@
 //! - [`chunk`] and [`sealed_meta`]: chunk encryption (XChaCha20-Poly1305,
 //!   Padmé padding) with keyed BLAKE3 chunk hashes and the chunker's keyed
 //!   gear table; sealed metadata, padded to a power of two, under the
-//!   associated data of its index record or cleanup; and path tags, the file
-//!   IDs.
+//!   associated data of its index record or cleanup, and path tags, the file
+//!   IDs, both through a folder's [`sealed_meta::RecordKeys`].
 //! - [`set_digest`]: the set digests that reconcile index records.
 //! - [`handshake`] and [`device`]: the hint and the sealed payload of the
 //!   folder proof (one for every tier), the device key and its proof, the
@@ -88,7 +88,7 @@ pub mod words;
 pub use aead::{AeadError, SealError};
 pub use folder::{FolderKey, FolderVerifier, ReadKey, SealedKey, WriteKey};
 pub use handshake::Role;
-pub use ids::{CipherHash, DeviceId, FolderId, PathTag, RecordHash, SetDigest, WriterDigest};
+pub use ids::{CipherHash, DeviceId, FolderId, PathTag, RecordHash, SetDigest};
 pub use records::{RecordType, SignedRecord};
 pub use rng::RandomFill;
 pub use secret::{DataKey, WriteSecret};
@@ -102,6 +102,39 @@ use {hex as _, serde_json as _};
 
 /// The crate's name as it appears in logs and diagnostics.
 pub const CRATE: &str = "licketysync-keys";
+
+/// The fixed seed every property test of this crate runs from in the gate,
+/// so that the gate is deterministic; the protocol and index crates' tests
+/// run from the same one.
+#[cfg(test)]
+pub(crate) const PROPTEST_SEED: u64 = 0x6c69_636b_6574_7379;
+
+/// The proptest configuration of every property test of this crate:
+/// `cases` cases, or `PROPTEST_CASES` when it is set, from the fixed
+/// [`PROPTEST_SEED`], or from the seed `LICKETYSYNC_PROPTEST_SEED` names:
+/// `random` for a random one (a long run outside the gate), or a number.
+#[cfg(test)]
+#[allow(clippy::panic, reason = "test code")]
+pub(crate) fn proptest_config(cases: u32) -> proptest::test_runner::Config {
+    use proptest::test_runner::{Config, RngSeed};
+    let cases = std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(cases);
+    let rng_seed = match std::env::var("LICKETYSYNC_PROPTEST_SEED") {
+        Ok(v) if v == "random" => RngSeed::Random,
+        Ok(v) => RngSeed::Fixed(
+            v.parse()
+                .unwrap_or_else(|_| panic!("LICKETYSYNC_PROPTEST_SEED={v}: random or a u64")),
+        ),
+        Err(_) => RngSeed::Fixed(PROPTEST_SEED),
+    };
+    Config {
+        cases,
+        rng_seed,
+        ..Config::default()
+    }
+}
 
 #[cfg(test)]
 #[allow(

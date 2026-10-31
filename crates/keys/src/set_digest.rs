@@ -142,6 +142,8 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::proptest_config(256))]
+
         /// A leaf's digest depends only on the set of hashes.
         #[test]
         fn a_leaf_is_a_function_of_the_set(mut v in proptest::collection::vec(any::<[u8; 32]>(), 0..20)) {

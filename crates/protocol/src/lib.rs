@@ -19,23 +19,26 @@
 //!   keys crate's `SignedRecord::from_bytes`.
 //! - [`hello`] and [`proof`]: the Hello checks, roles, the transcript hash,
 //!   and the one folder proof for every tier (3.2 to 3.5, TM-30, TM-32).
-//! - [`record`]: an index record's step 1 against the open folder, steps 2 to
-//!   5 as [`record::judge`] over the index's [`record::Held`], step 6 (the
-//!   sealed metadata and its grammar), the writer's [`record::Draft`] and the
-//!   reference writer digests (4.4).
-//! - [`exchange`]: typed cursors, range and listed scopes, the round split,
-//!   the serving cases (a) to (d) and the [`exchange::Pager`] (4.5).
+//! - [`record`]: the two signed records, an index record and a cleanup: step
+//!   1 against the open folder, step 5's signature, step 7 (the seal, the
+//!   metadata, the dot and the version vector, each writer fault its own
+//!   variant), and the drafts a writer signs, which never emit what a reader
+//!   would refuse (4.4).
+//! - [`exchange`]: the prefixes of the set-digest trie, the three conditions
+//!   of a `ReconcileReply`, the page limit and the [`exchange::Pager`], and
+//!   [`exchange::IndexView`], what the connection reads of the index (4.5).
 //! - [`connection`]: one [`connection::Connection`] per transport
-//!   connection: the handshake, open folders, rounds, marks, the round owed,
-//!   pages and pushes, the deadlines, chunks and their backoff and passes,
-//!   Status (sections 3 to 5).
+//!   connection: the handshake and the clock rule, open folders, rounds
+//!   (Since, the Check and the passes of reconciliation), the cursors and the
+//!   counting of pushes, the round owed, pages and pushes, the deadlines,
+//!   chunks and their backoff and passes, Status (sections 3 to 5).
 //! - [`rules`]: the section 5 table as [`Cause`] to [`Outcome`] (TM-10).
 //! - [`limits`] and [`features`]: every constant, defined here once, and the
 //!   feature grammar.
 //!
-//! What the index and the engine keep: records, cursors and cached digests,
-//! heads and waiting records, the conflict copies, which peer to ask for a
-//! chunk, and the issues every outcome raises.
+//! What the index and the engine keep: records, the set digests and their
+//! cache, per-peer state, heads, bases and the conflict copies, stale-copy
+//! notes, which peer to ask for a chunk, and the issues every outcome raises.
 //!
 //! Every byte from a peer is untrusted: lengths are checked before anything is
 //! allocated, every collection a peer can grow is bounded by [`limits`], no

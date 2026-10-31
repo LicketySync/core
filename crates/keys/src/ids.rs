@@ -94,15 +94,6 @@ id32! {
     /// ([`crate::set_digest`]).
     SetDigest
 }
-id32! {
-    /// A writer's cursor digest (`protocol.md` 4.4 before 2026-10-25): 32 zero
-    /// bytes, then `H("licketysync/v1/hash/writer-digest", D || record_hash)`
-    /// for each of the writer's records in canonical order
-    /// ([`WriterDigest::then`]). Retired by `keys.md` section 10 on 2026-10-25;
-    /// used only by the old index exchange; removed in the next commit of this
-    /// series.
-    WriterDigest
-}
 
 #[cfg(test)]
 #[allow(
@@ -136,8 +127,8 @@ mod tests {
             "CipherHash()".len() + 64
         );
         assert_eq!(
-            format!("{:?}", WriterDigest([0; 32])).len(),
-            "WriterDigest()".len() + 64
+            format!("{:?}", SetDigest([0; 32])).len(),
+            "SetDigest()".len() + 64
         );
         assert_eq!(
             format!("{:?}", PathTag([0xcd; 32])),

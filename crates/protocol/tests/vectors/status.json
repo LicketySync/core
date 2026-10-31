@@ -120,9 +120,31 @@
       "body": "080b1207676f6f64627965",
       "detail": "goodbye",
       "reason": "TIMEOUT"
+    },
+    {
+      "body": "080d",
+      "detail": "",
+      "reason": "CLOCK_OUT_OF_RANGE"
+    },
+    {
+      "body": "080d1207676f6f64627965",
+      "detail": "goodbye",
+      "reason": "CLOCK_OUT_OF_RANGE"
     }
   ],
-  "description": "protocol.md 8 items 10 and 11: Close for every reason with and without detail, one whose detail holds a control character (not shown; its reason kept), and Status: the first after the open with the device name and chunks_stored 0, fifty chunks stored within a second reported by one Status, and a name with a control character (PROTOCOL_ERROR).",
+  "description": "protocol.md 8 items 10 and 11: Close for every reason with and without detail, one whose detail holds a control character (not shown; its reason kept), and Status: the first after the open with the device name and chunks_stored 0, fifty chunks stored within a second reported by one Status, extra_versions as decoded, and a name with a control character (PROTOCOL_ERROR).",
+  "extra_versions": [
+    {
+      "body": "0a260a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd1889110043803",
+      "extra_versions": 3,
+      "holder": "sealed-two-stale-copies-and-a-conflict"
+    },
+    {
+      "body": "0a260a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd1889110043801",
+      "extra_versions": 1,
+      "holder": "read-a-conflict"
+    }
+  ],
   "status_bad_name": "12056e616d6501",
   "status_scenario": {
     "a_end": "open",
@@ -130,23 +152,23 @@
     "a_sent": [
       [
         0,
-        "0000008280010a220001375f09f1f51a14ed7903fe540cdf4a30b0d8093549b86bff80ab107d03b1760f1a010122046e6f6e652a06626c616b6533388080800840404a2047557d7646e70ddd97bea0a7a741cc8d5290c541dca09a5ae10f4cac5260edfa5220a041bdf0dc39697abeb554da4bb7bc26c0a8256e65e35c380f2dc23a383c49c8"
+        "0000008680010a220001375f09f1f51a14ed7903fe540cdf4a30b0d8093549b86bff80ab107d03b1760f1a010122046e6f6e652a06626c616b6533388080800840404a2047557d7646e70ddd97bea0a7a741cc8d5290c541dca09a5ae10f4cac5260edfa5220a041bdf0dc39697abeb554da4bb7bc26c0a8256e65e35c380f2dc23a383c49c8588fa201"
       ],
       [
         0,
-        "0000004480030a401269cdcf2101b66176f0a48dd35814761593b17d815c8fc9f3052c0cd3e4a7899a4befba2a260c396b2e160f965863e987cadbf5fcbbddb336aee63eb5231904"
+        "0000004480030a40baf871aec168da5a8918921edd23e3759dc54f61e968617cb28df51a7b3652c3366be84255c264e27c38379d9bef6875bd5d768a51438f94df06ff6b61676d09"
       ],
       [
         0,
-        "0000005280040a20832d36b48a1478e416e5348bdd3711dd426de16335575ec256c5ddfe47acd55c12125178f0505e2efe266f9e381a5a3a1e25f12b1a186218292cc9af21c836f89b80782a0a1c0dce53765cd8f8e7"
+        "0000005280040a208b38daf9cbd3058c393f6d9e5ddfc8c81b55667641864aeae8fc3aeb1f8d8dde1212bbb39c2b85ad1caf1dc88be6e956bd5ad6651a186218292cc9af21c836f89b80782a0a1c0dce53765cd8f8e7"
       ],
       [
         0,
-        "0000002680050a20ba410aab2c9303855a81d815b85341669a343ee662b69c4392e0a63f081babf51001"
+        "0000002680050a208dd1b6a2ca760e4e7bda4cb28e2f437f2b9b711660e200cc66ce2cf45516f87a1001"
       ],
       [
         0,
-        "0000002680070a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912001"
+        "00000048800b0a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd18891100122200000000000000000000000000000000000000000000000000000000000000000"
       ],
       [
         0,
@@ -154,7 +176,7 @@
       ],
       [
         0,
-        "0000002680080a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912001"
+        "00000031800c0a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd18891100118012901a0000000000000"
       ],
       [
         3000,
@@ -166,23 +188,23 @@
     "b_sent": [
       [
         0,
-        "0000008280010a220001caa9508244acccda4393b105d747fb56dca0da6eabc152ba4dd417973053f0d81a010122046e6f6e652a06626c616b6533388080800840404a20ccdb2d2bddf0a5374dc66d626ac51663e71f53f0c7507944526be8988cf4ca5f5220db5b9a4a15ba7b7d35fbe2fc4252b1c1fc4154dfdd57521c2aaff894df7425e8"
+        "0000008680010a220001caa9508244acccda4393b105d747fb56dca0da6eabc152ba4dd417973053f0d81a010122046e6f6e652a06626c616b6533388080800840404a20ccdb2d2bddf0a5374dc66d626ac51663e71f53f0c7507944526be8988cf4ca5f5220db5b9a4a15ba7b7d35fbe2fc4252b1c1fc4154dfdd57521c2aaff894df7425e8588fa201"
       ],
       [
         0,
-        "0000004480030a40c378129a90e7bef3790502147549fc1cc42b0a2be4c7a1996bc96a9f45a4434f131ca7d3f9e98c4c3bd0e26d9b932b173334ffe71025161591d66b591bdf460e"
+        "0000004480030a401c5985d6771b745b71aa01a8661b3ac6b31350d0e886579b2b9daed50a2420d6d6cc86914fb6a8936da51e793d9b12b69f71d68f4266aecffc1266c9fded0e0e"
       ],
       [
         0,
-        "0000002680050a20832d36b48a1478e416e5348bdd3711dd426de16335575ec256c5ddfe47acd55c1001"
+        "0000002680050a208b38daf9cbd3058c393f6d9e5ddfc8c81b55667641864aeae8fc3aeb1f8d8dde1001"
       ],
       [
         0,
-        "0000005280040a20ba410aab2c9303855a81d815b85341669a343ee662b69c4392e0a63f081babf512124424e1ae95f26b573a63d6b52a32bd79381e1a18f5fc02857ee54aa586760b3d90295d12590ce135196f8ed0"
+        "0000005280040a208dd1b6a2ca760e4e7bda4cb28e2f437f2b9b711660e200cc66ce2cf45516f87a121249d179a4d570d341ec74dc8e80e72b87812c1a18f5fc02857ee54aa586760b3d90295d12590ce135196f8ed0"
       ],
       [
         0,
-        "0000002680070a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912001"
+        "00000048800b0a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd18891100122200000000000000000000000000000000000000000000000000000000000000000"
       ],
       [
         0,
@@ -190,7 +212,7 @@
       ],
       [
         0,
-        "0000002680080a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd188912001"
+        "00000031800c0a2068ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd18891100118012901b0000000000000"
       ]
     ],
     "notes": "A stores fifty chunks within one second after the open",

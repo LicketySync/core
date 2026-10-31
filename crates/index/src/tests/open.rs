@@ -2,464 +2,632 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Opening checks every stored record again (the owner's decision of
-//! 2026-10-25, `threat-model.md` TM-9): a record whose signature or body
-//! changed at rest, or that is not this folder's, is dropped and reported;
-//! the records of its writer above the gap it leaves are set aside and land,
-//! without a second append, once a record at the gap lands, so the index
-//! stays what a reopen of the store gives; every tier checks alike; the
-//! result does not depend on how many threads verify; and what was dropped
-//! comes back by index sync like any record this device lacks.
+//! Opening a folder (`protocol.md` 4.4 "Opening a folder", 4.7 items 1 and 8,
+//! TM-9), the store and the transaction overlay (ruling Q2): a reopen gives
+//! the same index; a record changed at rest is dropped and reported at every
+//! tier, once per open, with one new epoch; the ordered crash between a
+//! change's records and its removals is repaired; a store that refuses a
+//! change leaves the index exactly as it was; the stored high-water mark is
+//! checked; per-peer state past its horizon goes; the result is the same on
+//! any number of verifying threads.
 
-use licketysync_keys::{DeviceId, FolderKey, RecordHash};
-use licketysync_protocol::record::{Arrival, Draft, Held, Judgement, Record};
-use licketysync_protocol::Cause;
+use licketysync_keys::Tier;
+use licketysync_protocol::limits::{CLOCK_AHEAD_WARNING, MAX_COUNTER, PEER_STATE_HORIZON};
 
-use super::kit::{
-    converge, dev, flipped_body, flipped_signature, index, index_as, other_key, push, reopen,
-    signed_by_other_key, snapshot, with_set_aside, write_key, Flaky, Snapshot, Spec, OWN,
-};
-use crate::{Index, Kept, MemoryStore, OpenReport, Store};
+use licketysync_keys::RecordHash;
 
-/// Three writers: A writes a1, a2 and a3 at "a", each naming the one before;
-/// B writes b1, a file at "b", and b2, a directory at "d"; C writes c1, a
-/// tombstone at "c".
-struct History {
-    a: [Record; 3],
-    b: [Record; 2],
-    c1: Record,
-}
+use super::kit::{cleanup, dev, flipped_body, folder_key, Dev, DAY, T0};
+use crate::{Change, Commit, Index, MemoryStore, Place, Store, StoreError, StoredMeta};
 
-fn history() -> History {
-    let a1 = Spec::file(dev(1), 1, "a").record();
-    let a2 = Spec::file(dev(1), 2, "a")
-        .names(&[a1.hash()])
-        .content(2)
-        .record();
-    let a3 = Spec::file(dev(1), 3, "a")
-        .names(&[a2.hash()])
-        .content(3)
-        .record();
-    let b1 = Spec::file(dev(2), 1, "b").record();
-    let b2 = Spec::dir(dev(2), 2, "d").record();
-    let c1 = Spec::tombstone(dev(3), 1, "c").record();
-    History {
-        a: [a1, a2, a3],
-        b: [b1, b2],
-        c1,
+/// Everything the index persists or derives from what it persists, as text:
+/// the fingerprint, every record's view, the metadata, the bases, the
+/// records kept only as bases and the per-peer state. Stale-copy notes are
+/// memory only (4.5): a restart forgets them.
+pub(crate) fn snapshot(ix: &Index) -> String {
+    let mut fp = Vec::new();
+    ix.fingerprint(&mut |b| fp.extend_from_slice(b));
+    let mut out = hex::encode(fp);
+    for r in ix.records() {
+        out.push_str(&format!("\n{r:?}"));
     }
+    out.push_str(&format!("\n{:?}", ix.s.meta));
+    out.push_str(&format!("\n{:?}", ix.s.bases));
+    out.push_str(&format!("\n{:?}", ix.s.peers));
+    out.push_str(&format!(
+        "\n{:?}",
+        ix.s.base_only.keys().collect::<Vec<_>>()
+    ));
+    out
 }
 
-impl History {
-    fn all(&self) -> Vec<&Record> {
-        self.a.iter().chain(&self.b).chain([&self.c1]).collect()
-    }
-}
-
-/// An index that accepted `records` as pushes, in this order.
-fn accepted(records: &[&Record]) -> Index<MemoryStore> {
-    let mut ix = index();
-    for r in records {
-        push(&mut ix, r);
-    }
-    ix
-}
-
-fn store_of(records: &[&Record]) -> MemoryStore {
-    let mut store = MemoryStore::new();
-    for r in records {
-        store.append(r).unwrap();
-    }
-    store
-}
-
-/// The history as stored with a2's signature and b2's body each changed by
-/// one bit at rest; and b2 as stored.
-fn corrupted(h: &History) -> (MemoryStore, Record) {
-    let bad_b2 = flipped_body(&h.b[1]);
-    let store = store_of(&[
-        &h.a[0],
-        &flipped_signature(&h.a[1]),
-        &h.a[2],
-        &h.b[0],
-        &bad_b2,
-        &h.c1,
-    ]);
-    (store, bad_b2)
-}
-
-fn sorted(mut hashes: Vec<RecordHash>) -> Vec<RecordHash> {
-    hashes.sort_unstable();
-    hashes
-}
-
-#[test]
-fn opening_drops_a_record_whose_signature_or_body_changed_at_rest() {
-    let h = history();
-    let (store, bad_b2) = corrupted(&h);
-    // b2's changed body still parses: only its signature tells.
-    assert_ne!(bad_b2.hash(), h.b[1].hash());
-    assert_eq!(bad_b2.device_id(), dev(2));
-    let (ix, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!(report.dropped, sorted(vec![h.a[1].hash(), bad_b2.hash()]));
-    assert_eq!(
-        report.set_aside,
-        vec![h.a[2].hash()],
-        "a3 lies past a2's gap"
+/// A writer with a little of everything: versions, a conflict, a
+/// tombstone, a rename, a tree delete with its cleanup, bases kept only as
+/// bases, a cleanup from a peer, per-peer state.
+fn busy() -> Dev {
+    let mut d = Dev::writer(0xd0);
+    let mut e = Dev::writer(0xe0);
+    d.put("a", 1);
+    d.put("a", 2);
+    let x = e.put("a", 3);
+    d.take(&e, &[x]);
+    d.put("b", 4);
+    d.apply_all();
+    d.rename("b", "c");
+    d.put("t/1", 5);
+    d.put("t/2", 6);
+    d.apply_all();
+    d.tree_delete("t");
+    let v = e.put("e", 7);
+    d.take(&e, &[v]);
+    d.apply("e");
+    let v2 = e.put("e", 8);
+    d.take(&e, &[v2]);
+    let c = cleanup(
+        dev(0xe0),
+        T0 + 100,
+        &[(None, vec![licketysync_keys::RecordHash([3; 32])])],
     );
-    assert!(!report.is_clean());
-    for gone in [&h.a[1], &h.a[2], &h.b[1], &bad_b2] {
-        assert!(!ix.holds(&gone.hash()) && ix.record(&gone.hash()).is_none());
+    d.accept(&c).unwrap();
+    let mut txn = d.ix.begin();
+    txn.round_ended(dev(0xe0), true, Some((9, 3)), T0);
+    let (ch, pending) = txn.finish();
+    d.store.commit(&ch).unwrap();
+    pending.commit();
+    d
+}
+
+#[test]
+fn a_reopen_gives_the_same_index() {
+    let mut d = busy();
+    assert!(!d.ix.s.base_only.is_empty(), "a base kept only as a base");
+    let before = snapshot(&d.ix);
+    let report = d.reopen();
+    assert!(report.is_clean(), "{report:?}");
+    assert!(report.changes.is_empty(), "nothing to repair");
+    assert_eq!(snapshot(&d.ix), before);
+    // At the other tiers too, from the same records.
+    for tier in [Tier::Read, Tier::Sealed] {
+        let mut x = Dev::new(tier, 0xd1);
+        x.take_all(&d);
+        let before = snapshot(&x.ix);
+        assert!(x.reopen().is_clean());
+        assert_eq!(snapshot(&x.ix), before, "{tier:?}");
     }
-    // The index is the one that accepting the records that passed builds,
-    // and opening cost one digest step per record held.
-    let expected = accepted(&[&h.a[0], &h.b[0], &h.c1]);
+}
+
+#[test]
+fn a_record_changed_at_rest_is_dropped_and_reported_at_every_tier() {
+    for tier in [Tier::Write, Tier::Read, Tier::Sealed] {
+        let mut d = Dev::new(tier, 0xd0);
+        let mut w = Dev::writer(0xe0);
+        let v = w.put("a", 1);
+        let keep = w.put("b", 2);
+        d.take(&w, &[v, keep]);
+        let epoch = d.ix.epoch();
+        let damaged = flipped_body(w.signed(&v));
+        d.store.tamper(&v, damaged.clone());
+        let report = d.reopen();
+        assert_eq!(report.dropped, vec![damaged.hash()], "{tier:?}");
+        assert!(report.epoch_redrawn);
+        assert_ne!(d.ix.epoch(), epoch, "one new epoch");
+        assert!(!d.holds(&v) && d.holds(&keep));
+        // Reported again at the next open, since it stays in the store, and
+        // with another new epoch: every open that drops a record draws one.
+        let again = d.reopen();
+        assert_eq!(again.dropped, vec![damaged.hash()]);
+        // A record signed by another folder's key is dropped alike.
+        let alien = super::kit::other_key()
+            .sign_index_record(w.signed(&keep).body().to_vec())
+            .unwrap();
+        d.store.tamper(&keep, alien.clone());
+        let report = d.reopen();
+        assert!(report.dropped.contains(&alien.hash()));
+    }
+}
+
+#[test]
+fn the_crash_between_a_change_and_its_removals_is_repaired() {
+    let mut d = Dev::writer(0xd0);
+    let v1 = d.put("a", 1);
+    d.store.mode = Commit::CrashBeforeRemovals;
+    {
+        let Dev {
+            ix,
+            store,
+            rng,
+            clock,
+            ..
+        } = &mut d;
+        let mut txn = ix.begin();
+        let w = txn
+            .write(
+                &[Change::Put(super::kit::file("a", 2, 9))],
+                *clock,
+                &mut |b| rng.fill(b),
+            )
+            .unwrap();
+        assert_eq!(w.dropped, vec![v1]);
+        let (changes, pending) = txn.finish();
+        let err = store.commit(&changes);
+        assert!(matches!(err, Err(StoreError::Io(_))));
+        drop(pending);
+        // The handler drops the transaction: memory is as before.
+    }
+    assert!(d.holds(&v1), "undone in memory");
+    let stored = d.store.load().unwrap();
     assert_eq!(
-        snapshot(&ix),
-        with_set_aside(snapshot(&expected), &report.set_aside)
+        stored.records.len(),
+        2,
+        "the new record and the one it replaces"
     );
-    assert_eq!(ix.work, 3);
-    assert_eq!(ix.writer_cursor(&dev(1)).seq, 1);
-    assert_eq!(ix.writer_cursor(&dev(2)).seq, 1);
+    let report = d.reopen();
+    assert!(report.dropped.is_empty(), "repaired without a report");
+    assert!(!d.holds(&v1));
+    assert_eq!(report.changes.remove, vec![v1], "the removal staged again");
+    assert_eq!(d.ix.len(), 1);
+    // Numbering goes on from the greatest stored number.
+    let seq = d.ix.records().map(|r| r.seq).max().unwrap();
+    let v3 = d.put("b", 3);
+    assert_eq!(d.ix.record(&v3).unwrap().seq, seq + 1);
 }
 
 #[test]
-fn read_and_sealed_holders_check_the_same_way() {
-    let h = history();
-    let (store, _) = corrupted(&h);
-    let (writer, expected) = Index::open(FolderKey::from(write_key()), OWN, store.clone()).unwrap();
-    assert_eq!((expected.dropped.len(), expected.set_aside.len()), (2, 1));
-    for key in [
-        FolderKey::from(write_key().read_key()),
-        FolderKey::from(write_key().sealed_key()),
-    ] {
-        let sealed = key.data_key().is_none();
-        let (ix, report) = Index::open(key, OWN, store.clone()).unwrap();
-        assert_eq!(report, expected);
-        let (s, w) = (snapshot(&ix), snapshot(&writer));
-        assert_eq!((&s.held, &s.writers), (&w.held, &w.writers));
-        if !sealed {
-            assert_eq!(s, w);
-        }
+fn a_refused_commit_leaves_the_index_as_it_was() {
+    let mut d = busy();
+    let before = snapshot(&d.ix);
+    d.store.mode = Commit::Refuse;
+    let mut e = Dev::writer(0xe0);
+    let r = e.put("z", 9);
+    for _ in 0..2 {
+        let Dev {
+            ix,
+            store,
+            rng,
+            clock,
+            memory,
+            notes,
+            ..
+        } = &mut d;
+        let mut txn = ix.begin();
+        let w = txn.write(
+            &[Change::Put(super::kit::file("a", 5, 7))],
+            *clock,
+            &mut |b| rng.fill(b),
+        );
+        assert!(w.is_ok());
+        let record = licketysync_protocol::record::Record::parse(
+            e.signed(&r).clone(),
+            folder_key(Tier::Write).verifier(),
+        )
+        .unwrap();
+        let mut fill = |b: &mut [u8]| b.fill(1);
+        let mut arrival = crate::Arrival {
+            peer: dev(0xe0),
+            memory,
+            notes,
+            clock_us: *clock,
+            rng: &mut fill,
+        };
+        txn.accept(record, &mut arrival).unwrap();
+        txn.set_base("a", Place::Path, None).unwrap();
+        txn.round_ended(dev(0x77), true, Some((1, 1)), T0);
+        let (changes, pending) = txn.finish();
+        assert_eq!(store.commit(&changes), Err(StoreError::Full));
+        pending.abort();
     }
+    assert_eq!(snapshot(&d.ix), before, "exactly as before");
+    d.store.mode = Commit::Atomic;
+    assert!(d.reopen().is_clean());
+    assert_eq!(snapshot(&d.ix), before);
+    assert_ne!(StoreError::Io("x".into()).to_string(), "");
+    assert_ne!(StoreError::Full.to_string(), "");
 }
 
 #[test]
-fn records_of_another_folders_key_are_dropped() {
-    let h = history();
-    // Another folder's record, with its own folder ID: step 1 refuses it.
-    let foreign = Draft {
-        device_id: dev(1),
-        seq: 1,
-        supersedes: vec![],
-        deleted: false,
-        chunks: vec![],
-        meta: Spec::file(dev(1), 1, "f").content(0).meta(),
+fn the_stored_high_water_mark_is_checked() {
+    let mut d = Dev::writer(0xd0);
+    d.put("a", 1);
+    let greatest = d.ix.folder_time();
+    // Above the greatest counter held and the clock floor by more than
+    // CLOCK_AHEAD_WARNING: corrupt, replaced.
+    for hw in [greatest.max(T0) + CLOCK_AHEAD_WARNING + 1, MAX_COUNTER] {
+        let meta = d.store.meta().unwrap();
+        d.store.set_meta(StoredMeta { hw, ..meta });
+        let report = d.reopen();
+        assert!(report.hw_corrupt, "{hw}");
+        assert_eq!(d.ix.hw(), greatest.max(T0));
+        assert_eq!(report.changes.meta.map(|m| m.hw), Some(greatest.max(T0)));
     }
-    .sign(&other_key(), &mut |b: &mut [u8]| b.fill(7))
+    // Within the warning: kept (a write's mark, or a clock read just ahead).
+    let meta = d.store.meta().unwrap();
+    let within = greatest.max(T0) + CLOCK_AHEAD_WARNING;
+    d.store.set_meta(StoredMeta { hw: within, ..meta });
+    let report = d.reopen();
+    assert!(!report.hw_corrupt);
+    assert_eq!(d.ix.hw(), within);
+    // A sealed holder keeps none.
+    let mut s = Dev::sealed(0xa2);
+    s.take(&d, &d.all().into_iter().collect::<Vec<_>>());
+    assert_eq!(s.ix.hw(), 0);
+    assert!(s.reopen().is_clean());
+}
+
+#[test]
+fn a_lost_next_sequence_number_and_epoch_are_rebuilt() {
+    let mut d = Dev::writer(0xd0);
+    d.put("a", 1);
+    d.put("b", 2);
+    let meta = d.store.meta().unwrap();
+    d.store.set_meta(StoredMeta {
+        next_seq: 1,
+        ..meta
+    });
+    d.reopen();
+    assert_eq!(d.ix.local_seq(), 2, "from the greatest stored number");
+    // A store with no metadata at all: a first epoch drawn, numbering on.
+    let stored = {
+        let mut s = d.store.load().unwrap();
+        s.meta = None;
+        s
+    };
+    let mut rng = super::kit::Rng(5);
+    let (ix, report) = Index::open(folder_key(Tier::Write), d.id(), stored, d.clock, &mut |b| {
+        rng.fill(b);
+    });
+    assert_ne!(ix.epoch(), 0);
+    assert!(!report.epoch_redrawn, "a first epoch, not a redraw");
+    assert_eq!(ix.local_seq(), 2);
+}
+
+#[test]
+fn per_peer_state_past_its_horizon_goes_at_open() {
+    let mut d = Dev::writer(0xd0);
+    let mut txn = d.ix.begin();
+    txn.round_ended(dev(1), true, Some((1, 2)), T0);
+    txn.round_ended(dev(2), true, Some((1, 2)), T0 + 50 * DAY);
+    let (ch, pending) = txn.finish();
+    d.store.commit(&ch).unwrap();
+    pending.commit();
+    d.clock = T0 + PEER_STATE_HORIZON + 1;
+    let report = d.reopen();
+    assert!(d.ix.peer(&dev(1)).is_none());
+    assert!(d.ix.peer(&dev(2)).is_some());
+    assert_eq!(report.changes.peers, vec![(dev(1), None)]);
+}
+
+#[test]
+fn open_is_the_same_on_any_number_of_threads() {
+    let d = busy();
+    let mut results = Vec::new();
+    for threads in [1, 2, 7] {
+        let mut stored = d.store.load().unwrap();
+        stored.records.push(stored.records[0].clone());
+        let flipped = flipped_body(&stored.records[1].0);
+        stored.records[1].0 = flipped;
+        let mut rng = super::kit::Rng(1);
+        let (ix, report) = Index::open_with_threads(
+            folder_key(Tier::Write),
+            d.id(),
+            stored,
+            d.clock,
+            &mut |b| rng.fill(b),
+            threads,
+        );
+        results.push((snapshot(&ix), report));
+    }
+    assert!(results.windows(2).all(|w| w[0] == w[1]));
+    assert_eq!(results[0].1.dropped.len(), 1);
+}
+
+#[test]
+fn the_memory_store_counts_and_modes() {
+    let mut m = MemoryStore::new();
+    assert!(m.is_empty() && m.meta().is_none());
+    let mut d = Dev::writer(0xd0);
+    d.put("a", 1);
+    m.commit(
+        &d.store
+            .load()
+            .map(|s| crate::ChangeSet {
+                put: s.records.clone(),
+                meta: s.meta,
+                ..crate::ChangeSet::default()
+            })
+            .unwrap(),
+    )
     .unwrap();
-    // This folder's a1, signed by another folder's key: it parses, and its
-    // signature does not verify under this folder's verification key.
-    let a1_forged = signed_by_other_key(h.a[0].signed().body());
-    assert_eq!(a1_forged.hash(), h.a[0].hash());
-    let store = Flaky {
-        inner: store_of(&[&h.a[1], &h.a[2], &h.b[0]]),
-        extra: vec![foreign.clone(), a1_forged],
-        ..Flaky::default()
-    };
-    let (ix, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!(report.dropped, sorted(vec![foreign.hash(), h.a[0].hash()]));
-    assert_eq!(report.set_aside, vec![h.a[1].hash(), h.a[2].hash()]);
-    assert_eq!(
-        snapshot(&ix),
-        with_set_aside(snapshot(&accepted(&[&h.b[0]])), &report.set_aside)
-    );
-    assert_eq!(ix.writer_cursor(&dev(1)).seq, 0);
+    assert_eq!(m.len(), 1);
+    assert_eq!(Commit::default(), Commit::Atomic);
 }
 
-#[test]
-fn a_bad_copy_beside_a_good_one_drops_nothing_and_a_bad_one_twice_is_named_once() {
-    let h = history();
-    let good = store_of(&[&h.a[0], &h.b[0]]);
-    let store = Flaky {
-        inner: good.clone(),
-        extra: vec![flipped_signature(&h.a[0]).signed().clone()],
-        ..Flaky::default()
-    };
-    let ix = reopen(FolderKey::from(write_key()), OWN, store);
-    assert_eq!(snapshot(&ix), snapshot(&accepted(&[&h.a[0], &h.b[0]])));
-    let twice = flipped_signature(&h.c1).signed().clone();
-    let store = Flaky {
-        inner: good,
-        extra: vec![twice.clone(), twice],
-        ..Flaky::default()
-    };
-    let (_, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!(
-        report,
-        OpenReport {
-            dropped: vec![h.c1.hash()],
-            set_aside: vec![],
-        }
-    );
-}
-
-#[test]
-fn a_dropped_record_arriving_later_is_applied_and_lands_what_was_set_aside() {
-    let h = history();
-    let (store, bad_b2) = corrupted(&h);
-    let store = Flaky {
-        inner: store,
-        ..Flaky::default()
-    };
-    let (mut ix, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!(report.set_aside, vec![h.a[2].hash()]);
-    assert_eq!(snapshot(&ix).set_aside, vec![h.a[2].hash()]);
-    let work = ix.work;
-    let o = ix.accept(h.a[1].clone(), Arrival::Push).unwrap();
-    assert_eq!(o.judgement, Judgement::Next);
-    assert_eq!(o.landed, vec![h.a[2].hash()], "a3 lands behind a2");
-    assert_eq!(o.changed, vec!["a".to_string()]);
-    assert!(o.rows().is_empty() && !o.waits && o.released.is_empty());
-    assert_eq!(ix.work - work, 2, "one digest step each");
-    assert_eq!(
-        ix.store().appended,
-        vec![h.a[1].hash()],
-        "a3 is not appended again"
-    );
-    assert_eq!(ix.writer_cursor(&dev(1)).seq, 3);
-    // a3 from a peer is now a duplicate.
-    assert_eq!(push(&mut ix, &h.a[2]).judgement, Judgement::Duplicate);
-    let o = ix.accept(h.b[1].clone(), Arrival::Push).unwrap();
-    assert_eq!(o.judgement, Judgement::Next);
-    assert_eq!(o.landed, Vec::<RecordHash>::new());
-    let all = accepted(&h.all());
-    assert_eq!(snapshot(&ix), snapshot(&all));
-    // a2's good copy replaced the bad one under the same hash; b2's changed
-    // body has a hash of its own, so it stays in the store and every open
-    // names it again, while nothing of it is applied.
-    let (reopened, report) =
-        Index::open(FolderKey::from(write_key()), OWN, ix.into_store()).unwrap();
-    assert_eq!(report.dropped, vec![bad_b2.hash()]);
-    assert_eq!(report.set_aside, Vec::<RecordHash>::new());
-    assert_eq!(snapshot(&reopened), snapshot(&all));
-}
-
-#[test]
-fn a_good_copy_arriving_later_replaces_the_bad_one_so_the_next_open_is_clean() {
-    let h = history();
-    let store = store_of(&[&h.a[0], &flipped_signature(&h.a[1]), &h.a[2]]);
-    let (mut ix, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!(
-        (report.dropped, report.set_aside),
-        (vec![h.a[1].hash()], vec![h.a[2].hash()])
-    );
-    assert_eq!(push(&mut ix, &h.a[1]).judgement, Judgement::Next);
-    // The store kept the envelope it was given in place of the one it had.
-    let stored = ix.store().load().unwrap();
-    assert!(stored.contains(h.a[1].signed()));
-    assert!(!stored.contains(flipped_signature(&h.a[1]).signed()));
-    let reopened = reopen(FolderKey::from(write_key()), OWN, ix.into_store());
-    assert_eq!(
-        snapshot(&reopened),
-        snapshot(&accepted(&[&h.a[0], &h.a[1], &h.a[2]]))
-    );
-}
-
-/// Writer W's records 1 to 5 at paths of their own, with 2 stored with its
-/// signature changed.
-fn w_with_seq_2_changed() -> (DeviceId, Vec<Record>, Flaky) {
-    let w = dev(5);
-    let rs: Vec<Record> = (1..=5)
-        .map(|seq| Spec::file(w, seq, &format!("w{seq}")).record())
-        .collect();
-    let bad = flipped_signature(&rs[1]);
-    let inner = store_of(&[&rs[0], &bad, &rs[2], &rs[3], &rs[4]]);
-    (
-        w,
-        rs,
-        Flaky {
-            inner,
-            ..Flaky::default()
-        },
+/// Opens `d`'s stored state as changed by `change`, at `d`'s clock.
+fn open_changed(d: &Dev, change: impl FnOnce(&mut crate::Stored)) -> (Index, crate::OpenReport) {
+    let mut stored = d.store.load().unwrap();
+    change(&mut stored);
+    let mut rng = d.rng.clone();
+    Index::open(
+        folder_key(d.ix.tier()),
+        d.ix.own(),
+        stored,
+        d.clock,
+        &mut |b| rng.fill(b),
     )
 }
 
-#[test]
-fn a_record_another_write_holder_signs_at_the_gap_lands_the_rest_as_a_reopen_would() {
-    let (w, rs, store) = w_with_seq_2_changed();
-    let (mut ix, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    let above: Vec<RecordHash> = rs[2..].iter().map(Record::hash).collect();
-    assert_eq!(report.dropped, vec![rs[1].hash()]);
-    assert_eq!(report.set_aside, above);
-    assert_eq!(ix.writer_cursor(&w).seq, 1);
-    // A push of a record above the gap is a gap like any other.
-    assert_eq!(push(&mut ix, &rs[3]).judgement, Judgement::PushGap);
-    // Any write holder can sign under W's device ID at seq 2.
-    let filler = Spec::file(w, 2, "other").salt(9).record();
-    let work = ix.work;
-    let o = ix.accept(filler.clone(), Arrival::Push).unwrap();
-    assert_eq!(o.judgement, Judgement::Next);
-    assert_eq!(o.landed, above);
-    // The outcome's flags are the filler's; each landed record's own state
-    // shows through the index.
-    assert!(!o.own_ahead && !o.waits && o.rows().is_empty());
-    assert!(above
-        .iter()
-        .all(|h| matches!(ix.kept(h), Some(Kept::Applied(_))) && !ix.is_waiting(h)));
-    assert_eq!(ix.work - work, 4, "one digest step per record");
-    assert_eq!(ix.store().appended, vec![filler.hash()]);
-    assert_eq!(ix.writer_cursor(&w).seq, 5);
-    let state = snapshot(&ix);
-    assert_eq!(state.set_aside, Vec::<RecordHash>::new());
-    // The store's records give the same index: the bad copy of rs[1] is
-    // still there and dropped again, and nothing is set aside.
-    let (reopened, report) =
-        Index::open(FolderKey::from(write_key()), OWN, ix.into_store()).unwrap();
-    assert_eq!(snapshot(&reopened), state);
-    assert_eq!(report.dropped, vec![rs[1].hash()]);
-    assert_eq!(report.set_aside, Vec::<RecordHash>::new());
+/// Every record held is in the local-sequence order, once, numbered from 1.
+fn numbered_from_one(ix: &Index) {
+    let seqs: Vec<u64> = ix.records().map(|r| r.seq).collect();
+    assert_eq!(
+        seqs.len(),
+        ix.len(),
+        "every record held is in the local-sequence order"
+    );
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]));
+    assert!(ix.local_seq() <= licketysync_protocol::limits::MAX_LOCAL_SEQ);
 }
 
+/// Two stored records under one local sequence number (a store changed at
+/// rest, or a non-atomic store resumed without a reopen): the open used to
+/// hold both and keep one in its local-sequence map, so the other was never
+/// served, pushed or fetched. Now every record is numbered afresh under a
+/// new epoch, and put again with its number (the coordinator's ruling IS-3).
 #[test]
-fn this_device_writing_at_its_lost_seq_lands_the_rest_and_writes_next_above_them() {
-    let mine: Vec<Record> = (1..=3)
-        .map(|seq| Spec::file(OWN, seq, &format!("m{seq}")).record())
-        .collect();
-    let store = store_of(&[&mine[0], &flipped_signature(&mine[1]), &mine[2]]);
-    let (mut ix, _) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!(ix.next_seq(), Some(2));
-    let mut fill = |b: &mut [u8]| b.fill(3);
-    let draft = ix
-        .draft(Spec::file(OWN, 2, "new").content(0).meta(), vec![], false)
-        .unwrap();
-    assert_eq!(draft.seq, 2, "the lost seq is used again");
-    let o = ix.write(&draft, &mut fill).unwrap();
-    assert_eq!(o.landed, vec![mine[2].hash()]);
-    assert_eq!(ix.next_seq(), Some(4), "and only the lost one");
-    // A record of this device's own landed above the write: the counter moved
-    // past it, which raises the informational issue of 4.5.
-    assert!(o.own_ahead);
-    assert_eq!(o.rows(), vec![Cause::OwnSequenceAhead]);
-    let draft = ix
-        .draft(Spec::file(OWN, 4, "next").content(0).meta(), vec![], false)
-        .unwrap();
-    let o = ix.write(&draft, &mut fill).unwrap();
-    assert_eq!(ix.record(&o.hash).unwrap().seq(), 4);
-    let state = snapshot(&ix);
-    let (reopened, _) = Index::open(FolderKey::from(write_key()), OWN, ix.into_store()).unwrap();
-    assert_eq!(snapshot(&reopened), state);
-}
-
-#[test]
-fn index_sync_brings_back_what_opening_dropped_or_set_aside() {
-    let h = history();
-    let (store, _) = corrupted(&h);
-    let (mut ix, _) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    let mut peer = index_as(dev(0xb0));
-    for r in h.all() {
-        push(&mut peer, r);
-    }
-    // The cursors and digests describe only the records held, so the
-    // peer's replies, through real requests and pages, carry the rest.
-    converge(&mut ix, &mut peer);
-    assert_eq!(snapshot(&ix), snapshot(&peer));
-    assert_eq!(snapshot(&ix), snapshot(&accepted(&h.all())));
-}
-
-#[test]
-fn a_dropped_concurrent_version_is_found_by_the_digest() {
-    // Two records of one writer at seq 1: dropping one leaves the cursor
-    // where it was, and the digest there differs from a peer's.
-    let w = dev(4);
-    let one = Spec::file(w, 1, "p").record();
-    let other = Spec::file(w, 1, "q").salt(1).record();
-    let store = store_of(&[&one, &flipped_signature(&other)]);
-    let (mut ix, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!(report.dropped, vec![other.hash()]);
-    assert_eq!(ix.writer_cursor(&w).seq, 1);
-    let mut peer = accepted(&[&one, &other]);
-    assert_ne!(ix.writer_cursor(&w).digest, peer.writer_cursor(&w).digest);
-    converge(&mut ix, &mut peer);
-    assert_eq!(snapshot(&ix), snapshot(&accepted(&[&one, &other])));
-}
-
-#[test]
-fn a_dropped_record_of_this_device_lowers_its_next_seq_until_it_returns() {
-    let mine: Vec<Record> = (1..=3)
-        .map(|seq| Spec::file(OWN, seq, &format!("m{seq}")).record())
-        .collect();
-    let store = store_of(&[&mine[0], &flipped_signature(&mine[1]), &mine[2]]);
-    let (mut ix, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!(report.set_aside, vec![mine[2].hash()]);
-    assert_eq!(ix.next_seq(), Some(2));
-    // Back from a peer, it is ahead of the counter and moves it, as for a
-    // restored backup (`protocol.md` 4.5), and the record set aside above it
-    // lands with it.
-    let o = ix.accept(mine[1].clone(), Arrival::Push).unwrap();
-    assert!(o.own_ahead);
-    assert_eq!(o.landed, vec![mine[2].hash()]);
-    assert_eq!(ix.next_seq(), Some(4));
-    assert_eq!(push(&mut ix, &mine[2]).judgement, Judgement::Duplicate);
-}
-
-/// Four writers of twelve records each, with concurrent versions, records
-/// that wait and opaque ones; every fifth stored with its signature or body
-/// changed at rest.
-fn larger_store() -> MemoryStore {
-    let mut store = MemoryStore::new();
-    let mut last: Vec<RecordHash> = Vec::new();
-    for w in 1..=4u8 {
-        for n in 0..12u8 {
-            let seq = u64::from(n.min(10)) + 1;
-            let mut spec = Spec::file(dev(w), seq, &format!("p{}", n % 5))
-                .salt(n)
-                .names(&last);
-            if n % 7 == 3 {
-                spec = spec.fault(super::kit::Fault::Seal);
+fn a_repeated_stored_local_sequence_number_is_renumbered_is3() {
+    let mut d = Dev::writer(0xd0);
+    let a = d.put("a", 1);
+    let b = d.put("b", 2);
+    let c = d.put("c", 3);
+    let seq_a = d.ix.record(&a).unwrap().seq;
+    let (ix, report) = open_changed(&d, |s| {
+        for (r, seq) in &mut s.records {
+            if r.hash() == b {
+                *seq = seq_a;
             }
-            let r = spec.record();
-            last = vec![r.hash()];
-            let stored = match (w + n) % 10 {
-                0 => flipped_signature(&r),
-                5 => flipped_body(&r),
-                _ => r,
-            };
-            store.append(&stored).unwrap();
         }
-    }
-    store
+    });
+    assert!(report.renumbered && report.epoch_redrawn && !report.is_clean());
+    assert_ne!(ix.epoch(), d.ix.epoch());
+    numbered_from_one(&ix);
+    assert_eq!(ix.local_seq(), 3);
+    let put: Vec<(RecordHash, u64)> = report
+        .changes
+        .put
+        .iter()
+        .map(|(r, s)| (r.hash(), *s))
+        .collect();
+    assert_eq!(put.len(), 3, "every record put again with its new number");
+    assert!(put.iter().all(|(h, _)| [a, b, c].contains(h)));
+    // Stored, it opens clean.
+    d.ix = ix;
+    d.store.commit(&report.changes).unwrap();
+    assert!(d.reopen().is_clean());
 }
 
+/// Two stored copies of one record, at its number or at another (a store
+/// not keyed by hash that kept a row twice): one record at the first of
+/// its numbers, never a repeated number, so nothing is renumbered and the
+/// epoch stays.
 #[test]
-fn one_thread_and_many_give_the_same_index_and_report() {
-    let store = larger_store();
-    let open = |threads: usize| -> (Snapshot, OpenReport, Option<u64>) {
-        let (ix, report) =
-            Index::open_with_threads(FolderKey::from(write_key()), OWN, store.clone(), threads)
-                .unwrap();
-        (snapshot(&ix), report, ix.next_seq())
+fn a_stored_copy_of_a_record_is_not_a_repeated_number() {
+    for other in [false, true] {
+        let mut d = Dev::writer(0xd0);
+        let a = d.put("a", 1);
+        let b = d.put("b", 2);
+        let seq_a = d.ix.record(&a).unwrap().seq;
+        let seq_b = d.ix.record(&b).unwrap().seq;
+        let (ix, report) = open_changed(&d, |s| {
+            let copy = s
+                .records
+                .iter()
+                .find(|(r, _)| r.hash() == a)
+                .unwrap()
+                .clone();
+            let at = if other { seq_b } else { copy.1 };
+            s.records.push((copy.0, at));
+        });
+        assert!(
+            !report.renumbered && !report.epoch_redrawn,
+            "other number: {other}"
+        );
+        assert!(report.dropped.is_empty());
+        assert_eq!(ix.epoch(), d.ix.epoch());
+        assert_eq!(ix.len(), 2);
+        assert_eq!(ix.record(&a).unwrap().seq, seq_a);
+        assert_eq!(ix.record(&b).unwrap().seq, seq_b);
+    }
+}
+
+/// A stored local sequence number of 0 or above `MAX_LOCAL_SEQ`: renumbered
+/// alike (IS-3).
+#[test]
+fn a_stored_local_sequence_number_out_of_range_is_renumbered_is3() {
+    for bad in [0, licketysync_protocol::limits::MAX_LOCAL_SEQ + 1, u64::MAX] {
+        let mut d = Dev::writer(0xd0);
+        let a = d.put("a", 1);
+        d.put("b", 2);
+        let (ix, report) = open_changed(&d, |s| {
+            for (r, seq) in &mut s.records {
+                if r.hash() == a {
+                    *seq = bad;
+                }
+            }
+        });
+        assert!(report.renumbered, "{bad}");
+        numbered_from_one(&ix);
+    }
+}
+
+/// A stored next local sequence number past `MAX_LOCAL_SEQ + 1` used to be
+/// taken as it was, so that root replies carried a `through` every peer
+/// refuses: renumbered under a new epoch now (IS-3).
+#[test]
+fn a_stored_next_local_sequence_past_the_bound_is_renumbered_is3() {
+    for next in [licketysync_protocol::limits::MAX_LOCAL_SEQ + 2, u64::MAX] {
+        let mut d = Dev::writer(0xd0);
+        d.put("a", 1);
+        let meta = d.store.meta().unwrap();
+        d.store.set_meta(StoredMeta {
+            next_seq: next,
+            ..meta
+        });
+        let report = d.reopen();
+        assert!(report.renumbered && report.epoch_redrawn, "{next}");
+        numbered_from_one(&d.ix);
+        assert_eq!(d.ix.local_seq(), 1);
+    }
+    // MAX_LOCAL_SEQ + 1 is a next number the spec allows: kept.
+    let mut d = Dev::writer(0xd0);
+    d.put("a", 1);
+    let meta = d.store.meta().unwrap();
+    let limit = licketysync_protocol::limits::MAX_LOCAL_SEQ + 1;
+    d.store.set_meta(StoredMeta {
+        next_seq: limit,
+        ..meta
+    });
+    assert!(!d.reopen().renumbered);
+    assert_eq!(
+        d.ix.local_seq(),
+        licketysync_protocol::limits::MAX_LOCAL_SEQ
+    );
+}
+
+/// Dropping a record removes only its own entry of the local-sequence map,
+/// so that a number two records share cannot lose the other's (IS-3).
+#[test]
+fn dropping_a_record_removes_only_its_own_local_sequence_entry_is3() {
+    let mut d = Dev::writer(0xd0);
+    let a = d.put("a", 1);
+    let b = d.put("b", 2);
+    let held_b = d.ix.s.held.get(&b).cloned().unwrap();
+    let seq_a = d.ix.record(&a).unwrap().seq;
+    // Two records under one number, as an open before the fix held them.
+    d.ix.s.unhold(&b, None);
+    d.ix.s.hold(
+        crate::state::Held {
+            seq: seq_a,
+            ..held_b
+        },
+        None,
+    );
+    assert_eq!(d.ix.s.by_seq.get(&seq_a), Some(&b));
+    d.ix.s.unhold(&a, None);
+    assert_eq!(d.ix.s.by_seq.get(&seq_a), Some(&b), "b's entry stays");
+}
+
+/// A stored base slot whose record lies at another file ID is dropped and
+/// reported: `Txn::set_base` refuses such a base, and the next write would
+/// join an unrelated record's vector (the index security review's NIT 5).
+#[test]
+fn a_stored_base_at_another_path_is_dropped_and_reported() {
+    let mut d = Dev::writer(0xd0);
+    d.put("a", 1);
+    let b = d.put("b", 2);
+    let tag_a = super::kit::tag("a");
+    let (ix, report) = open_changed(&d, |s| {
+        for (slot, h) in &mut s.bases {
+            if slot.0 == tag_a {
+                *h = b;
+            }
+        }
+    });
+    assert_eq!(report.misplaced_bases, vec![(tag_a, Place::Path)]);
+    assert!(!report.is_clean());
+    assert!(ix.bases("a").is_empty(), "no base at a");
+    assert!(
+        report.changes.bases.contains(&((tag_a, Place::Path), None)),
+        "cleared in the store"
+    );
+}
+
+/// Stored per-peer state is clamped to the clock, so that a time ahead of it
+/// neither keeps an entry for ever nor keeps its names window from ending,
+/// and at most `MAX_PEER_STATES` entries are kept, the longest without a
+/// round going first (the index security review's NIT 4).
+#[test]
+fn stored_per_peer_state_is_clamped_to_the_clock_and_capped() {
+    use licketysync_protocol::limits::MAX_PEER_STATES;
+    let d = Dev::writer(0xd0);
+    let ahead = crate::PeerState {
+        epoch: 1,
+        cursor: 2,
+        round_ended_us: u64::MAX,
+        caught_up: true,
+        names_window_us: u64::MAX,
+        names: 7,
     };
-    let one = open(1);
-    assert!(!one.1.dropped.is_empty() && !one.1.set_aside.is_empty());
-    assert!(!one.0.held.is_empty() && !one.0.waiting.is_empty());
-    for threads in [0, 2, 3, 4, 7, 47, 48, 64, 1000] {
-        assert_eq!(open(threads), one, "{threads} threads");
-    }
-    let (ix, report) = Index::open(FolderKey::from(write_key()), OWN, store).unwrap();
-    assert_eq!((snapshot(&ix), report, ix.next_seq()), one);
+    let (ix, report) = open_changed(&d, |s| {
+        s.peers.push((dev(1), ahead));
+        for i in 0..MAX_PEER_STATES {
+            let mut id = [0u8; 32];
+            id[..4].copy_from_slice(&u32::try_from(i).unwrap().to_be_bytes());
+            id[31] = 0x99;
+            s.peers.push((
+                licketysync_keys::DeviceId(id),
+                crate::PeerState {
+                    round_ended_us: T0 - DAY + i as u64,
+                    ..crate::PeerState::default()
+                },
+            ));
+        }
+    });
+    let p = ix.peer(&dev(1)).unwrap();
+    assert_eq!(
+        (p.round_ended_us, p.names_window_us),
+        (d.clock, d.clock),
+        "clamped"
+    );
+    assert_eq!(ix.s.peers.len(), MAX_PEER_STATES, "capped");
+    let mut first = [0u8; 32];
+    first[31] = 0x99;
+    assert!(
+        ix.peer(&licketysync_keys::DeviceId(first)).is_none(),
+        "the longest without a round went"
+    );
+    assert!(
+        report.changes.peers.contains(&(dev(1), Some(*p))),
+        "the clamped state stored"
+    );
+    assert!(report
+        .changes
+        .peers
+        .contains(&(licketysync_keys::DeviceId(first), None)));
 }
 
+/// After the ordered crash between a write's records and its removals, the
+/// next open keeps the write as its path's base: a store that cannot stage
+/// atomically writes the base slots with the metadata, after the records
+/// (the spec's twelfth fixup; the R1 review's NIT 8, `probe_crash_keeps_base`).
 #[test]
-fn an_empty_store_opens_clean_on_any_number_of_threads() {
-    for threads in [0, 1, 8] {
-        let (ix, report) = Index::open_with_threads(
-            FolderKey::from(write_key()),
-            DeviceId([1; 32]),
-            MemoryStore::new(),
-            threads,
-        )
-        .unwrap();
-        assert!(ix.is_empty() && report.is_clean());
-    }
+fn the_crash_after_the_records_keeps_the_write_as_its_paths_base() {
+    let mut d = Dev::writer(0xd0);
+    let v1 = d.put("a", 1);
+    d.store.mode = Commit::CrashBeforeRemovals;
+    let v2 = {
+        let Dev {
+            ix,
+            store,
+            rng,
+            clock,
+            ..
+        } = &mut d;
+        let mut txn = ix.begin();
+        let w = txn
+            .write(
+                &[Change::Put(super::kit::file("a", 2, 9))],
+                *clock,
+                &mut |b| rng.fill(b),
+            )
+            .unwrap();
+        let (changes, pending) = txn.finish();
+        assert!(store.commit(&changes).is_err());
+        drop(pending);
+        w.records[0].0
+    };
+    d.reopen();
+    assert!(d.holds(&v2) && !d.holds(&v1));
+    assert_eq!(
+        d.ix.bases("a"),
+        vec![(Place::Path, v2)],
+        "the write is the base of its path"
+    );
 }

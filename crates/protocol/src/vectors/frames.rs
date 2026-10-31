@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use super::{check, feed, seed};
 use crate::frame::{Frame, MessageType};
 use crate::limits::{DEFAULT_MESSAGE_SIZE, PRE_HELLO_LIMIT};
-use crate::messages::{Close, Hello, IndexRequest, Message};
+use crate::messages::{Close, Hello, IndexRecords, IndexRequest, Message};
 
 fn raw(t: u16, body: &[u8]) -> Vec<u8> {
     Frame::new(t, body.to_vec()).unwrap().encode()
@@ -102,7 +102,13 @@ fn vector_frames() {
     add(
         "unknown-critical",
         "established",
-        raw(0x800c, b""),
+        raw(0x8010, b""),
+        "close UNSUPPORTED_CRITICAL_TYPE (UnknownCriticalType)",
+    );
+    add(
+        "reserved-covered-type",
+        "established",
+        raw(0x800d, b""),
         "close UNSUPPORTED_CRITICAL_TYPE (UnknownCriticalType)",
     );
     add(
@@ -177,6 +183,7 @@ fn vector_frames() {
     let request = IndexRequest {
         folder_id: vec![1; 32],
         request_id: 1,
+        epoch: 1,
         ..IndexRequest::default()
     };
     body(
@@ -227,10 +234,15 @@ fn vector_frames() {
         true,
     );
     body("repeated-scalar-mixed", MessageType::Hello, mixed, true);
-    let mut bool2 = request.encode_to_vec();
-    encode_key(7, WireType::Varint, &mut bool2);
+    let mut bool2 = IndexRecords {
+        folder_id: vec![1; 32],
+        epoch: 1,
+        ..IndexRecords::default()
+    }
+    .encode_to_vec();
+    encode_key(3, WireType::Varint, &mut bool2);
     encode_varint(2, &mut bool2);
-    body("bool-2", MessageType::IndexRequest, bool2, false);
+    body("bool-2", MessageType::IndexRecords, bool2, false);
     let mut wide = Vec::new();
     encode_key(1, WireType::Varint, &mut wide);
     encode_varint(1 << 32, &mut wide);

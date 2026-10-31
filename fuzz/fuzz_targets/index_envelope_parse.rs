@@ -1,5 +1,5 @@
 #![no_main]
-//! An index record's envelope from a peer: decoded by
+//! A signed record's envelope from a peer (an index record or a cleanup):
 //! `SignedRecord::from_bytes` and, when it decodes, verified under the test
 //! vectors' folder (write secret `10 11 .. 2f`). What decodes keeps its body
 //! byte for byte and encodes to an envelope that decodes to the same record.

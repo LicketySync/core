@@ -13,17 +13,21 @@
 //! | `on_message(peer, bytes)` | [`Connection::receive`] |
 //! | `on_timer` for this connection's one timer | [`Connection::wake`] |
 //! | the engine wants a folder here | [`Connection::prove`] |
-//! | [`Event::RequestDue`] | [`Connection::send_request`] with the index's [`Cursors`] |
-//! | [`Event::Serve`], then [`Event::Room`] | [`Connection::send_page`], page by page |
-//! | [`Event::Records`], once the index has judged each record | [`Connection::judged`] |
-//! | the index accepted records that arrived elsewhere | [`Connection::push`] |
+//! | [`Event::RequestDue`] | [`Connection::send_request`] with the index's [`IndexView`] |
+//! | [`Event::ServeIndex`], then [`Event::Room`] | [`Connection::send_page`], page by page, or [`Connection::send_reset`] |
+//! | [`Event::ServeReconcile`] | [`Connection::send_reconcile_reply`], then, after `RECORDS`, [`Connection::send_page`] |
+//! | [`Event::Records`], once the index has judged each record (with [`Connection::memories_mut`]) | [`Connection::judged`] |
+//! | [`Event::PushSubtree`] | [`Connection::push`] of the subtree's records the reply did not carry, `through` 0 |
+//! | [`Event::RoundCompleted`], [`Event::CursorAdvanced`] | persist the peer's epoch and cursor; [`Connection::owe_round`] after a cleanup at a round's end |
+//! | the index came to hold records | [`Connection::push`] to every connection but the one they came on |
+//! | the folder's store refuses changes, or takes them again | [`Connection::set_paused`] on every connection |
 //! | the engine lacks chunks the peer may hold | [`Connection::chunk_position`], [`Connection::request_chunk`], and [`Connection::pass_done`] when no lacking hash lies above the position |
 //! | [`Event::ChunkRequested`] | [`Connection::reply_chunk`] |
 //! | the engine stored a chunk of an open folder | [`Connection::chunk_stored`] |
 //! | [`Event::StatusDue`] | [`Connection::send_status`] |
 //! | a send returned [`SendError::WouldBlock`] | [`Connection::want_room`], then wait for [`Event::Room`] |
 //! | the device stops or pauses | [`Connection::close`] |
-//! | `on_disconnected(peer)` | drop the `Connection` |
+//! | `on_disconnected(peer)` | [`Connection::disconnected`], then drop the `Connection` |
 //!
 //! Every call takes a [`Tick`]: the monotonic time, as a [`Duration`] since
 //! the runtime's clock started, and the transport's unsent bytes for the
@@ -61,15 +65,18 @@
 //! both ways; the `FolderProof` steps with the uniform REJECTED, the proof and
 //! open-folder bounds, the `ProofResult` rules; `HELLO_TIMEOUT`,
 //! `PROOF_TIMEOUT`, `IDLE_TIMEOUT` and the delivery stall; unknown types and
-//! `Unsupported` once per type; messages only for open folders; request IDs,
-//! one `IndexRequest` per folder each way, the round and listed requests, the
-//! marks and the round owed, the resync intervals, `INDEX_REQUEST_MIN_INTERVAL`,
-//! `REPLY_PAGE_TIMEOUT` and its restarts, step 1 of every record and the scope
-//! of every reply; chunk requests in flight (at most `MAX_REQUESTS_IN_FLIGHT`),
-//! `CHUNK_BUSY` and the backoff, the chunk passes, unsolicited replies and the
-//! ciphertext hash of every chunk both ways; Status only for open folders,
-//! with `chunks_stored` and the device name. Steps 2 to 7 of a record are the
-//! index's ([`crate::record::judge`]).
+//! `Unsupported` once per type; messages only for open folders; the clock rule
+//! when the first folder opens; request IDs, one request per folder each way
+//! across `IndexRequest`s and `ReconcileRequest`s, rounds (Since, the Check and
+//! the passes, with their work list and `MAX_PASS_REQUESTS`), quiet and caught
+//! up, the cursor a round sets and the counting of pushes, the round owed, the
+//! resync interval, `INDEX_REQUEST_MIN_INTERVAL` for `IndexRequest`s and root
+//! `ReconcileRequest`s, `REPLY_PAGE_TIMEOUT` and its restarts, step 1 of every
+//! record and the sender violations of a reconciliation; chunk requests in
+//! flight (at most `MAX_REQUESTS_IN_FLIGHT`), `CHUNK_BUSY` and the backoff, the
+//! chunk passes, unsolicited replies and the ciphertext hash of every chunk
+//! both ways; Status only for open folders, with `chunks_stored` and the
+//! device name. Steps 2 to 9 of a record are the index's.
 
 mod chunks;
 mod handshake;
@@ -85,30 +92,30 @@ use core::time::Duration;
 use licketysync_keys::device::DeviceKey;
 use licketysync_keys::{DeviceId, FolderId, Role, Suite, Tier};
 
-use crate::exchange::ServeRequest;
+#[cfg(doc)]
+use crate::exchange::IndexView;
+use crate::exchange::Prefix;
 use crate::features::{COMPRESSION_NONE, HASH_BLAKE3};
 use crate::frame::{Frame, FrameDecoder, FrameError, FrameKind, MessageType};
 use crate::hello::{check_peer_hello, PeerHello, TranscriptHash};
 use crate::limits::{
-    CHUNK_BUSY_BACKOFF, CLOSE_FLUSH, DEFAULT_MESSAGE_SIZE, DEFAULT_REQUESTS_IN_FLIGHT,
-    HELLO_NONCE_LEN, HELLO_TIMEOUT, IDLE_TIMEOUT, INDEX_REQUEST_MIN_INTERVAL,
-    INDEX_RESYNC_INTERVAL, MAX_CHUNK_BUSY_BACKOFF, MAX_MESSAGE_SIZE, MAX_REQUESTS_IN_FLIGHT,
-    MAX_SEND_QUEUE, MAX_UNSUPPORTED_TYPES, MIN_MESSAGE_SIZE, PRE_HELLO_LIMIT, PROOF_TIMEOUT,
-    REPLY_PAGE_TIMEOUT, SEND_POLL_INTERVAL, STATUS_CHUNKS_INTERVAL, STATUS_INTERVAL,
+    CHUNK_BUSY_BACKOFF, CLOCK_RULE_LIMIT_DAYS, CLOSE_FLUSH, DEFAULT_MESSAGE_SIZE,
+    DEFAULT_REQUESTS_IN_FLIGHT, HELLO_NONCE_LEN, HELLO_TIMEOUT, IDLE_TIMEOUT,
+    INDEX_REQUEST_MIN_INTERVAL, INDEX_RESYNC_INTERVAL, MAX_CHUNK_BUSY_BACKOFF, MAX_CLOCK_DAYS,
+    MAX_MESSAGE_SIZE, MAX_REQUESTS_IN_FLIGHT, MAX_SEND_QUEUE, MAX_UNSUPPORTED_TYPES,
+    MIN_MESSAGE_SIZE, PRE_HELLO_LIMIT, PROOF_TIMEOUT, REPLY_PAGE_TIMEOUT, SEND_POLL_INTERVAL,
+    STATUS_CHUNKS_INTERVAL, STATUS_INTERVAL,
 };
 use crate::messages::{
     ChunkReply, ChunkRequest, Close, CloseReason, DeviceProof, FolderProof, FolderStatus, Hello,
-    IndexRequest, Message, ProofResult, Status, Unsupported,
+    IndexRequest, Message, ProofResult, ReconcileReply, ReconcileRequest, Status, Unsupported,
 };
 use crate::parse::{close_without_detail, is_device_name, parse_records_page, Parse};
 use crate::proof::FolderCredential;
-use crate::record::{Arrival, Judgement, Record};
+use crate::record::Record;
 use crate::rules::{Cause, Outcome};
 
-#[cfg(doc)]
-use crate::exchange::Cursors;
-
-pub use index::{Due, MarkKind};
+pub use index::{FolderMemory, IndexServe, Judgement, NoteBudget, Page, ReconcileServe};
 
 /// The intervals and timeouts a connection keeps. They are the spec's
 /// constants ([`Timing::SPEC`]); the simulator may scale them, both sides
@@ -186,15 +193,23 @@ pub struct Config {
     /// Self-reported, at most 64 bytes, no control characters; sent in the
     /// first Status after the first folder opens.
     pub device_name: String,
+    /// This device's wall clock in whole days since the Unix epoch, 0 before
+    /// 1970 and at most `MAX_CLOCK_DAYS` (a later clock is sent as the
+    /// bound), for the clock rule (3.2). The protocol reads no clock: the
+    /// engine sets it from the runtime's wall clock.
+    pub clock_days: u32,
     /// The intervals and timeouts.
     pub timing: Timing,
 }
 
 impl Config {
     /// The defaults of major 1 for a device whose libp2p identity key is
-    /// `libp2p_identity`.
+    /// `libp2p_identity` and whose wall clock reads `clock_days` whole days
+    /// since the Unix epoch (0 before 1970). The clock is an argument, not a
+    /// default, so that an engine cannot forget it and refuse every peer
+    /// under the clock rule.
     #[must_use]
-    pub fn new(libp2p_identity: [u8; 32]) -> Self {
+    pub fn new(libp2p_identity: [u8; 32], clock_days: u32) -> Self {
         Self {
             suites: vec![Suite::ONE],
             compressions: vec![COMPRESSION_NONE.to_owned()],
@@ -206,6 +221,7 @@ impl Config {
             libp2p_identity,
             transport_identity: None,
             device_name: String::new(),
+            clock_days,
             timing: Timing::SPEC,
         }
     }
@@ -293,31 +309,6 @@ pub enum State {
     Closed,
 }
 
-/// One record of an `IndexRecords` page, past step 1, with how it came.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Received {
-    /// The record.
-    pub record: Record,
-    /// A push, or a reply with whether the writer is in the request's scope:
-    /// what [`crate::record::judge`] takes.
-    pub arrival: Arrival,
-}
-
-/// Which `IndexRecords` arrived.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Page {
-    /// An unsolicited page of newly accepted records.
-    Push,
-    /// A page of the reply to this side's request `request_id`; `last` when
-    /// `more` was false.
-    Reply {
-        /// The request it answers.
-        request_id: u32,
-        /// The reply's last page.
-        last: bool,
-    },
-}
-
 /// What happened, for the engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -342,43 +333,103 @@ pub enum Event {
         /// The folder.
         folder: FolderId,
     },
-    /// An `IndexRequest` of this side is due: send it with
-    /// [`Connection::send_request`], which builds it from the index's
-    /// cursors.
+    /// The next step of a round of this side's is due: call
+    /// [`Connection::send_request`] with the index's [`IndexView`].
     RequestDue {
         /// The folder.
         folder: FolderId,
-        /// What to ask for.
-        due: Due,
     },
-    /// A round of this side's range requests with the peer completed.
+    /// A round of this side's with the peer ended (4.5, "Rounds"; 4.7 item
+    /// 4): `caught_up` at `EQUAL` or after a quiet pass; `cursor`, the
+    /// peer's epoch and the local sequence through which this side now holds
+    /// what the peer held, for the index to persist, unless the round skipped
+    /// a record. A round not caught up owes another.
     RoundCompleted {
         /// The folder.
         folder: FolderId,
+        /// Whether the round ended caught up.
+        caught_up: bool,
+        /// `(epoch, cursor)` for the peer's state, or `None`.
+        cursor: Option<(u64, u64)>,
+    },
+    /// A counted push raised the peer's cursor (4.5, "Cursors"): persist it.
+    CursorAdvanced {
+        /// The folder.
+        folder: FolderId,
+        /// The peer's epoch.
+        epoch: u64,
+        /// The new cursor.
+        through: u64,
     },
     /// The peer's `IndexRequest` may be served now: page by page with
-    /// [`crate::exchange::Pager`] and [`crate::exchange::serve`], each page
-    /// through [`Connection::send_page`]. It comes when the request arrives,
-    /// or, for one that arrived within `INDEX_REQUEST_MIN_INTERVAL` of when
-    /// serving the previous one began, from the wake-up at the end of that
-    /// interval (delayed, never refused; the connection holds the request
-    /// meanwhile).
-    Serve {
+    /// [`crate::exchange::Pager`] through [`Connection::send_page`], or with
+    /// one reset page through [`Connection::send_reset`]. It comes when the
+    /// request arrives, or, for one that arrived within
+    /// `INDEX_REQUEST_MIN_INTERVAL` of when serving the previous one began,
+    /// from the wake-up at the end of that interval (delayed, never refused;
+    /// the connection holds the request meanwhile).
+    ServeIndex {
         /// The folder.
         folder: FolderId,
         /// The request.
-        request: ServeRequest,
+        request: IndexServe,
     },
-    /// Records arrived, each past step 1: the index judges them in order
-    /// ([`crate::record::judge`]), stopping at the first that closes, and the
-    /// engine hands the judgements to [`Connection::judged`].
+    /// The peer's `ReconcileRequest` may be served now (a root one paced as
+    /// an `IndexRequest`, any other at once): answer with
+    /// [`Connection::send_reconcile_reply`].
+    ServeReconcile {
+        /// The folder.
+        folder: FolderId,
+        /// The request.
+        request: ReconcileServe,
+    },
+    /// Records arrived, each past step 1: the index judges them in order,
+    /// stopping at the first that closes, and the engine hands the
+    /// judgements to [`Connection::judged`], for every such event.
     Records {
         /// The folder.
         folder: FolderId,
         /// The records.
-        records: Vec<Received>,
+        records: Vec<Record>,
         /// A push or which page of a reply.
         page: Page,
+    },
+    /// A `RECORDS` reply to this side's request ended: push, with `through`
+    /// 0, every record this side holds in the subtree at `prefix` that the
+    /// reply did not carry (`carried`), or every one when `carried` is `None`
+    /// (the reply carried more than `RECONCILE_LEAF_MAX`).
+    PushSubtree {
+        /// The folder.
+        folder: FolderId,
+        /// The subtree.
+        prefix: Prefix,
+        /// The record hashes the reply carried.
+        carried: Option<Vec<licketysync_keys::RecordHash>>,
+    },
+    /// The clock rule (3.2; TM-40): when the first folder opened, the two
+    /// Hellos' `clock_days` differed by more than `CLOCK_RULE_LIMIT`, and the
+    /// connection closes with `CLOCK_OUT_OF_RANGE` before anything of the
+    /// folder crossed. The clock-rule issue for the folder names the peer's
+    /// proven device ID and both readings.
+    ClockOutOfRange {
+        /// The folder that opened.
+        folder: FolderId,
+        /// The peer's proven device ID.
+        peer: DeviceId,
+        /// This side's `clock_days`.
+        ours: u32,
+        /// The peer's `clock_days`.
+        theirs: u32,
+    },
+    /// The connection ended with no folder opened, by a Close either way or
+    /// by the transport dropping ([`Connection::disconnected`]), and the two
+    /// Hellos' `clock_days` differed by more than `CLOCK_RULE_LIMIT`: only
+    /// counted, in a log line, never an issue (3.2; TM-40).
+    StrangerClockOutOfRange {
+        /// This side's `clock_days`.
+        ours: u32,
+        /// The peer's `clock_days`.
+        theirs: u32,
     },
     /// An empty push arrived: the peer dropped pushes for the folder, and
     /// this side owes itself a round.
@@ -492,11 +543,18 @@ pub enum SendError {
     /// A folder it names is not open on this connection (a Status before any
     /// folder opened included).
     FolderNotOpen,
-    /// A message a peer would refuse: a field of the wrong size, cursors out
-    /// of order or without their digest, a push with `request_id` or `more`
-    /// set or without records, a reply page with `more` and no records, more
-    /// Status entries than a Status holds.
+    /// A message a peer would refuse: a field of the wrong size, a push with
+    /// `request_id`, `more` or `reset` set or without records, a reply page
+    /// with `more` and no records or of the wrong kind for its request, a
+    /// reconcile reply that breaks a rule of 4.5, an epoch of 0, a `through`
+    /// above `MAX_LOCAL_SEQ` (a store whose numbers are out of range never
+    /// makes this side send what every peer refuses),
+    /// more Status entries than a Status holds.
     Malformed,
+    /// A reset that says a new epoch was drawn, when one was drawn for a
+    /// peer's request on this connection already (at most once per
+    /// connection, [`crate::connection::IndexServe::redraw_allowed`]).
+    RedrawSpent,
     /// The frame would exceed the peer's `max_message_size`.
     TooLarge,
     /// The send queue has no room for this frame of `len` bytes now: keep it
@@ -506,7 +564,7 @@ pub enum SendError {
         /// The frame's length on the wire.
         len: usize,
     },
-    /// No `IndexRequest` is due for the folder.
+    /// No request of this side's is due for the folder.
     NotDue,
     /// A reply page for no request of the peer's that may be served now.
     UnknownRequest,
@@ -543,8 +601,9 @@ impl fmt::Display for SendError {
             Self::Closed => "the connection is closed",
             Self::FolderNotOpen => "the folder is not open on this connection",
             Self::Malformed => "a peer would refuse this message",
+            Self::RedrawSpent => "a new epoch was drawn on this connection already",
             Self::TooLarge => "the frame exceeds the peer's limit",
-            Self::NotDue => "no index request is due",
+            Self::NotDue => "no request is due",
             Self::UnknownRequest => "no such request may be served",
             Self::PageTooLong => "the page holds more than the page limit",
             Self::InFlightFull => "the peer's chunk-request limit is reached",
@@ -653,9 +712,13 @@ pub struct Connection {
     proofs_sent: usize,
     accepted: usize,
     opened_any: bool,
+    /// The clock rule closed the connection when the first folder opened.
+    clock_refused: bool,
     /// Non-critical types answered with Unsupported: a 4 KiB bitset.
     unsupported: Box<[u64; MAX_UNSUPPORTED_TYPES / 64]>,
     // Index exchange, connection-wide.
+    /// The verifications for notes this connection may still spend.
+    notes: index::NoteBudget,
     next_request_id: u32,
     ours_by_id: BTreeMap<u32, FolderId>,
     theirs_by_id: BTreeMap<u32, FolderId>,
@@ -726,6 +789,7 @@ impl Connection {
             max_requests_in_flight: config.max_requests_in_flight,
             nonce: nonce.to_vec(),
             libp2p_identity: config.libp2p_identity.to_vec(),
+            clock_days: config.clock_days.min(MAX_CLOCK_DAYS),
         };
         let hello_frame = Message::Hello(Box::new(hello.clone()))
             .to_frame()
@@ -755,7 +819,9 @@ impl Connection {
             proofs_sent: 0,
             accepted: 0,
             opened_any: false,
+            clock_refused: false,
             unsupported: Box::new([0; MAX_UNSUPPORTED_TYPES / 64]),
+            notes: index::NoteBudget::new(),
             next_request_id: 0,
             ours_by_id: BTreeMap::new(),
             theirs_by_id: BTreeMap::new(),
@@ -1039,6 +1105,16 @@ impl Connection {
                     self.on_chunk_reply(m, out);
                 }
             }
+            MessageType::ReconcileRequest => {
+                if let Some(m) = self.parsed::<ReconcileRequest>(body, out) {
+                    self.on_reconcile_request(&m, out);
+                }
+            }
+            MessageType::ReconcileReply => {
+                if let Some(m) = self.parsed::<ReconcileReply>(body, out) {
+                    self.on_reconcile_reply(&m, out);
+                }
+            }
             MessageType::Status => {
                 if let Some(m) = self.parsed::<Status>(body, out) {
                     self.on_status(m, out);
@@ -1121,44 +1197,6 @@ impl Connection {
         if let Some(cause) = timeout {
             self.fail(cause, out);
         }
-    }
-
-    /// The index judged the records of one [`Event::Records`] page of
-    /// `folder`, in order: for each, the writer's device ID and what
-    /// [`crate::record::judge`] returned, up to and including the first
-    /// error, after which the engine stores nothing more of the page. A gap on
-    /// a push marks the writer for a listed request (4.5); a push that brought
-    /// at least one record to store restarts `REPLY_PAGE_TIMEOUT` (a reply's
-    /// pages restarted it as they arrived); and a cause whose outcome is a
-    /// close (a forged record, a sender violation) closes the connection.
-    pub fn judged(
-        &mut self,
-        tick: Tick,
-        folder: FolderId,
-        page: Page,
-        results: &[(DeviceId, Result<Judgement, Cause>)],
-    ) -> Output {
-        let mut out = Output::default();
-        self.observe(tick, &mut out);
-        let mut stored = false;
-        for (writer, result) in results {
-            if self.state == State::Closed {
-                break;
-            }
-            match result {
-                Ok(Judgement::PushGap) => {
-                    self.mark_writer(folder, *writer, MarkKind::Gap, &mut out);
-                }
-                Ok(judgement) => stored |= judgement.stores(),
-                Err(cause) if cause.closes() => self.fail(*cause, &mut out),
-                Err(_) => {}
-            }
-        }
-        if stored && page == Page::Push && self.state == State::Established {
-            self.last_progress = self.now;
-        }
-        self.finish(&mut out);
-        out
     }
 
     /// Closes the connection from this side with `reason` (usually
@@ -1268,10 +1306,30 @@ impl Connection {
         self.close_with(close_reason(cause), Some(cause), out);
     }
 
+    /// The clock readings of the two Hellos when they differ by more than
+    /// `CLOCK_RULE_LIMIT` (3.2): this side's and the peer's.
+    pub(super) fn clocks_out_of_range(&self) -> Option<(u32, u32)> {
+        let ours = self.hello.clock_days;
+        let theirs = self.peer.as_ref()?.hello.clock_days;
+        (ours.abs_diff(theirs) > CLOCK_RULE_LIMIT_DAYS).then_some((ours, theirs))
+    }
+
+    /// A connection that ends with no folder opened and clocks out of range
+    /// is only counted (3.2).
+    fn count_stranger_clock(&self, out: &mut Output) {
+        if !self.opened_any && !self.clock_refused {
+            if let Some((ours, theirs)) = self.clocks_out_of_range() {
+                out.events
+                    .push(Event::StrangerClockOutOfRange { ours, theirs });
+            }
+        }
+    }
+
     fn close_with(&mut self, reason: CloseReason, cause: Option<Cause>, out: &mut Output) {
         if self.state == State::Closed {
             return;
         }
+        self.count_stranger_clock(out);
         let close = Message::Close(Close {
             reason: reason.as_u32(),
             detail: String::new(),
@@ -1290,7 +1348,22 @@ impl Connection {
         });
     }
 
+    /// The transport dropped without a Close (the runtime's
+    /// `on_disconnected`): a stranger out of clock range is counted, as when
+    /// a Close ends the connection, and every table is freed. Nothing is
+    /// sent; the engine then drops the connection.
+    pub fn disconnected(&mut self, tick: Tick) -> Output {
+        let mut out = Output::default();
+        self.now = self.now.max(tick.now);
+        if self.state != State::Closed {
+            self.count_stranger_clock(&mut out);
+            self.finish_tables();
+        }
+        out
+    }
+
     fn on_close(&mut self, close: Close, out: &mut Output) {
+        self.count_stranger_clock(out);
         self.finish_tables();
         out.close = true;
         out.events.push(Event::Closed {

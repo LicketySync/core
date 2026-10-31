@@ -188,6 +188,8 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
+        #![proptest_config(crate::proptest_config(256))]
+
         /// Any link code reads back to the same device ID and secret, in
         /// either case.
         #[test]

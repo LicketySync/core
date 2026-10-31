@@ -57,6 +57,12 @@ pub struct Hello {
     /// 32 bytes: the Ed25519 public key of the libp2p identity (`keys.md` 8.1).
     #[prost(bytes = "vec", tag = "10")]
     pub libp2p_identity: Vec<u8>,
+    /// The sender's wall clock in whole days since the Unix epoch, 0 to
+    /// `MAX_CLOCK_DAYS` (0 for a clock before 1970); for the clock rule (3.2,
+    /// 4.4). Whole days, so that the Hello gives no finer clock reading to
+    /// anyone who connects.
+    #[prost(uint32, tag = "11")]
+    pub clock_days: u32,
 }
 
 /// Why a side is closing; the last frame (4.2).
@@ -74,6 +80,7 @@ pub struct Close {
 /// The `CloseReason` enum of 4.2. Numbers this release does not define are
 /// kept as [`CloseReason::Other`] so that a newer peer's reason is reported,
 /// not refused; 12 was the drafts' `FEATURE_REQUIRED` and reads as `Other(12)`.
+/// [`CloseReason::ALL`] lists every defined reason in wire order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CloseReason {
     /// 0: no reason given.
@@ -102,13 +109,17 @@ pub enum CloseReason {
     /// 11: `HELLO_TIMEOUT`, `IDLE_TIMEOUT` or `REPLY_PAGE_TIMEOUT` elapsed, or
     /// no unsent byte was delivered for `IDLE_TIMEOUT`.
     Timeout,
+    /// 13: the clock rule (3.2, 4.4): the two Hellos' `clock_days` differ by
+    /// more than `CLOCK_RULE_LIMIT`; sent only when the first folder opens on
+    /// the connection.
+    ClockOutOfRange,
     /// A number this release does not define.
     Other(u32),
 }
 
 impl CloseReason {
     /// Every reason this release defines, in wire order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Unspecified,
         Self::Shutdown,
         Self::ProtocolError,
@@ -121,6 +132,7 @@ impl CloseReason {
         Self::VerificationFailed,
         Self::TooManyConnections,
         Self::Timeout,
+        Self::ClockOutOfRange,
     ];
 
     /// The reason for a wire number.
@@ -139,6 +151,7 @@ impl CloseReason {
             9 => Self::VerificationFailed,
             10 => Self::TooManyConnections,
             11 => Self::Timeout,
+            13 => Self::ClockOutOfRange,
             other => Self::Other(other),
         }
     }
@@ -159,6 +172,7 @@ impl CloseReason {
             Self::VerificationFailed => 9,
             Self::TooManyConnections => 10,
             Self::Timeout => 11,
+            Self::ClockOutOfRange => 13,
             Self::Other(n) => n,
         }
     }
@@ -179,6 +193,7 @@ impl CloseReason {
             Self::VerificationFailed => "VERIFICATION_FAILED",
             Self::TooManyConnections => "TOO_MANY_CONNECTIONS",
             Self::Timeout => "TIMEOUT",
+            Self::ClockOutOfRange => "CLOCK_OUT_OF_RANGE",
             Self::Other(_) => "UNKNOWN",
         }
     }
@@ -266,9 +281,12 @@ impl ProofStatus {
     }
 }
 
-/// The index record on the wire (4.4): the body of a `SignedRecord`. Fields
-/// 4, 7, 9, 10 and 14 are reserved (`writer_key_id`, `previous`, the version
-/// vector, `epoch`, `resumes`).
+/// The index record on the wire (4.4): the body of a `SignedRecord` of record
+/// type 16 (a cleanup, type 17, is [`CleanupRecord`]). Fields 4, 7, 8, 10 and
+/// 14 are reserved (`writer_key_id`, `previous`, `supersedes`, `epoch`,
+/// `resumes`), and so are 5, 6, 9, 11 and 16 (`device_id`, `counter`,
+/// `vector`, `deleted` and `tree` in the clear, inside the seal since
+/// 2026-10-25).
 #[derive(Clone, PartialEq, Eq, ::prost::Message)]
 pub struct IndexRecord {
     /// The folder's suite.
@@ -280,29 +298,21 @@ pub struct IndexRecord {
     /// 32 bytes.
     #[prost(bytes = "vec", tag = "3")]
     pub folder_id: Vec<u8>,
-    /// 32 bytes: the writer's device ID, as the signer claims it; a sync key
-    /// only, never shown as an author.
-    #[prost(bytes = "vec", tag = "5")]
-    pub device_id: Vec<u8>,
-    /// Per `device_id`: 1, 2, 3 … up to `MAX_SEQ`; one device may have several
-    /// records at one `seq` (concurrent versions).
-    #[prost(uint64, tag = "6")]
-    pub seq: u64,
-    /// A set: the record hash of each version this record replaces; each 32
-    /// bytes; at most 16; written sorted ascending without repeats.
-    #[prost(bytes = "vec", repeated, tag = "8")]
-    pub supersedes: Vec<Vec<u8>>,
-    /// Tombstone: `chunks` is empty.
-    #[prost(bool, tag = "11")]
-    pub deleted: bool,
-    /// In file order; at most 32 768; empty for directories, tombstones and
-    /// empty files.
+    /// In file order; at most 32 768; empty for directories, tombstones, tree
+    /// deletes and empty files.
     #[prost(message, repeated, tag = "12")]
     pub chunks: Vec<ChunkRef>,
-    /// `nonce (24) || XChaCha(rk, nonce, aad, padded SealedMeta)`; 40 to
-    /// 1 572 864 bytes.
+    /// `nonce (24) || XChaCha(rk, nonce, aad, padded SealedMeta)` under `aad =
+    /// folder_id || path_tag`; 40 bytes plus a power of two from 256 to 2^21.
     #[prost(bytes = "vec", tag = "13")]
     pub sealed: Vec<u8>,
+    /// 32 bytes: the file ID, `BLAKE3_keyed(tk, path)` (`keys.md` 3.5).
+    #[prost(bytes = "vec", tag = "15")]
+    pub path_tag: Vec<u8>,
+    /// 32 bytes each: the record hashes of the versions this record replaces;
+    /// at most `MAX_REPLACES` (64), ascending, no repeats.
+    #[prost(bytes = "vec", repeated, tag = "17")]
+    pub replaces: Vec<Vec<u8>>,
 }
 
 /// One chunk of a file (4.4). Field 3 is reserved (it was `epoch`).
@@ -319,14 +329,15 @@ pub struct ChunkRef {
 /// Inside `IndexRecord.sealed`, visible to write and read holders only (4.4).
 #[derive(Clone, PartialEq, Eq, ::prost::Message)]
 pub struct SealedMeta {
-    /// UTF-8, NFC, `/` separated, relative, no empty, `.` or `..` component, no
-    /// NUL, no backslash; at most 4 096 bytes.
+    /// UTF-8, `/` separated, relative, no empty, `.` or `..` component, no
+    /// NUL, no backslash; at most 4 096 bytes; NFC by the writer's duty; for a
+    /// tree delete, the deleted directory.
     #[prost(string, tag = "1")]
     pub path: String,
     /// 1 file, 2 directory; others reserved.
     #[prost(uint32, tag = "2")]
     pub kind: u32,
-    /// Bytes of plaintext content; 0 for an empty file.
+    /// Bytes of plaintext content; 0 for an empty file, which has no chunks.
     #[prost(uint64, tag = "3")]
     pub size: u64,
     /// Modification time, nanoseconds since the Unix epoch.
@@ -338,55 +349,110 @@ pub struct SealedMeta {
     /// Keyed BLAKE3 per chunk, same order and count as `chunks`.
     #[prost(bytes = "vec", repeated, tag = "6")]
     pub plain_hashes: Vec<Vec<u8>>,
-    /// The writer's wall clock; informational only, never used for ordering.
+    /// The writer's wall clock in microseconds since the Unix epoch, the unit
+    /// of `clock_us` (0 for a clock before 1970); informational only, never
+    /// used for ordering.
     #[prost(uint64, tag = "7")]
     pub written_at: u64,
-}
-
-/// "I hold this writer's records through `seq`, and their digest there is
-/// `digest`" (4.5). `seq = 0` with `digest` empty means "I hold none". Fields
-/// 1, 4 and 5 are reserved (`key_id`, `fork`, `head_hash`).
-#[derive(Clone, PartialEq, Eq, ::prost::Message)]
-pub struct Cursor {
-    /// 32 bytes: the writer.
-    #[prost(bytes = "vec", tag = "2")]
+    /// 32 bytes: the writer's device ID, as the signer claims it; with
+    /// `counter`, the record's dot; never shown as an author.
+    #[prost(bytes = "vec", tag = "8")]
     pub device_id: Vec<u8>,
-    /// The requester's cursor for the writer; at most `MAX_SEQ`.
-    #[prost(uint64, tag = "3")]
-    pub seq: u64,
-    /// The requester's digest at `seq`: empty iff `seq = 0`, else 32 bytes.
-    #[prost(bytes = "vec", tag = "6")]
-    pub digest: Vec<u8>,
+    /// The writer's counter: 1 to `MAX_COUNTER`.
+    #[prost(uint64, tag = "9")]
+    pub counter: u64,
+    /// The version vector: at most `MAX_VECTOR_ENTRIES` entries, ascending by
+    /// `device_id`, no device twice, every counter below `counter`.
+    #[prost(message, repeated, tag = "10")]
+    pub vector: Vec<VectorEntry>,
+    /// A tombstone, or with `tree` a tree delete; the record then has no chunks.
+    #[prost(bool, tag = "11")]
+    pub deleted: bool,
+    /// A tree delete of the path and of everything beneath it; requires
+    /// `deleted`, `kind` 2 and `size` 0.
+    #[prost(bool, tag = "12")]
+    pub tree: bool,
 }
 
-/// "Send what I lack", by range or list and cursor (4.5).
+/// One entry of a version vector (4.4).
+#[derive(Clone, PartialEq, Eq, ::prost::Message)]
+pub struct VectorEntry {
+    /// 32 bytes.
+    #[prost(bytes = "vec", tag = "1")]
+    pub device_id: Vec<u8>,
+    /// 1 to `MAX_COUNTER`.
+    #[prost(uint64, tag = "2")]
+    pub counter: u64,
+}
+
+/// A cleanup (4.4, "Cleanup"): the body of a `SignedRecord`, record type 17,
+/// by which a write holder tells every peer to forget exact fingerprints.
+#[derive(Clone, PartialEq, Eq, ::prost::Message)]
+pub struct CleanupRecord {
+    /// The folder's suite.
+    #[prost(uint32, tag = "1")]
+    pub suite: u32,
+    /// 17.
+    #[prost(uint32, tag = "2")]
+    pub record_type: u32,
+    /// 32 bytes.
+    #[prost(bytes = "vec", tag = "3")]
+    pub folder_id: Vec<u8>,
+    /// 1 to `MAX_CLEANUP_GROUPS` (1 024).
+    #[prost(message, repeated, tag = "4")]
+    pub groups: Vec<CleanupGroup>,
+    /// `nonce (24) || XChaCha(rk, nonce, aad = folder_id, padded CleanupMeta)`;
+    /// 40 bytes plus 256, 512 or 1 024.
+    #[prost(bytes = "vec", tag = "5")]
+    pub sealed: Vec<u8>,
+}
+
+/// One group of a cleanup (4.4).
+#[derive(Clone, PartialEq, Eq, ::prost::Message)]
+pub struct CleanupGroup {
+    /// Empty, or 32: the fingerprint of the record that replaces those named.
+    #[prost(bytes = "vec", tag = "1")]
+    pub because: Vec<u8>,
+    /// 32 each: the fingerprints of the records to forget; 1 to
+    /// `MAX_CLEANUP_ENTRIES` across the record's groups; ascending within a
+    /// group, no repeats.
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub forget: Vec<Vec<u8>>,
+}
+
+/// Inside a cleanup's `sealed`, visible to write and read holders only (4.4).
+#[derive(Clone, PartialEq, Eq, ::prost::Message)]
+pub struct CleanupMeta {
+    /// 32: the issuer's device ID, as the signer claims it.
+    #[prost(bytes = "vec", tag = "1")]
+    pub device_id: Vec<u8>,
+    /// The issuer's counter, by the writer's rule.
+    #[prost(uint64, tag = "2")]
+    pub counter: u64,
+}
+
+/// "Send what you came to hold since" (4.5). Fields 2, 5, 6 and 7 are reserved
+/// (the drafts' cursors and ranges).
 #[derive(Clone, PartialEq, Eq, ::prost::Message)]
 pub struct IndexRequest {
     /// 32 bytes.
     #[prost(bytes = "vec", tag = "1")]
     pub folder_id: Vec<u8>,
-    /// Ascending by `device_id`, each writer at most once, every entry inside
-    /// the request's range; at most 16 384.
-    #[prost(message, repeated, tag = "2")]
-    pub have: Vec<Cursor>,
     /// Per reply page: 0, or above 4 096, means 4 096; below 64 means 64.
     #[prost(uint32, tag = "3")]
     pub max_records: u32,
     /// At least 1, chosen by the requester, unique among its requests
-    /// outstanding on the connection; every page of the reply echoes it.
+    /// outstanding on the connection (`IndexRequest` and `ReconcileRequest`
+    /// alike); every page of the reply echoes it.
     #[prost(uint32, tag = "4")]
     pub request_id: u32,
-    /// Empty, or 32: the range holds the device IDs strictly above this one.
-    #[prost(bytes = "vec", tag = "5")]
-    pub after: Vec<u8>,
-    /// Empty, or 32: the range holds the device IDs up to and including this
-    /// one; `after < through` when both are set.
-    #[prost(bytes = "vec", tag = "6")]
-    pub through: Vec<u8>,
-    /// The request is for exactly the writers in `have`, which is then
-    /// non-empty, with `after` and `through` empty.
-    #[prost(bool, tag = "7")]
-    pub listed: bool,
+    /// The responder's index epoch the requester's cursor belongs to; never 0.
+    #[prost(fixed64, tag = "8")]
+    pub epoch: u64,
+    /// The requester's cursor: the responder's local sequence through which it
+    /// holds what the responder held; at most `MAX_LOCAL_SEQ`.
+    #[prost(uint64, tag = "9")]
+    pub since: u64,
 }
 
 /// Signed index records, paged or pushed (4.5).
@@ -395,18 +461,109 @@ pub struct IndexRecords {
     /// 32 bytes.
     #[prost(bytes = "vec", tag = "1")]
     pub folder_id: Vec<u8>,
-    /// At most 4 096 encoded `SignedRecord`s (`keys.md` 5.1), per writer in
-    /// canonical order. Each is carried as raw bytes and read only through
-    /// the keys crate's `SignedRecord::from_bytes`, so that its envelope
-    /// checks always run; the wire form is that of an embedded message.
+    /// At most 4 096 encoded `SignedRecord`s (`keys.md` 5.1). Each is carried
+    /// as raw bytes and read only through the keys crate's
+    /// `SignedRecord::from_bytes`, so that its envelope checks always run; the
+    /// wire form is that of an embedded message.
     #[prost(bytes = "vec", repeated, tag = "2")]
     pub records: Vec<Vec<u8>>,
-    /// Another page follows for the same request; never with `request_id = 0`.
+    /// Another page of the same reply follows; never on a push, nor on a page
+    /// without records.
     #[prost(bool, tag = "3")]
     pub more: bool,
     /// The request this page answers; 0 marks a push.
     #[prost(uint32, tag = "4")]
     pub request_id: u32,
+    /// The sender's index epoch; never 0.
+    #[prost(fixed64, tag = "5")]
+    pub epoch: u64,
+    /// A local sequence of the sender's that the receiver may count through,
+    /// or 0; at most `MAX_LOCAL_SEQ`.
+    #[prost(uint64, tag = "6")]
+    pub through: u64,
+    /// A reply to an `IndexRequest` whose epoch is not the sender's, or whose
+    /// `since` is above the sender's local sequence: one page with no records,
+    /// `more` and `through` not set.
+    #[prost(bool, tag = "7")]
+    pub reset: bool,
+}
+
+/// "Here is my digest of this subtree" (4.5).
+#[derive(Clone, PartialEq, Eq, ::prost::Message)]
+pub struct ReconcileRequest {
+    /// 32 bytes.
+    #[prost(bytes = "vec", tag = "1")]
+    pub folder_id: Vec<u8>,
+    /// As in `IndexRequest`.
+    #[prost(uint32, tag = "2")]
+    pub request_id: u32,
+    /// 0 to 128 bytes, each 0 to 15: the leading nibbles of a record's key
+    /// (4.5, "Set digests"), high nibble first, naming a subtree; empty: the
+    /// root.
+    #[prost(bytes = "vec", tag = "3")]
+    pub prefix: Vec<u8>,
+    /// 32: the requester's digest of that subtree.
+    #[prost(bytes = "vec", tag = "4")]
+    pub digest: Vec<u8>,
+}
+
+/// Equal, the subtree's 16 child digests, or its records (4.5).
+#[derive(Clone, PartialEq, Eq, ::prost::Message)]
+pub struct ReconcileReply {
+    /// 32 bytes.
+    #[prost(bytes = "vec", tag = "1")]
+    pub folder_id: Vec<u8>,
+    /// The request answered.
+    #[prost(uint32, tag = "2")]
+    pub request_id: u32,
+    /// A [`ReconcileOutcome`] number.
+    #[prost(uint32, tag = "3")]
+    pub outcome: u32,
+    /// `CHILDREN` only, and then exactly 16 digests of 32 bytes: the subtrees
+    /// at the prefix followed by 0, 1 … 15.
+    #[prost(bytes = "vec", repeated, tag = "4")]
+    pub children: Vec<Vec<u8>>,
+    /// The responder's index epoch; never 0.
+    #[prost(fixed64, tag = "5")]
+    pub epoch: u64,
+    /// For the root: the responder's local sequence when it answered; for any
+    /// other prefix, not set.
+    #[prost(uint64, tag = "6")]
+    pub through: u64,
+}
+
+/// The `ReconcileOutcome` enum of 4.5. Any other number is malformed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReconcileOutcome {
+    /// 1: the digests are equal.
+    Equal,
+    /// 2: the 16 child digests follow.
+    Children,
+    /// 3: the subtree's records follow, as `IndexRecords` pages.
+    Records,
+}
+
+impl ReconcileOutcome {
+    /// The outcome for a wire number, or `None` for any other.
+    #[must_use]
+    pub const fn from_u32(n: u32) -> Option<Self> {
+        match n {
+            1 => Some(Self::Equal),
+            2 => Some(Self::Children),
+            3 => Some(Self::Records),
+            _ => None,
+        }
+    }
+
+    /// The wire number.
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        match self {
+            Self::Equal => 1,
+            Self::Children => 2,
+            Self::Records => 3,
+        }
+    }
 }
 
 /// Progress per open folder; periodic, non-critical (4.5).
@@ -428,7 +585,8 @@ pub struct FolderStatus {
     /// 32 bytes.
     #[prost(bytes = "vec", tag = "1")]
     pub folder_id: Vec<u8>,
-    /// Index records held for the folder (the "index version").
+    /// Index records held for the folder (the "index version"): live records,
+    /// tree deletes and cleanups.
     #[prost(uint64, tag = "2")]
     pub index_records: u64,
     /// Ciphertext bytes still to fetch.
@@ -445,6 +603,11 @@ pub struct FolderStatus {
     /// chunk stored, never falling.
     #[prost(uint64, tag = "6")]
     pub chunks_stored: u64,
+    /// Records held beyond one per file ID: at a sealed peer its stale copies
+    /// and the folder's real conflicts together, which it cannot tell apart;
+    /// at a read or write holder the extra heads of its conflicts.
+    #[prost(uint64, tag = "7")]
+    pub extra_versions: u64,
 }
 
 /// One chunk by ciphertext hash (4.6).
@@ -531,6 +694,10 @@ pub enum Message {
     ChunkRequest(ChunkRequest),
     /// 0x800A.
     ChunkReply(ChunkReply),
+    /// 0x800B.
+    ReconcileRequest(ReconcileRequest),
+    /// 0x800C.
+    ReconcileReply(ReconcileReply),
     /// 0x0001.
     Status(Status),
     /// 0x0002.
@@ -551,6 +718,8 @@ impl Message {
             Self::IndexRecords(_) => MessageType::IndexRecords,
             Self::ChunkRequest(_) => MessageType::ChunkRequest,
             Self::ChunkReply(_) => MessageType::ChunkReply,
+            Self::ReconcileRequest(_) => MessageType::ReconcileRequest,
+            Self::ReconcileReply(_) => MessageType::ReconcileReply,
             Self::Status(_) => MessageType::Status,
             Self::Unsupported(_) => MessageType::Unsupported,
         }
@@ -570,6 +739,8 @@ impl Message {
             Self::IndexRecords(m) => m.encode_to_vec(),
             Self::ChunkRequest(m) => m.encode_to_vec(),
             Self::ChunkReply(m) => m.encode_to_vec(),
+            Self::ReconcileRequest(m) => m.encode_to_vec(),
+            Self::ReconcileReply(m) => m.encode_to_vec(),
             Self::Status(m) => m.encode_to_vec(),
             Self::Unsupported(m) => m.encode_to_vec(),
         }
@@ -598,6 +769,8 @@ impl Message {
             MessageType::IndexRecords => Self::IndexRecords(IndexRecords::parse(body)?),
             MessageType::ChunkRequest => Self::ChunkRequest(ChunkRequest::parse(body)?),
             MessageType::ChunkReply => Self::ChunkReply(ChunkReply::parse(body)?),
+            MessageType::ReconcileRequest => Self::ReconcileRequest(ReconcileRequest::parse(body)?),
+            MessageType::ReconcileReply => Self::ReconcileReply(ReconcileReply::parse(body)?),
             MessageType::Status => Self::Status(Status::parse(body)?),
             MessageType::Unsupported => Self::Unsupported(Unsupported::parse(body)?),
         })
@@ -614,12 +787,17 @@ mod tests {
     #[test]
     fn close_reasons_round_trip_their_numbers() {
         for (i, r) in CloseReason::ALL.iter().enumerate() {
-            assert_eq!(r.as_u32(), u32::try_from(i).unwrap());
+            // 12 is reserved, so the defined reasons skip it.
+            let n = u32::try_from(i).unwrap();
+            assert_eq!(r.as_u32(), if n >= 12 { n + 1 } else { n });
             assert_eq!(CloseReason::from_u32(r.as_u32()), *r);
             assert_ne!(r.name(), "UNKNOWN");
         }
         // 12 was FEATURE_REQUIRED in the drafts: reserved, reported as other.
         assert_eq!(CloseReason::from_u32(12), CloseReason::Other(12));
+        assert_eq!(CloseReason::ClockOutOfRange.as_u32(), 13);
+        assert_eq!(CloseReason::from_u32(13), CloseReason::ClockOutOfRange);
+        assert_eq!(CloseReason::ClockOutOfRange.name(), "CLOCK_OUT_OF_RANGE");
         assert_eq!(CloseReason::Other(99).as_u32(), 99);
         assert_eq!(CloseReason::Other(99).name(), "UNKNOWN");
         assert_eq!(CloseReason::ProtocolError.name(), "PROTOCOL_ERROR");
@@ -638,6 +816,16 @@ mod tests {
         for s in [ChunkStatus::Ok, ChunkStatus::NotFound, ChunkStatus::Busy] {
             assert_eq!(ChunkStatus::from_u32(s.as_u32()), Some(s));
         }
+        for n in [0, 4] {
+            assert_eq!(ReconcileOutcome::from_u32(n), None);
+        }
+        for o in [
+            ReconcileOutcome::Equal,
+            ReconcileOutcome::Children,
+            ReconcileOutcome::Records,
+        ] {
+            assert_eq!(ReconcileOutcome::from_u32(o.as_u32()), Some(o));
+        }
     }
 
     #[test]
@@ -652,9 +840,16 @@ mod tests {
             ..IndexRequest::default()
         };
         let bytes = m.encode_to_vec();
-        // field 1 bytes(32) then field 4 varint 7: ascending, nothing for 2 and 3.
+        // field 1 bytes(32) then field 4 varint 7: ascending, nothing for 3.
         assert_eq!(bytes.first(), Some(&0x0a));
         assert_eq!(&bytes[bytes.len() - 2..], &[0x20, 7]);
+        // The epoch is a fixed64: tag 0x41, then eight little-endian bytes.
+        let with_epoch = IndexRequest {
+            epoch: 0x0102_0304_0506_0708,
+            ..IndexRequest::default()
+        }
+        .encode_to_vec();
+        assert_eq!(with_epoch, vec![0x41, 8, 7, 6, 5, 4, 3, 2, 1]);
         let packed = Hello {
             suites: vec![1, 2],
             ..Hello::default()
@@ -677,6 +872,8 @@ mod tests {
             Message::IndexRecords(IndexRecords::default()),
             Message::ChunkRequest(ChunkRequest::default()),
             Message::ChunkReply(ChunkReply::default()),
+            Message::ReconcileRequest(ReconcileRequest::default()),
+            Message::ReconcileReply(ReconcileReply::default()),
             Message::Status(Status::default()),
             Message::Unsupported(Unsupported::default()),
         ];

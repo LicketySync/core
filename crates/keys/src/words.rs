@@ -327,6 +327,8 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::proptest_config(256))]
+
         /// Any write secret's words read back to it, typed in any case, cut to
         /// any unique prefix of four letters or more, and separated by any
         /// runs of whitespace.

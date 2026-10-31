@@ -1,0 +1,152 @@
+{
+  "cleanup_horizon_days": 30,
+  "description": "protocol.md 8 item 12, the index's part: the sealed-peer rule and every cleanup outcome, on a sealed holder unless named; records of the keys crate's fixed folder written at T0 or forged with fixed nonces. The 100 000-record tree delete is scaled to 100 records at 16 names a cleanup record, which pages into seven records as 100 000 do at 16 384.",
+  "file_ids": [
+    {
+      "path": "docs",
+      "path_tag": "e6d6d06c9d2ea23435126ee0a5883bf23e99f775a89190759dc9adab40840489"
+    },
+    {
+      "path": "docs/notes",
+      "path_tag": "c90e0131f147b093fc34ec2be16bef225cc4b4aa181c60c6e79fa97b7dc99156"
+    },
+    {
+      "path": "docs/notes/a.txt",
+      "path_tag": "78b6a0ca5dc567143b02724a5929991388b4195f2341bd6ece76f30d5e2a8ef4"
+    },
+    {
+      "path": "Docs",
+      "path_tag": "2aa9cc6a3786753b72aae148a8bf5747fccec49f43327961f301840c24a06a1e"
+    },
+    {
+      "path": "docs/notés",
+      "path_tag": "4626c524b58f820684f3e6d5682db24d1e460497d328755828beeff35447d68a"
+    },
+    {
+      "path": "docs/notés",
+      "path_tag": "58f9e526487dffa4eb87d28313aec051e51d14b18a6858722760741a8e317b04"
+    }
+  ],
+  "groups": [
+    {
+      "applied_on_arrival": true,
+      "name": "a-waiting-group",
+      "rows": [
+        "Cleanup group waiting"
+      ]
+    },
+    {
+      "dropped": [
+        "6a1acee9b2bc5bc61485f7353931469419e3c254db86525bdf6d1cb17100c248"
+      ],
+      "name": "an-empty-because"
+    },
+    {
+      "later": "obsolete",
+      "name": "a-name-of-a-record-not-held"
+    },
+    {
+      "kept": "359109cf4e2f6c23460815a45723e54c5f3baa4b7ff0195d51165a3d7d13a8da",
+      "name": "a-replay-after-a-later-version"
+    },
+    {
+      "dropped": [
+        "381c9768f8683b6662c12a5c3e028caea579f3ce9cdf803bb73dd3f6f17e2abc"
+      ],
+      "name": "a-cleanup-naming-a-cleanup"
+    }
+  ],
+  "large_tree_delete": {
+    "cleanup_entries": 16,
+    "cleanup_records": 7,
+    "records": 100,
+    "scaled_from": 100000
+  },
+  "names": [
+    {
+      "dropped": [
+        "52573cecece9374b9b83adfb9b4edf0835f2a97181e5b35247f84d3976997735"
+      ],
+      "name": "names-the-one-version-held"
+    },
+    {
+      "kept": 2,
+      "name": "names-nothing-held"
+    },
+    {
+      "name": "stale-replays",
+      "named_one": "obsolete",
+      "unnamed_one": "held"
+    }
+  ],
+  "nas": [
+    {
+      "because": "49a62cfe2dc3546370f38b5754cff20449255542356a83cb9c07a4b99a2d0b9f",
+      "cleanup": "2423843b9bca7a6e4783d61cbea3fa06cba5d1d2e77e2bc636f71d48cc2c3fe6",
+      "forget": [
+        "52573cecece9374b9b83adfb9b4edf0835f2a97181e5b35247f84d3976997735"
+      ],
+      "name": "the-nas-case"
+    },
+    {
+      "name": "v4-first",
+      "v4_names": [
+        "49a62cfe2dc3546370f38b5754cff20449255542356a83cb9c07a4b99a2d0b9f",
+        "52573cecece9374b9b83adfb9b4edf0835f2a97181e5b35247f84d3976997735"
+      ]
+    }
+  ],
+  "one_dot_two_sealed_peers": {
+    "records": [
+      "e654f498bbf6e8d404c5a450156c6117971eee2ef522f1f2d7998c22ace2316a",
+      "330cb263e7548b8cf963e408af6fad0ce9852d168d4f3e64be2981baf7461bbd"
+    ]
+  },
+  "r1_b1": {
+    "first": "held",
+    "second": "held"
+  },
+  "read_holder": [
+    {
+      "dropped": 0,
+      "name": "names-what-its-vectors-replace"
+    },
+    {
+      "dropped": 1,
+      "name": "names-an-opaque-record"
+    },
+    {
+      "caught_up": true,
+      "copies_kept": true,
+      "name": "a-read-holder-meets-stale-copies"
+    }
+  ],
+  "replaced_because": {
+    "read": "obsolete",
+    "sealed": "held"
+  },
+  "replayed_old_tombstone": {
+    "named_again": true,
+    "read_version": "dropped",
+    "sealed": "held",
+    "version_back": true
+  },
+  "write_holder_notes": [
+    {
+      "name": "already-named-by-a-group-that-applies",
+      "noted": false
+    },
+    {
+      "name": "named-in-a-group-that-waits-sc-2",
+      "noted": false
+    },
+    {
+      "closes": "Forged",
+      "name": "a-forged-stale-copy"
+    },
+    {
+      "name": "a-cleanup-at-a-rounds-end",
+      "then": "EQUAL"
+    }
+  ]
+}

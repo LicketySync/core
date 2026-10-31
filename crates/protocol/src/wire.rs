@@ -68,7 +68,8 @@ pub enum WireError {
         got: usize,
     },
     /// A value outside its stated range (a `uint32` that does not fit, a
-    /// `bool` other than 0 or 1, a suite of 0, a `seq` above `MAX_SEQ`).
+    /// `bool` other than 0 or 1, a suite of 0, a `through` above
+    /// `MAX_LOCAL_SEQ`).
     OutOfRange {
         /// Which field.
         what: &'static str,
@@ -156,7 +157,7 @@ impl Seen {
 pub(crate) enum WireType {
     /// 0: `int32`, `int64`, `uint32`, `uint64`, `bool`, enums.
     Varint,
-    /// 1: `fixed64`, `sfixed64`, `double` (unused here, skipped).
+    /// 1: `fixed64` (the index epoch), `sfixed64`, `double`.
     Fixed64,
     /// 2: `string`, `bytes`, messages, packed repeated scalars.
     LengthDelimited,
@@ -317,6 +318,22 @@ impl<'a> Reader<'a> {
     pub(crate) fn uint64(&mut self, wire_type: WireType, field: u32) -> Result<u64, WireError> {
         Self::want_type(wire_type, WireType::Varint, field)?;
         self.varint()
+    }
+
+    /// A `fixed64` field: eight little-endian bytes.
+    ///
+    /// # Errors
+    /// Wrong wire type or truncated.
+    pub(crate) fn fixed64(&mut self, wire_type: WireType, field: u32) -> Result<u64, WireError> {
+        Self::want_type(wire_type, WireType::Fixed64, field)?;
+        let end = self.pos.checked_add(8).ok_or(WireError::Truncated)?;
+        let bytes: [u8; 8] = self
+            .buf
+            .get(self.pos..end)
+            .and_then(|b| b.try_into().ok())
+            .ok_or(WireError::Truncated)?;
+        self.pos = end;
+        Ok(u64::from_le_bytes(bytes))
     }
 
     /// An `int64` field (two's complement varint).

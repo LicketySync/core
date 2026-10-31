@@ -9,6 +9,11 @@
 //! connection"; TM-22). None grows with the number of writers in a folder
 //! (ruling R-K4). The intervals are the spec's; the simulator may scale them,
 //! both sides alike, through [`crate::connection::Timing`].
+//!
+//! Counters (`protocol.md` 4.4, "Dots and counters") are microseconds since the
+//! Unix epoch, so every bound on them (the horizons, the clock rule, the fast
+//! clock warning) is given here in microseconds; the clock rule is also given
+//! in whole days, the unit of Hello's `clock_days` (3.2).
 
 use core::time::Duration;
 
@@ -67,6 +72,10 @@ pub const HELLO_NONCE_LEN: usize = 32;
 pub const LIBP2P_IDENTITY_LEN: usize = 32;
 /// `Close.detail`: at most this many bytes.
 pub const MAX_CLOSE_DETAIL_BYTES: usize = 256;
+/// `Hello.clock_days` at most: 2 097 151 (2^21 − 1, in the year 7711), so that
+/// it takes at most a 3-byte varint, which the largest Hello of section 2
+/// counts; a value above it is malformed (3.2, 4.2).
+pub const MAX_CLOCK_DAYS: u32 = (1 << 21) - 1;
 
 // Section 4.3: proofs.
 
@@ -81,21 +90,78 @@ pub const MIN_PROOF_SEALED: usize = 16;
 /// `FolderProof.sealed`: at most this many bytes (a full payload seals to 18).
 pub const MAX_PROOF_SEALED: usize = 1_024;
 
-// Section 4.4: the index record.
+// Section 4.4: the index record and the cleanup.
 
 /// The `record_type` of an index record.
 pub const INDEX_RECORD_TYPE: u32 = licketysync_keys::records::INDEX_RECORD_TYPE;
-/// `MAX_SUPERSEDES`: entries in a record's `supersedes`.
-pub const MAX_SUPERSEDES: usize = 16;
-/// `MAX_SEQ`: the largest `seq` of a record or cursor, 2^62, so that no
-/// arithmetic on sequence numbers can overflow.
-pub const MAX_SEQ: u64 = 1 << 62;
+/// The `record_type` of a cleanup record.
+pub const CLEANUP_RECORD_TYPE: u32 = licketysync_keys::records::CLEANUP_RECORD_TYPE;
 /// `IndexRecord.chunks` and `SealedMeta.plain_hashes`: at most this many.
 pub const MAX_CHUNKS: usize = 32_768;
-/// `IndexRecord.sealed`: at least its nonce and tag.
-pub const MIN_SEALED_BYTES: usize = licketysync_keys::sealed_meta::MIN_SEALED_BYTES;
-/// `MAX_SEALED_BYTES`: `IndexRecord.sealed` at most, 1.5 MiB.
-pub const MAX_SEALED_BYTES: usize = licketysync_keys::sealed_meta::MAX_SEALED_BYTES;
+/// `MAX_SEALED_BYTES`: an index record's `sealed` at most, 40 + 2^21 =
+/// 2 097 192 bytes (`keys.md` 3.4).
+pub const MAX_SEALED_BYTES: usize = licketysync_keys::sealed_meta::MAX_INDEX_SEALED_BYTES;
+/// A cleanup's `sealed` at most: 40 + 1 024 = 1 064 bytes (`keys.md` 3.4).
+pub const MAX_CLEANUP_SEALED_BYTES: usize = licketysync_keys::sealed_meta::MAX_CLEANUP_SEALED_BYTES;
+/// `MAX_VECTOR_ENTRIES`: entries in a record's vector, and records a write
+/// covers at once (4.4).
+pub const MAX_VECTOR_ENTRIES: usize = 32;
+/// `MAX_COUNTER`: the largest counter, 2^62, so that no arithmetic on
+/// counters can overflow (4.4).
+pub const MAX_COUNTER: u64 = 1 << 62;
+/// `CLOCK_FLOOR_MAX`: the most the clock floor of a new counter may be, 2^61
+/// (4.4, "The writer's rule").
+pub const CLOCK_FLOOR_MAX: u64 = 1 << 61;
+/// One day in counter units (microseconds).
+pub const DAY_US: u64 = 86_400_000_000;
+/// `CLOCK_AHEAD_WARNING`: a received counter this far ahead of the local
+/// clock raises an issue; a stored high-water mark this far above what the
+/// records and the clock justify is corrupt (4.4). One day, in microseconds.
+pub const CLOCK_AHEAD_WARNING: u64 = DAY_US;
+/// `TOMBSTONE_HORIZON`, the deletion horizon: a tombstone or tree delete
+/// expires at a read or write holder once the folder's own time passes its
+/// counter by more than this (4.4). 365 days, in microseconds.
+pub const TOMBSTONE_HORIZON: u64 = 365 * DAY_US;
+/// `CLEANUP_HORIZON`: a cleanup expires at a read or write holder once the
+/// folder's own time passes its counter by more than this; also the window of
+/// `MAX_PEER_NAMES`, by the write holder's wall clock (4.4). 30 days, in
+/// microseconds.
+pub const CLEANUP_HORIZON: u64 = 30 * DAY_US;
+/// `CLOCK_RULE_LIMIT` in whole days, the unit of Hello's `clock_days`: two
+/// devices whose clocks differ by more do not sync (3.2, 4.4).
+pub const CLOCK_RULE_LIMIT_DAYS: u32 = 365;
+/// `CLOCK_RULE_LIMIT` in counter units: a record whose counter is more than
+/// this ahead of the receiver's clock is from the future (4.4 step 4). A
+/// different rule from the deletion horizon, of the same length.
+pub const CLOCK_RULE_LIMIT: u64 = CLOCK_RULE_LIMIT_DAYS as u64 * DAY_US;
+/// `MAX_REPLACES`: names in an index record's `replaces` (4.4).
+pub const MAX_REPLACES: usize = 64;
+/// `MAX_CLEANUP_ENTRIES`: names in one cleanup record, across its groups
+/// (4.4).
+pub const MAX_CLEANUP_ENTRIES: usize = 16_384;
+/// `MAX_CLEANUP_GROUPS`: groups in one cleanup record (4.4).
+pub const MAX_CLEANUP_GROUPS: usize = 1_024;
+/// `MAX_STALE_KNOWN`: stale copies and forgotten records a write holder notes
+/// per folder, kept in memory across connections, the oldest dropped first
+/// (4.5, "Stale copies").
+pub const MAX_STALE_KNOWN: usize = 65_536;
+/// The pushes of one folder whose judgements a connection awaits at most:
+/// the engine judges every page it is handed, so only an engine that lags
+/// this far behind reaches it, and then the counting stops rather than the
+/// table grow (TM-22). An implementation's bound, not a constant of section
+/// 5.
+pub const MAX_PENDING_PUSHES: usize = 4_096;
+/// `MAX_NOTE_VERIFICATIONS`: records a write holder verifies for notes per
+/// connection per `INDEX_RESYNC_INTERVAL`, one budget shared by every folder
+/// open on the connection (4.5, "Stale copies"): about 0.24 s of one core.
+pub const MAX_NOTE_VERIFICATIONS: usize = 4_096;
+/// `MAX_PEER_NAMES`: records of one peer's that a write holder names, in
+/// writes and cleanups, per window of `CLEANUP_HORIZON` by its wall clock
+/// (4.4, 4.5).
+pub const MAX_PEER_NAMES: u64 = 1_048_576;
+/// `MAX_FUTURE_KNOWN`: record hashes of refused records from the future a
+/// device remembers per folder on a connection (4.4 step 4).
+pub const MAX_FUTURE_KNOWN: usize = 1_024;
 /// `SealedMeta.path`: at most this many bytes.
 pub const MAX_PATH_BYTES: usize = 4_096;
 /// `MAX_CHUNK_PLAINTEXT`: the largest raw chunk, 4 MiB.
@@ -108,17 +174,34 @@ pub const MAX_STORED_LEN: usize = licketysync_keys::chunk::MAX_STORED_LEN;
 
 // Section 4.5: index exchange and Status.
 
-/// `MAX_CURSORS_PER_REQUEST`: entries in one `IndexRequest.have`; a round of
-/// range requests covers any number of writers.
-pub const MAX_CURSORS_PER_REQUEST: usize = 16_384;
 /// `MAX_PAGE_RECORDS`: records per `IndexRecords` page or push. It caps
 /// `max_records` (0 or above means this) and is the receiver's bound.
 pub const MAX_PAGE_RECORDS: usize = 4_096;
 /// The floor of a request's `max_records`: a smaller value is served as this.
 pub const MIN_PAGE_RECORDS: usize = 64;
-/// `MAX_MARKED_WRITERS`: marks a side holds per folder per connection; one
-/// more drops them all and owes a round.
-pub const MAX_MARKED_WRITERS: usize = 1_024;
+/// `MAX_LOCAL_SEQ`: the largest local sequence number, 2^62 (4.5).
+pub const MAX_LOCAL_SEQ: u64 = 1 << 62;
+/// `RECONCILE_LEAF_MAX`: the most records a subtree holds in leaf form (4.5).
+pub const RECONCILE_LEAF_MAX: usize = 64;
+/// The bytes of a record's key in the set digests (4.5, "Set digests"): an
+/// index record's path tag then its record hash, a cleanup's record hash
+/// twice.
+pub const KEY_BYTES: usize = 64;
+/// The nibbles of a full key: the deepest prefix of the set-digest trie,
+/// whose subtree holds at most one record (4.5).
+pub const MAX_PREFIX_NIBBLES: usize = 2 * KEY_BYTES;
+/// The reconciliation's work list at most: 15 unvisited siblings at each of
+/// 128 levels, and the one being visited (4.5, "Reconciling").
+pub const MAX_WORK_LIST: usize = 15 * MAX_PREFIX_NIBBLES + 1;
+/// `MAX_RECONCILE_PASSES`: reconcile passes in one round (4.5).
+pub const MAX_RECONCILE_PASSES: usize = 4;
+/// `MAX_PASS_REQUESTS`: `ReconcileRequest`s in one pass (4.5).
+pub const MAX_PASS_REQUESTS: usize = 65_536;
+/// `PEER_STATE_HORIZON`: per-peer state kept without a round that ended, by
+/// the device's wall clock (4.5). 90 days, in microseconds.
+pub const PEER_STATE_HORIZON: u64 = 90 * DAY_US;
+/// `MAX_PEER_STATES`: per-peer states kept per folder (4.5).
+pub const MAX_PEER_STATES: usize = 4_096;
 /// `Status.folders`: at most this many.
 pub const MAX_STATUS_FOLDERS: usize = 1_024;
 /// `Status.device_name`: at most this many bytes.
@@ -145,14 +228,16 @@ pub const PROOF_TIMEOUT: Duration = Duration::from_secs(30);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// `STATUS_INTERVAL`.
 pub const STATUS_INTERVAL: Duration = Duration::from_secs(30);
-/// `REPLY_PAGE_TIMEOUT`: the longest a requester waits for the next page of
-/// the reply to its outstanding `IndexRequest` (4.5).
+/// `REPLY_PAGE_TIMEOUT`: the longest a requester waits for the next part of
+/// the reply to its outstanding request, an `IndexRequest` or a
+/// `ReconcileRequest` (4.5).
 pub const REPLY_PAGE_TIMEOUT: Duration = Duration::from_secs(600);
-/// `INDEX_RESYNC_INTERVAL`: the least gap between gap-triggered listed
-/// requests, and between the starts of owed rounds, per folder per connection.
+/// `INDEX_RESYNC_INTERVAL`: the least gap between the starts of owed rounds,
+/// per folder per connection (4.5).
 pub const INDEX_RESYNC_INTERVAL: Duration = Duration::from_secs(10);
 /// `INDEX_REQUEST_MIN_INTERVAL`: a responder serves a folder's
-/// `IndexRequest`s on a connection at most this often, delaying the rest.
+/// `IndexRequest`s and root `ReconcileRequest`s on a connection at most this
+/// often, delaying the rest (4.5).
 pub const INDEX_REQUEST_MIN_INTERVAL: Duration = Duration::from_secs(1);
 /// `CHUNK_BUSY_BACKOFF` at first: no chunk request on a connection for this
 /// long after a `CHUNK_BUSY`; also the least wait before the next chunk pass
@@ -184,8 +269,12 @@ const _: () = assert!(MIN_PAGE_RECORDS <= MAX_PAGE_RECORDS);
 const _: () = assert!(MAX_INDEX_RECORD_BYTES + 64 < MIN_MESSAGE_SIZE as usize);
 // One ChunkReply with the largest chunk always fits (section 2).
 const _: () = assert!(MAX_STORED_LEN + 128 < MIN_MESSAGE_SIZE as usize);
-// A full IndexRequest fits: 81 bytes per cursor at most (4.5).
-const _: () = assert!(MAX_CURSORS_PER_REQUEST * 81 + 256 < MIN_MESSAGE_SIZE as usize);
+// The horizons and the clock rule nest under the counter bounds (4.4).
+const _: () = assert!(CLOCK_FLOOR_MAX < MAX_COUNTER);
+const _: () = assert!(CLEANUP_HORIZON < TOMBSTONE_HORIZON);
+const _: () = assert!(CLOCK_RULE_LIMIT == TOMBSTONE_HORIZON);
+const _: () = assert!(MAX_REPLACES >= 2 * MAX_VECTOR_ENTRIES);
+const _: () = assert!(MAX_WORK_LIST == 1_921);
 const _: () = assert!(MAX_UNSUPPORTED_TYPES == 1 << 15);
 const _: () = assert!(DEFAULT_REQUESTS_IN_FLIGHT <= MAX_REQUESTS_IN_FLIGHT);
 
@@ -203,13 +292,37 @@ mod tests {
         assert_eq!(MAX_INDEX_RECORD_BYTES, 4_000_000);
         assert_eq!(MAX_FIELD_NUMBER, 536_870_911);
         assert_eq!(MAX_SEND_QUEUE, 134_217_728);
-        assert_eq!(MAX_SEALED_BYTES, 1_572_864);
-        assert_eq!(MIN_SEALED_BYTES, 40);
+        assert_eq!(MAX_SEALED_BYTES, 2_097_192);
+        assert_eq!(MAX_CLEANUP_SEALED_BYTES, 1_064);
         assert_eq!(MAX_STORED_LEN, 4_325_416);
         assert_eq!(MIN_STORED_LEN, 46);
         assert_eq!(MAX_CHUNK_PLAINTEXT, 4_194_304);
-        assert_eq!(MAX_SEQ, 4_611_686_018_427_387_904);
         assert_eq!(INDEX_RECORD_TYPE, 16);
+        assert_eq!(CLEANUP_RECORD_TYPE, 17);
+        assert_eq!(MAX_VECTOR_ENTRIES, 32);
+        assert_eq!(MAX_COUNTER, 4_611_686_018_427_387_904);
+        assert_eq!(CLOCK_FLOOR_MAX, 2_305_843_009_213_693_952);
+        assert_eq!(CLOCK_AHEAD_WARNING, 86_400_000_000);
+        assert_eq!(TOMBSTONE_HORIZON, 31_536_000_000_000);
+        assert_eq!(CLEANUP_HORIZON, 2_592_000_000_000);
+        assert_eq!(CLOCK_RULE_LIMIT, 31_536_000_000_000);
+        assert_eq!(CLOCK_RULE_LIMIT_DAYS, 365);
+        assert_eq!(MAX_CLOCK_DAYS, 2_097_151);
+        assert_eq!(MAX_REPLACES, 64);
+        assert_eq!(MAX_CLEANUP_ENTRIES, 16_384);
+        assert_eq!(MAX_CLEANUP_GROUPS, 1_024);
+        assert_eq!(MAX_STALE_KNOWN, 65_536);
+        assert_eq!(MAX_NOTE_VERIFICATIONS, 4_096);
+        assert_eq!(MAX_PEER_NAMES, 1_048_576);
+        assert_eq!(MAX_FUTURE_KNOWN, 1_024);
+        assert_eq!(MAX_LOCAL_SEQ, 1 << 62);
+        assert_eq!(RECONCILE_LEAF_MAX, 64);
+        assert_eq!(MAX_RECONCILE_PASSES, 4);
+        assert_eq!(MAX_PASS_REQUESTS, 65_536);
+        assert_eq!(PEER_STATE_HORIZON, 90 * 86_400_000_000);
+        assert_eq!(MAX_PEER_STATES, 4_096);
+        assert_eq!(MAX_WORK_LIST, 1_921);
+        assert_eq!(MAX_PREFIX_NIBBLES, 128);
         assert_eq!(REPLY_PAGE_TIMEOUT.as_secs(), 600);
         assert_eq!(IDLE_TIMEOUT.as_secs(), 300);
         assert_eq!(MAX_CHUNK_BUSY_BACKOFF.as_secs(), 64);

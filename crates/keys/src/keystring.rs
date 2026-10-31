@@ -804,6 +804,8 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::proptest_config(256))]
+
         /// Every key string, in either case, reads back to the same key.
         #[test]
         fn key_strings_round_trip(key in key_strategy(), upper in any::<bool>()) {

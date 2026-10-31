@@ -158,8 +158,8 @@ secret32! {
 
 secret32! {
     /// `rk`, the `XChaCha` key for the sealed metadata of index records and
-    /// cleanups (section 3.4).
-    pub RecordKey
+    /// cleanups (section 3.4), held only inside [`crate::sealed_meta::RecordKeys`].
+    pub(crate) RecordKey
 }
 
 secret32! {
@@ -191,14 +191,7 @@ secret32! {
     pub(crate) ProofKey
 }
 
-public_ct_eq!(
-    WriteSecret,
-    DataKey,
-    RecordKey,
-    DeviceSeed,
-    LinkSecret,
-    LinkConfirmKey
-);
+public_ct_eq!(WriteSecret, DataKey, DeviceSeed, LinkSecret, LinkConfirmKey);
 drawn!(WriteSecret, DeviceSeed, LinkSecret);
 
 impl WriteSecret {
@@ -240,9 +233,8 @@ impl DataKey {
     }
 
     /// `rk = derive_key("licketysync/v1/data/record-key", dk)`: the key that
-    /// [`crate::sealed_meta`] seals and opens index records' metadata under.
-    #[must_use]
-    pub fn record_key(&self) -> RecordKey {
+    /// [`crate::sealed_meta`] seals and opens records' metadata under.
+    pub(crate) fn record_key(&self) -> RecordKey {
         RecordKey::fill_with(|out| derive_key_into(labels::DATA_RECORD_KEY, &self.0, out))
     }
 }
@@ -388,9 +380,7 @@ mod tests {
             all.push(key);
         }
         let rk = dk.record_key();
-        assert!(bool::from(rk.ct_eq(&dk.record_key())));
-        assert!(!bool::from(
-            rk.ct_eq(&RecordKey::fill_with(|o| *o = [0; 32]))
-        ));
+        assert_eq!(rk.expose(), dk.record_key().expose());
+        assert_ne!(rk.expose(), RecordKey::fill_with(|o| *o = [0; 32]).expose());
     }
 }
