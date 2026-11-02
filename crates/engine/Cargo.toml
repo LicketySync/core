@@ -1,6 +1,6 @@
 [package]
 name = "licketysync-engine"
-description = "The sync engine: FastCDC chunking with keyed BLAKE3, Padme padding, scanning and change journals, conflict handling, versioning and archive, selective sync."
+description = "The sync engine: drives one protocol connection per peer over the runtime traits, keeps each folder's index, chunks, state and issues, and writes and reads files in the simulator's file model."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,21 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# Folder keys, the device key, chunk sealing and opening, hashes (keys.md):
+# the engine computes no hash and seals nothing itself (TM-5, TM-12, TM-14).
+licketysync-keys = { path = "../keys" }
+# One Connection per peer, records and the exchange's messages, the limits and
+# the section 5 causes (protocol.md 3 to 5).
+licketysync-protocol = { path = "../protocol" }
+# One Index per folder: records, heads, bases, cleanups, serving (protocol.md
+# 4.4, 4.5, 4.7).
+licketysync-index = { path = "../index" }
+
+[dev-dependencies]
+# The integration tests run the engine on the deterministic simulator (phase 0's gate).
+licketysync-sim = { path = "../sim" }
+# Property tests of the chunker (plan: Tests).
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

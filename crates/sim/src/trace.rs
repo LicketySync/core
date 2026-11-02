@@ -140,6 +140,8 @@ pub enum EventKind {
     DiskFull,
     /// The peer's disk has room again.
     DiskFreed,
+    /// The peer's wall clock jumped ahead by this many seconds.
+    ClockStep(u64),
 }
 
 /// One event of the run.
@@ -189,6 +191,7 @@ impl fmt::Display for TraceEvent {
             EventKind::PartitionEnd => f.write_str("partition ends"),
             EventKind::DiskFull => f.write_str("disk full"),
             EventKind::DiskFreed => f.write_str("disk freed"),
+            EventKind::ClockStep(secs) => write!(f, "wall clock steps {secs} s ahead"),
         }
     }
 }
@@ -313,6 +316,10 @@ impl TraceEvent {
             EventKind::Close(p) => {
                 h.write(&[22]);
                 h.write_u64(p.as_u64());
+            }
+            EventKind::ClockStep(secs) => {
+                h.write(&[23]);
+                h.write_u64(*secs);
             }
         }
     }
@@ -518,6 +525,7 @@ mod tests {
             EventKind::PartitionEnd,
             EventKind::DiskFull,
             EventKind::DiskFreed,
+            EventKind::ClockStep(86_400),
         ]
     }
 

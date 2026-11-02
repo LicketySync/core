@@ -6,6 +6,369 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The engine on the latest-only index, and the phase 0 gate: simulated peers converge.
+  `licketysync-engine` now has `Engine` (`runtime::Peer`) and `EngineConfig` (device seed and folder
+  keys given at every start, none stored, `keys.md` 8.2; at most `MAX_FOLDERS`, 256, folders, the
+  most proofs one connection carries): one protocol `Connection` per peer, driven with a fresh
+  `Tick` per call and every `Output` applied in order (frames, wake-up, events, close), every
+  credentialed folder proven on connect and on every connection when it opens, and only the `Closed`
+  outcome recorded once a connection has closed (the clock rule's events, which come in the output
+  that closes it, are taken first). Every handler runs in three phases (`work.rs`): A decides
+  (chunks judged and staged, the index exchange's events queued as index work), B commits
+  (`sync/commit.rs`: one `licketysync_index::Txn` per folder with work, the local writes, the pages
+  of records judged record by record with the connection's own memories and verification budget, the
+  ends of rounds with their cleanups, the cursors, an epoch drawn for a reset, the chunk frees due
+  and the bases of every path whose content is now on the disk; each change set staged with the
+  handler's blobs, then one storage commit, then each transaction committed or, if the commit
+  failed, dropped), C sends (judgements for every page, pushes of what is newly held to every
+  connection but the one it came on, requests from the committed index, replies page by page under
+  the send budget, the subtrees a `RECORDS` reply ends with), so durability comes before
+  transmission (`protocol.md` 4.5); what phase C brings that changes the index (a round that ended,
+  a cursor a counted push raised) waits for the next commit, a handler of its own at once, so a
+  handler commits at most once. The exchange (`sync/`): rounds of Since and the root check with
+  reconciliation, served from the committed index (`since_plan`, `since_page`, `reconcile_reply`,
+  `records_page`, `push_pages`, `subtree_pushes`), with the rules kept from the old exchange: a
+  record not judged is `Judgement::Skipped`, a reply whose page was skipped is void to its last
+  page, no round of a folder held paused, resuming owes a round on every connection, and a
+  connection is caught up only when its last round ended at `EQUAL` or after a quiet pass. A put or
+  commit that fails rolls back and pauses every folder the handler meant to change (`pause.rs`): the
+  dropped transactions undo it exactly, with nothing rebuilt; the folder judges no record (its pages
+  answered skipped, TM-22), stores no chunk, refuses local writes, stays proven and serving, is held
+  paused on every connection (`Connection::set_paused`: no round, its pushes not counted), and a
+  resume probe (`e/probe`, every `resume_probe`, 1 s, staged for its handler's one commit) ends the
+  pause and owes each connection a round, what the folder left waiting committing in a handler of
+  its own at once; every other folder whose records the handler skipped is owed a round too. A
+  handler whose change sets are all empty commits nothing. Storage layout (`store.rs`):
+  `e/r/<f>/<record hash>` (the local sequence number, then the envelope as received),
+  `e/b/<f>/<record hash>` for bases kept only as bases, `e/s/<f>/<path tag><place>` base slots,
+  `e/m/<f>` (high-water mark, next local sequence number, epoch), `e/p/<f>/<device>` per-peer state,
+  `e/c/<f>/<cipher hash>` and `e/h/<f>/<cipher hash>` markers, `e/f/<f>/<cipher hash>` the
+  pending-free list, `e/probe`, and `w/` for the harness. At start each folder shows Checking while
+  the index opens it (`open.rs`; `Index::create` for a folder with nothing stored), undecodable
+  entries are counted (gap G6), one issue gives what the open found (records dropped, undecodable
+  entries, a corrupt high-water mark, records numbered afresh, misplaced bases, at most 16 hashes),
+  a store in which nothing passes is Misconfigured and never proven, one that cannot be read is
+  Unreadable, and a folder whose records lie more than a year ahead of the clock is Closed until the
+  time the open gave (4.4, "A clock set back"): not proven to peers (their proofs answered
+  REJECTED), judging and writing nothing, with the clock-rule issue (`KeptClosed`) and the open
+  report saying so (`OpenCounts::kept_closed`); every handler compares that time with the wall
+  clock, and a timer looks at least once a minute, so it opens, its credential back, and is proven
+  on every connection, once the clock passes it, a clock set right by a step forward included. What
+  the open changed is staged with the folder's first transaction and kept until a commit carries it,
+  so a failure there pauses the folder and loses nothing. The disk (`sync/disk.rs`): phase 0's disk
+  is the bases the engine names to the index; a version is on the disk while every chunk it names is
+  stored and has verified for it and its size checked (a chunk stored for another record it fails
+  for puts nothing of it in place), and only then is it the base at its path (the first head in
+  display order) or at a conflict copy beside it
+  (`{path} (conflict {first eight hex digits of the record})`), so the old file stays until the new
+  content is there and a local write made meanwhile is a conflict with the version still arriving; a
+  path left with no heads (a tree delete's directory, or a path where one dropped records) has one
+  slot, its own, holding the greatest, by record hash, of the tree deletes held at its tag
+  (`PathView::trees`, new in the index), or none, unless its live records are all opaque, when its
+  disk is left as it is (4.4; a stated residual below): a function of the records held, so every
+  device that holds the same records keeps the same disk there whatever order they came in, a
+  received record, a local write and a tree delete's own directory alike, and every other path
+  beneath, a concurrent edit's say, keeps its disk; holding a tree delete reads nothing but the
+  paths where it changed heads or cleared a slot, and their slots (holding it costs what it drops,
+  however many files lie beneath it, TM-22). A conflict copy keeps its slot while its chunk is
+  forgotten and loses it only once its record is no conflict copy; a new copy slot is added once its
+  record is on the disk. Local writes (`write.rs`): fixed-size chunks sealed by the keys crate,
+  `write_file`, `delete` (a directory's is one tree delete), `rename` (a put and a tombstone in one
+  commit) and `mkdir` as `Change`s to the index, which builds vectors and names from the bases; a
+  write over a conflict first turns each copy on the disk into an ordinary file at the copy's name
+  (`Change::Promote`); refused up front for a read or sealed key, a pause or a bad path, and a
+  write's blobs staged only once its records are signed. Chunks (`chunks.rs`, `transfer.rs`,
+  `inflight.rs`): what a folder lacks is what `Index::wanted` names, every held record with chunks,
+  conflict heads and opaque records included (an opaque record's chunk checked by its ciphertext
+  hash and stored length alone, 4.7 item 5); per-record judging of each chunk (corrupt for that
+  record alone and never fetched again, TM-13), the size check at reassembly, passes in ascending
+  hash order with one request per hash across connections until its patience runs out, serving that
+  reads the blob only as it is sent, `chunk_stored` on every connection for every chunk newly
+  stored, a write's included. A stored blob is this device's own: before it is judged for any record
+  its ciphertext hash is computed again, and one that changed or is gone at rest is forgotten,
+  fetched again (or staged again by a write) and raises `LocalChunkCorrupt`, never a record's issue
+  (TM-10); its deletion, with its marker, rides the next commit a handler makes anyway. A blob that
+  cannot be read is only forgotten, fetched again and counted, and read again, hash-checked, on the
+  free tick, so that its only holder serves it again. The chunks a change leaves unnamed
+  (`ChangeSet::freed`) go on the durable pending-free list in its commit and are freed at the end of
+  the next round on any connection where the folder is open, or once a minute while none is, each
+  one a held record names again staying; an open finishes the list. The clock (`runtime.rs`,
+  `Clock::wall_time_us`): counters come from the index's writer's rule over it, Hello's `clock_days`
+  from it (`Config::new`), and a peer out of the clock rule is refused with an issue naming its
+  device and both readings (`ClockOutOfRange`; a stranger's is only counted). Folder state
+  (`folder.rs`): Checking, Misconfigured, Unreadable, Closed, Paused, Syncing (naming what it waits
+  for), Up to date, with a bounded transition log that keeps Checking. Issues (`issues/`): a list
+  naming a peer only for its own fault, a record never a device (ruling S-4), no path and no secret
+  (TM-6), a counter per section 5 cause, closes counted per defined reason with one count for every
+  number a peer invents (TM-22), each reason's slot found by its place in `CloseReason::ALL` rather
+  than its wire number, since `CLOCK_OUT_OF_RANGE` (13) comes after 11, with a build-time check that
+  the wire numbers are distinct; the informational issues of 4.7 item 7: the own-ID hint
+  (`OwnCounterAhead`: a record under this device's ID above its high-water mark, a restored or
+  cloned device), `ClockAhead` (a record more than a day ahead of this device's clock, with the lead
+  and the device it claims), `FromTheFuture` (a record past the clock rule, refused, naming its
+  device), `WriterFault { shared }` naming an opaque record (`shared` when every release finds it
+  faulty, so that saving the file again clears it), `KeptClosed`; "still waiting" is gone; and a
+  folder whose proof a peer refuses while 64 folders are open on the connection is counted and named
+  in a local issue, as possibly the open limit. Pacing (`pacing.rs`): a 16 MiB send budget for reply
+  pages and `CHUNK_OK`, polled every 50 ms. Timers (`timers.rs`): ids below 2^63 are the engine's,
+  from a counter that never repeats; the harness's are ignored. Status (`status.rs`):
+  `extra_versions`, `paused` for a folder held paused. Views (`inspect.rs`): `folder` (each record's
+  state, cleanup flag, dot and chunks; `extra_versions`, `hw`, `folder_time`, the pending-free
+  list), `files` (heads in display order, the current version, conflict copies, deletion, opaque
+  records, bases; `Debug` without paths or copy names), `read_file` (any head; `ReadError` displays
+  and is an error), `fingerprint` (the root set digest, then each path's heads), `high_water`,
+  `dot`, `stored_blob`.
+  - Bugs the reviews found and this fixes (each with a regression test named after it in
+    `src/regressions.rs`): a blob changed at rest blamed its record and was never fetched again; one
+    key holder could keep a hash from every other connection for ever; `closes_received` grew with
+    every reason number a peer chose; a peer with only a device proof counted as proven and could
+    evict key holders' issues; a pause that ended during a reply judged its later pages, closed the
+    honest peer and blamed it; a failed handler skipped other folders' records silently, and a
+    resumed folder read Up to date before its owed round; void pages arriving after a resume kept
+    another connection's owed round from ever counting, so the folder read Syncing for ever; a
+    storage read error deleted a good blob; the deletion of a changed blob took a second commit; a
+    refetch whose commit failed left a blob changed at rest counted as stored and good. The rebuild
+    after a failed commit, with the back-off of its probe (a recorded deviation from TM-22, now
+    retired) and the guards against a folder made Unreadable after its open, is gone with the staged
+    store it repaired. Found in the port and fixed, with tests named after them: the clock rule's
+    events came in the output that closed the connection and were dropped with it, so no clock issue
+    was ever raised and no stranger counted
+    (`rules::the_clock_rule_issue_is_raised_though_the_close_comes_with_it`,
+    `rules::a_stranger_out_of_the_clock_rule_is_only_counted`); a key holder judged an opaque
+    record's chunk against a plaintext hash it was never given, found it corrupt and never kept it
+    (`chunks::tests::a_key_holder_keeps_an_opaque_records_chunk_by_its_stored_length`);
+    `licketysync-sim list` printed a heading line whose first word the nightly job took for a
+    scenario (`cli::tests::list_starts_every_line_with_a_scenario_name_for_the_nightly`); the
+    oracle's state digest left out every chunk on the pending-free list, so one named again while
+    listed entered the state at the next round's end and the recheck failed (`engine-expiry` seed 6;
+    `converge::a_pending_free_chunk_named_again_is_no_change_of_state_at_the_recheck`).
+  - What the port's reviews found and this fixes, each with a test named after it that fails without
+    it (`src/rules.rs` unless said): a folder kept closed by the clock rule opened only by a
+    monotonic delay, so a clock set right by a step forward left it closed
+    (`a_closed_folder_opens_when_its_wall_clock_steps_forward_without_monotonic_time`), was proven
+    to peers against 4.4 (`a_closed_folder_is_not_proven_to_peers_and_is_proven_once_it_opens`), and
+    raised no issue
+    (`a_folder_whose_records_lie_more_than_a_year_ahead_stays_closed_and_opens_by_itself`); the
+    gate's oracle never looked at the disk (check (b′) below); a received tree delete clearing the
+    bases beneath it, and a failed commit reporting its held records skipped, were pinned by no test
+    (`a_tree_delete_received_clears_the_bases_beneath_its_directory`,
+    `a_failed_commit_reports_held_records_skipped_and_its_round_is_not_caught_up`); a version whose
+    chunk fails for it counted as on the disk when another record kept the chunk (adversary test
+    `a_version_whose_chunk_fails_for_it_is_never_on_the_disk_though_another_record_keeps_the_chunk`);
+    a blob forgotten after a read error was never read again before a restart
+    (`a_blob_forgotten_after_a_read_error_is_read_again_and_served`); a failure staging the open's
+    changes paused no folder, and the resume probe committed apart from phase B
+    (`a_failed_first_commit_pauses_the_folder_and_its_probe_handler_commits_once`); a reset for a
+    folder held paused claimed a redraw that its dropped transaction never made (now claimed only
+    for a folder that runs one; `a_paused_folder_serving_a_reset_claims_no_redraw`); holding a tree
+    delete walked every path of the folder, 51 ms a tree delete at 20 000 paths, then (the first
+    fix) every path and slot beneath its directory, 260 ms at 20 000 files it does not cover
+    (`holding_a_tree_delete_reads_what_it_drops_not_the_twenty_thousand_files_left_beneath_it`), and
+    cleared the base of a concurrent edit beneath it too, taking the old file away before the edit's
+    content arrived and building the path's next edit from nothing
+    (`a_tree_delete_leaves_the_disk_of_a_concurrent_edit_beneath_it_and_its_next_edit_covers_it`),
+    or of a nested tree delete made at once, so two holders' disks differed by the order of arrival
+    (`nested_tree_deletes_made_at_once_leave_the_same_disk_in_either_order`). And their confirms: a
+    version whose chunk was forgotten after it verified (changed at rest, unread, rolled back) still
+    counted as on the disk
+    (`chunks::tests::a_version_is_ready_only_while_its_verified_chunks_are_stored`,
+    `a_version_whose_chunk_a_failed_commit_rolled_back_is_not_on_the_disk`); a failed commit did not
+    put back the paths its transaction had taken off those to apply, so a base stayed old for good
+    (`a_failed_commit_never_leaves_a_paths_base_old_for_good`); a blob found changed when read again
+    was only dropped, now changed at rest (`chunks::tests::reading_a_blob_again_checks_its_hash`,
+    `a_blob_found_changed_when_read_again_raises_the_local_issue_and_is_deleted`); and tests for
+    what had none: a folder kept closed that opens before the peer's proof arrives syncs on that
+    connection
+    (`a_closed_folder_that_opens_before_the_peers_proof_arrives_syncs_without_a_reconnect`), a page
+    of duplicates commits nothing (`a_page_of_duplicates_commits_nothing`), and a version whose
+    chunks do not add up to its size is not on the disk (adversary test
+    `a_version_whose_chunks_do_not_add_up_to_its_size_is_never_on_the_disk`). And the third round's:
+    two devices that deleted one directory apart each kept its own tree delete as the directory's
+    base, so their disks differed with the same records
+    (`two_devices_deleting_one_directory_apart_keep_the_same_disk`), as did nested tree deletes held
+    in another order, by three devices or around a file at the inner path
+    (`three_devices_holding_nested_tree_deletes_keep_the_same_disk`,
+    `a_tree_delete_that_drops_a_record_at_a_nested_tree_deletes_path_keeps_the_disk_the_same`,
+    `a_file_and_two_nested_tree_deletes_in_either_order_leave_the_same_disk`), and nested tree
+    deletes arriving in one handler named one the other dropped as a base, an internal error
+    (`nested_tree_deletes_arriving_in_one_handler_count_no_internal_error`): the rule above for a
+    path with no heads fixes all four and replaces the clearing of slots by each tree delete held; a
+    conflict copy lost its slot while its chunk was forgotten, so a write over the conflict did not
+    turn it into a file
+    (`a_conflict_copy_keeps_its_place_on_the_disk_while_its_chunk_is_forgotten`); a blob this device
+    freed after a read error was found gone on the free tick and taken for one changed at rest,
+    raising `LocalChunkCorrupt`
+    (`a_blob_this_device_freed_after_a_read_error_raises_no_corruption`); every page, duplicates
+    too, marked the chunk book for a full recompute, now only one that held or dropped a record
+    (`a_page_of_duplicates_commits_nothing`); and a folder both devices kept closed by the clock
+    rule, each refusing the other's proof, opened on the connection only because the device whose
+    folder opens proves it on every connection
+    (`a_folder_both_devices_kept_closed_opens_when_the_second_proves_it`). And the fourth round's: a
+    local tree delete whose vector, pruned to 32 entries, misses a tree delete held beneath its
+    directory cleared that one's slot and left it held without reporting its path, so that device's
+    disk lost it there while every other kept it; the index now reports each slot a write clears
+    among the write's paths
+    (`a_local_tree_delete_with_a_pruned_vector_keeps_the_disk_of_a_tree_delete_it_leaves`, the
+    index's `a_tree_delete_reports_the_path_of_a_slot_it_clears_and_leaves_held_r3_1`); a round's
+    end whose cleanup expired the greater of two tree deletes held at a path reported no paths, so
+    that device left the path with no base while one that expired it accepting the cleanup made the
+    other its base; `Txn::end_round` now reports the paths of what its cleanups drop, sorted and
+    each once as a write's
+    (`a_rounds_end_cleanup_that_expires_the_greater_tree_delete_leaves_the_other_as_the_base`, the
+    index's `a_rounds_end_reports_the_paths_of_what_its_cleanup_expires_s3_c`); and the chunk book's
+    two marks that no test held now have one each: a write's, for a rename that stages no blob
+    (`a_write_that_stages_no_blob_has_its_version_judged_in_its_own_handler`), and a page's that
+    only drops, a record that replaces one held but that a held tree delete covers
+    (`a_page_that_only_drops_a_record_stops_wanting_its_chunks`). The index's
+    `Txn::clear_bases_beneath` and `Index::paths_at_or_beneath`, which the engine stopped using, are
+    removed with their tests.
+  - Runtime contract (`runtime.rs`): `Clock::wall_time_us`, the wall clock in microseconds, by
+    default `wall_time` times a million (a runtime with a finer clock gives it);
+    `Clock::wall_time`'s doc no longer speaks of expiry; `Randomness`'s doc names the secrets and
+    nonces drawn through it; `MAX_SEND_QUEUE` is
+    `pub use licketysync_protocol::limits::MAX_SEND_QUEUE` (one definition, `protocol.md` 5).
+  - Simulator: `world.rs` (seeds and keys per peer from fixed bytes, clones), `member.rs` (the
+    engine plus a scripted workload on the harness timer, its step committed with the engine's
+    write; the shared `Ledger`, which also keeps each member's high-water mark after every handler
+    and the counter of each record it wrote, over every instance; a member can be cut from peers it
+    never meets), `oracle.rs` (a cheap predicate over the root digest and heads, and the full check:
+    (a) the same record hashes on every member, (b) the same paths and heads, no opaque record, (b′)
+    what every read and write holder has on its disk matching its heads, each path's base its first
+    head, each conflict copy in its copy slot, no base at a path without heads but a tree delete's
+    own (nothing beneath a tree delete keeps a base unless live), the same on every one of them,
+    every path checked ((b) refuses opaque records in every gate scenario, so (b′) needs no
+    carve-out; a future scenario that plants them must make (b′) skip each path with no heads and an
+    opaque record, the 4.4 residual below, where the engine keeps such a path's disk), (c) every
+    head reassembled to the ledger's bytes, every stored blob named by a held record or pending its
+    free, and every sealed blob checked, (d) only the issues a scenario expects, no blaming close,
+    no internal error, every start shown as Checking, and no high-water mark that fell and no
+    counter given to two records, over every instance; a stored chunk no held record names, which
+    waits on the pending-free list for a round, is left out of the state digest, and one named again
+    is in it at once), `Run`'s probes (looks taken on the way), `Fault::ClockStep` (a wall clock set
+    forward, with its trace event), and seventeen gate scenarios plus `engine-drops-stress`, all
+    listed by `licketysync-sim list` one name to a line: the toy's eight engine counterparts
+    (`engine-clean`, `engine-drops` at the gate's drop rate of 0.1, `engine-reconnect`,
+    `engine-cross-reorder`, `engine-partition` with its cut from 45 to 65 s so that both sides edit
+    over versions on their disks, `engine-crash`, `engine-disk-full`, `engine-chaos`), `engine-skew`
+    (5 min, 1 h and 23 h ahead, no clock warning) and `engine-clock-ahead` (two days ahead: the
+    warning, and convergence), `engine-sealed-relay`, `engine-late-joiner` (back with per-peer state
+    after 360 records, at least five Since pages of 64 on one connection), `engine-pacing`,
+    `engine-clones` (concurrent heads under one device ID, one conflict at the shared path, the
+    own-ID hint at both clones, nobody blamed; peer 0's last file moves to about 31 s and peer 5
+    writes once more at about 45 s, so that each clone receives a record under its ID above its
+    mark), `engine-tree-delete` (a directory of 200 files deleted while a file in it is edited and a
+    third member deletes a directory in it, and another directory deleted by two members apart: the
+    edit its only live content, the four tree deletes held, the same disk on every member),
+    `engine-sealed-cleanup` (a sealed peer back after V1 to V3 holds V1 and V3, then drops V1 at a
+    write holder's round-end cleanup), `engine-expiry` (a tombstone past the deletion horizon in
+    folder time forgotten by every key holder, and the old file brought back by a device that kept
+    it).
+  - The gate (`crates/engine/tests/converge.rs`): one test per gate scenario over seeds 0 to 4
+    (`LICKETYSYNC_ENGINE_SEEDS` for another count), the seeds on threads of their own, and the proof
+    for gap G2 (a crash-and-restart run twice in one process replays exactly). Every gate scenario
+    converges and passes the oracle on seeds 0 to 299 (`engine-drops` too, at 0.1);
+    `engine-drops-stress` (0.2) converges on none of seeds 0 to 9 within 600 s, its connections
+    dropping faster than a handshake and a first round get through (the engine before the port: one
+    in ten). R1's four mutants of the disk model (no copy bases, a path base that never moves, no
+    clearing beneath a received tree delete, no disk applied at all) each fail the gate scenarios.
+    The nightly job runs `engine-late-joiner` for 100 seeds and every other gate scenario for 300,
+    about 25 minutes at the per-seed times measured in release on the idle development machine (4.3
+    s for late-joiner, 1.3 s for clean, 1.1 s for pacing, 1.2 s for the other fourteen together).
+    The test profile optimizes the dependencies (`[profile.dev.package."*"] opt-level = 3`, the
+    workspace's own crates not, so coverage is measured as before): the gate took 389 s and 41
+    CPU-minutes without it, 185 s and 21 with it.
+  - Tests: unit tests over fake contexts (`src/tests.rs`, `testkit.rs`) and per module;
+    `src/rules.rs`, one test for each rule of `protocol.md` 4.7 the others leave (the pending-free
+    list freed at a round's end, within a minute with no connection, kept when named again, and
+    finished at open; a version still arriving left a head beside a local write with the old file in
+    place; a write over a conflict promoting its copies; the clock rule, a record from the future, a
+    folder kept closed that opens by itself, unproven meanwhile, after a step of the wall clock too;
+    a tree delete received clearing the bases beneath, and a path with no heads keeping the same
+    tree delete on every device whatever the order; a conflict copy keeping its slot while its chunk
+    is forgotten; a blob freed after a read error raising no corruption; a folder both devices kept
+    closed opening; a failed commit reporting skipped; a blob read again after a read error; the
+    open's changes and the probe's one commit); `src/regressions.rs`; integration tests:
+    `adversary.rs` (a flipped body and another folder's key are forged; a counter jump is no gap; a
+    garbage seal is opaque and its chunk kept; a chunk that will not open and a wrong stored length
+    are corrupt for their record, and a version whose chunk another record keeps is not on the disk;
+    an unsolicited reply and too many chunk requests close; a write holder under an honest device's
+    ID is equivocation, concurrent heads and the own-ID hint, nobody blamed; a record naming a chunk
+    nobody holds is held and waits with no issue; a page of forged records at the deepest path costs
+    a read holder one bounded check and closes; a replayed expired tree delete is ignored,
+    unverified at a read holder and noted by a write holder; a sealed peer replaying history grows
+    another only by genuine records, until a cleanup; a sealed peer that takes chunk requests and
+    never answers pins no hash), `outsider.rs` (REJECTED, `NO_COMMON_FOLDER`, nothing of folder A
+    crosses, folder B syncs over the same connection), and `converge.rs`. Line coverage as the gate
+    measures it (lines): keys 99.4%, protocol 98.3%, index 97.7%, engine 96.9%.
+  - Decisions for the plan: fixed-size chunks in phase 0 (FastCDC is phase 1), 1 MiB by default;
+    engine timer ids below 2^63, the harness's from 2^63; no secret in storage in phase 0; the
+    storage layout above; durability at the handler's one commit, the index's transactions committed
+    after it or dropped if it fails, and index work from phase C deferred to a commit of its own at
+    once; a store-failure pause keeps the folder proven and serving (G4), ends on a probe every
+    second and owes a round (G3), with no back-off, since nothing a peer does costs a check of every
+    stored record any more; the void rule kept, and beside it its residual: on a nearly full store,
+    a large genuine record that fails to store voids the rest of its reply, so forged records in the
+    reply's later pages go unjudged and unblamed (nothing of them is stored or served, and the owed
+    round judges them again); Checking is synchronous in `on_start` in phase 0 (G5); undecodable
+    stored bytes count toward Misconfigured (G6); phase 0's disk is the bases, a version on it once
+    every chunk it names is stored and has verified for it and its size checked, and a path with no
+    heads holding the greatest tree delete held at its tag, or nothing; a conflict copy's name is
+    the path, then ` (conflict `, the first eight hex digits of its record hash and `)`; Unreadable
+    only at the open, never retried within an instance; the wall clock in microseconds through
+    `Clock::wall_time_us`, whole seconds by default (a deviation in resolution only: the simulator
+    and the fake contexts tick in seconds); NFC is the caller's duty in phase 0 (G8); the engine
+    does not replay `protocol.md` section 8's connection vectors byte for byte, since its frame
+    timing differs, and tests the engine-owned outcomes instead (G12); a config holds at most 256
+    folders (`MAX_FOLDERS`), but a connection opens at most 64 (`MAX_OPEN_FOLDERS_PER_CONNECTION`, a
+    proof past them answered REJECTED with no retry, and one connection per peer), so a device that
+    shares more than 64 folders with one peer syncs only 64 of them with it, each refusal counted
+    and named in a local issue that names no peer and stays for the instance (follow-up for the
+    protocol spec: raise the limit or allow more connections); the Issues list keeps four classes
+    that never evict each other's entries, each repeat merged with a count and whatever a bound
+    keeps out counted in its class's overflow (TM-22, TM-10): local folder health (one entry per
+    folder and kind; `MAX_LOCAL_ISSUES` = `MAX_FOLDERS` × 12), remote records (at most 16 per
+    folder, the oldest evicted), peers that proved a key of a folder this device holds (at most 16,
+    the oldest evicted; the residual: a key holder minting device IDs can evict other key holders'
+    entries, counted), and every other peer (one entry per cause); a hash asked of one connection
+    may be asked of another once it has waited twice the Status interval (60 s) with no answer, the
+    slow request staying outstanding and a late chunk dropped and counted; `free_disk_bytes` 0; a 16
+    MiB send budget and a 50 ms poll; pushes are not budgeted; issues never carry paths; a restart
+    judges every wanted stored chunk again, once; a member cut from a peer stands in for a partition
+    that would never end; the engine scenarios' time: a chunk pass that met a `CHUNK_NOT_FOUND`
+    waits for a trigger evaluated at most once per `STATUS_INTERVAL` (30 s, 4.6), so in a five-peer
+    mesh writing at once every chunk is on every disk some 35 s in, and a scenario whose edits must
+    be made over versions on the editor's disk makes them after that.
+  - Spec questions raised: rounds start only at open and when owed (4.5), so on a connection whose
+    rounds all ended caught up the pending-free list (4.7 item 1) and a write holder's notes of
+    stale copies pushed to it (case (b)) wait for the next round, which may not come before a
+    reconnect: should a write holder owe a round when it notes a copy, and should frees also run
+    once a minute while no round is under way? And should a `ChunkRequest` have a reply deadline?
+    And a folder that becomes provable during a connection (one kept closed by the clock rule,
+    opening): it is proven on every connection, but a peer that proved it there already, and was
+    answered REJECTED, does not prove it again (3.5), so it opens with that peer only on the next
+    connection; should a late ACCEPTED, or a repeated proof, open it?
+  - For phase 1 (the security review's notes): every handler that runs a folder's transaction
+    applies every path still waiting for its chunks again, on top of the chunk book's full recompute
+    (round 1's #8), so a folder with many such paths pays per page and per chunk; and a counted
+    push's cursor is committed in a handler of its own, so small pushes can each cost a commit:
+    coalesce cursor writes when the store makes a commit costly. And (the third round's ruling) a
+    concurrent tree delete held at a tag but not its base is not covered by this device's next tree
+    delete there; it stays until a cleanup or its horizon. And, for the owner's review (the fourth
+    round's S3-A, kept as the spec's carve-out, no spec change in phase 0): a path whose live
+    records are all opaque keeps whatever its disk had (4.4, "leaves the path on disk as it is",
+    never removing what the device cannot judge), so two devices that held the same records in
+    another order can differ there; should such a path follow the rule for a path with no heads?
+    The oracle's (b′) needs no carve-out for it, since (b) refuses opaque records in every gate
+    scenario; a future scenario that plants them must make (b′) skip each path with no heads and an
+    opaque record.
+  - Dependencies: none new; the engine depends on the workspace's keys, protocol and index crates,
+    dev-depends on the simulator and `proptest`; the simulator depends on the keys crate;
+    `ci/geiger-baseline.txt`'s `engine` and `sim` lines now count the keys crate's dependencies.
+  - Reviewed 2026-10-25 to 2026-11-02; every finding fixed, every reviewer clean. First review: R1
+    acf6ea7dba91f39c4, R2 a4f2f0d74454fa1c9, security adcf4c0407088278e. Confirms (correctness,
+    security): ac5dd0f5520c255dc, ae2833fe6dcdb51d0 (round 1); a1fe4c708a703b44c,
+    a687b7d0e9e815b1a (rounds 2-3); a26a5d8d6929e1725, ac33792ec54cf90db (round 4), the last check
+    clean on 3797195. Author ae57b9dfb714d8e6f; the merge agent wrote this line.
 - The protocol and index crates on the latest-only index of the commit before (`protocol.md` §4.4
   to §4.7), and the keys crate's retired layout removed. On main the engine is the runtime only and
   the simulator depends on nothing of these crates, so both are unchanged; the engine's port
@@ -172,19 +535,19 @@ paths or the API also names the security-reviewer pass.
       if anything was dropped; and a store whose newest applied record lies more than a year ahead
       of the clock kept closed (`OpenReport::opens_at`), nothing removed for its counter.
     - Views (R10 to R12): heads in display order (one ordering function for heads and `S`) with
-      conflict copies and opaque records, record views, file content, `wanted` chunks per tier,
-      `names_chunk`, `extra_versions` (heads beyond one per path at a key holder, every head
-      counted, records beyond one per file ID at a sealed holder), and the fingerprint the
-      simulator compares. Holding a tree delete reads what lies beneath its directory, never every
-      path or base (TM-22; the engine port's security review, EP-S1: 51 ms a tree delete at 20 000
-      paths): `Index::paths_at_or_beneath(dir)` gives the paths `Index::paths` gives there, as two
-      ranges of the paths by name (`dir` itself, then `dir/` up to `dir0`, as the index by path
-      brackets them), for the engine to use in place of its walk of every path; and
-      `Txn::clear_bases_beneath` takes the slots there from a path-ordered index of the base slots,
-      a range rather than a scan. `Index::bases_beneath(dir)` gives those slots read-only, in path
-      order, each with its base record's path, its place and its record, whether or not the path
-      has heads, so that the engine's oracle can see a base without a head; the root, `""`, is
-      every slot (and every path for `Index::paths_at_or_beneath`).
+      conflict copies, opaque records and the tree deletes held at the path's tag
+      (`PathView::trees`, added with the engine, ascending by record hash), record views, file
+      content, `wanted` chunks per tier, `names_chunk`, `extra_versions` (heads beyond one per path
+      at a key holder, every head counted, records beyond one per file ID at a sealed holder), and
+      the fingerprint the simulator compares. `Index::bases_beneath(dir)` gives the base slots at or
+      beneath a directory read-only, in path order, each with its base record's path, its place and
+      its record, whether or not the path has heads, so that the engine's oracle can see a base
+      without a head, from a path-ordered index of the slots: two ranges by path (`dir` itself, then
+      `dir/` up to `dir0`), never a walk of every slot (TM-22; the engine port's security review,
+      EP-S1); the root, `""`, is every slot. (The range over the paths beneath a directory and
+      `Txn::clear_bases_beneath` that this commit first carried went with the engine commit that
+      orphaned them: the engine holding a tree delete reads only the paths where it dropped
+      records.)
     - Tests: the index's vectors of §8 item 6 (`outcomes.json`, a forged writer fault among them),
       item 7 whole (`heads.json`: every case that shows a write holder's heads checked on a read
       holder, the display-order pairs on a write holder too; the tree delete over 20 000 held files
@@ -214,10 +577,10 @@ paths or the API also names the security-reviewer pass.
       127 and 128 nibbles, with records held and dropped between pages (FC-2), and over one-record
       pages at the 64- and 65-nibble prefixes of one file ID holding 300 records (item 8's case of
       the fifteenth fixup); a reconciliation's pushes kept to their subtree (FC-2);
-      `Index::bases_beneath` with heads and without, at the root and beside `dir-x`; holding a tree
-      delete at 20 000 paths metered, the paths and base slots read bounded by twice what it dropped
-      and equal to what a walk finds (EP-S1); a round's cleanups paged by groups alone; one test per
-      rule the review's IR-1 named, and regressions named after the findings
+      `Index::bases_beneath` with heads and without, at the root and beside `dir-x`; the base slots
+      beneath a directory among 20 000 metered, read by range and equal to what a walk finds
+      (EP-S1); a round's cleanups paged by groups alone; one test per rule the review's IR-1 named,
+      and regressions named after the findings
       (`cleanup_group_acts_only_while_its_because_is_held_r1_b1`, `the_lost_update_r1_b2_s1`, the R2
       S-B step-7 vector in both orders, `expiry_by_the_folders_own_time_b1`,
       `a_stale_copy_is_verified_before_it_is_noted_c1_sc1`, the SC-2 and SR-1 cases, the IS-3, IR-3

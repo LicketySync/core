@@ -63,7 +63,10 @@
 //! reported as not converged, so a peer that never settles cannot hang the job.
 //! The `toy` module holds a set-union replicator that exercises every handler;
 //! the `scenarios` module names the runs the `licketysync-sim` binary offers
-//! the nightly job.
+//! the nightly job. The [`member`], [`world`] and [`oracle`] modules run the
+//! real engine: a [`member::Member`] is the engine plus a scripted workload,
+//! the world says who holds which key, and the oracle says what converged
+//! means for engines (the phase 0 gate).
 //!
 //! [`Peer`]: licketysync_engine::runtime::Peer
 //! [`Context`]: licketysync_engine::runtime::Context
@@ -71,13 +74,16 @@
 pub mod cli;
 pub mod contract;
 pub mod frame;
+pub mod member;
 pub mod network;
+pub mod oracle;
 pub mod rng;
 pub mod scenario;
 pub mod scenarios;
 pub mod storage;
 pub mod toy;
 pub mod trace;
+pub mod world;
 
 pub use network::{NetworkConfig, Partition, Probability};
 pub use scenario::{Fault, NetStats, Outcome, Scenario, Sim};

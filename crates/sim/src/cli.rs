@@ -74,8 +74,8 @@ pub fn run(args: &[String]) -> Report {
     match command {
         Command::List => {
             let mut text = String::new();
-            for s in scenarios::all() {
-                let _ = writeln!(text, "{:<14} {}", s.name, s.about);
+            for s in scenarios::all().iter().chain(scenarios::engine_scenarios()) {
+                let _ = writeln!(text, "{:<22} {}", s.name, s.about);
             }
             Report { code: 0, text }
         }
@@ -85,7 +85,11 @@ pub fn run(args: &[String]) -> Report {
 
 fn run_range(name: &str, first: u64, count: u64) -> Report {
     let Some(scenario) = scenarios::find(name) else {
-        let names: Vec<&str> = scenarios::all().iter().map(|s| s.name).collect();
+        let names: Vec<&str> = scenarios::all()
+            .iter()
+            .chain(scenarios::engine_scenarios())
+            .map(|s| s.name)
+            .collect();
         return Report {
             code: 2,
             text: format!(
@@ -154,12 +158,26 @@ mod tests {
     }
 
     #[test]
-    fn list_names_every_scenario() {
+    fn list_names_every_scenario_the_engine_ones_included() {
         let r = run(&args(&["list"]));
         assert_eq!(r.code, 0);
-        for s in scenarios::all() {
+        for s in scenarios::all().iter().chain(scenarios::engine_scenarios()) {
             assert!(r.text.contains(s.name), "{}", r.text);
             assert!(r.text.contains(s.about), "{}", r.text);
+        }
+        let unknown = run(&args(&["nope", "0", "1"]));
+        assert!(unknown.text.contains("engine-chaos"), "{}", unknown.text);
+    }
+
+    /// The bug: `list` printed a heading line before the engine scenarios,
+    /// whose first word the nightly job (`awk '{print $1}'`) took for a
+    /// scenario name to run.
+    #[test]
+    fn list_starts_every_line_with_a_scenario_name_for_the_nightly() {
+        let r = run(&args(&["list"]));
+        for line in r.text.lines() {
+            let name = line.split_whitespace().next().unwrap_or("");
+            assert!(scenarios::find(name).is_some(), "{line:?}");
         }
     }
 

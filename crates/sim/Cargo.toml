@@ -10,6 +10,9 @@ publish = false
 
 [dependencies]
 licketysync-engine = { path = "../engine" }
+# The engine scenarios' fixed device seeds and folder keys, and the oracle's
+# check that each stored blob matches its ciphertext hash (keys.md 3.2).
+licketysync-keys = { path = "../keys" }
 
 [lints]
 workspace = true

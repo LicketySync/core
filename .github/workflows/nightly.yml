@@ -167,12 +167,25 @@ jobs:
       # stops at the first such seed and prints it with the last events, which
       # is all that is needed to replay the run locally with the same
       # arguments. `broken` is the deliberately failing scenario that checks
-      # the reporting.
-      - name: Every scenario, seeds 0 to 19999
+      # the reporting. The `engine-*` scenarios, the phase 0 gate's, run the
+      # real engine: engine-late-joiner for 100 seeds, every other one for
+      # 300. Measured in release on the development machine, idle, one seed
+      # takes 4.3 s for engine-late-joiner, 1.3 s for engine-clean, 1.1 s for
+      # engine-pacing and 1.2 s for the other fourteen together, so these
+      # counts come to about 25 minutes there (the reviewers measured about
+      # twice that under load). That leaves a margin against the 60 of this
+      # job's 120 minutes the engine brief allows them, on a runner not yet
+      # measured. `engine-drops-stress` is left out: a stress run that not
+      # every seed passes, its pass rate reported by hand.
+      - name: Every scenario, seeds 0 to 19999 (engine scenarios 0 to 299 or 99)
         run: |
           set -euo pipefail
           cargo build --release -p licketysync-sim
-          scenarios=$(target/release/licketysync-sim list | awk '{print $1}' | grep -vx broken)
+          scenarios=$(target/release/licketysync-sim list | awk '{print $1}' | grep -vx -e broken -e engine-drops-stress)
           for s in $scenarios; do
-            target/release/licketysync-sim "$s" 0 20000
+            case "$s" in
+              engine-late-joiner) target/release/licketysync-sim "$s" 0 100 ;;
+              engine-*) target/release/licketysync-sim "$s" 0 300 ;;
+              *) target/release/licketysync-sim "$s" 0 20000 ;;
+            esac
           done

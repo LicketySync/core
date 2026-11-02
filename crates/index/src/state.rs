@@ -808,15 +808,6 @@ impl State {
         })
     }
 
-    /// The applied index records held at or beneath `dir`, by path: two
-    /// ranges of the paths (`dir` itself, then `dir/` up to `dir0`).
-    pub(crate) fn paths_at_or_beneath<'a>(
-        &'a self,
-        dir: &str,
-    ) -> impl Iterator<Item = (&'a String, &'a BTreeSet<RecordHash>)> + 'a {
-        at_or_beneath(&self.paths, dir).inspect(|_| self.read_beneath())
-    }
-
     /// Counts one entry a range at or beneath a directory read, in the
     /// tests.
     #[cfg(test)]

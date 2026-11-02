@@ -144,7 +144,8 @@ pub struct Written {
     pub records: Vec<(RecordHash, Option<u64>)>,
     /// The records the batch dropped.
     pub dropped: Vec<RecordHash>,
-    /// The paths whose heads changed.
+    /// The paths whose heads changed, and those of the base slots the
+    /// batch cleared (sorted, each once).
     pub paths: Vec<String>,
     /// Whether a cleanup was issued (at a round's end: the round owes
     /// another).
@@ -650,8 +651,20 @@ impl Txn<'_> {
             for h in &plan.noted {
                 self.named_note(h, clock_us);
             }
-            // The bases: this record at its path; what it clears goes.
+            // The bases: this record at its path; what it clears goes, and
+            // each cleared slot's path is reported with the paths whose heads
+            // changed, so that the engine names that path's disk again (a
+            // tree delete whose pruned vector misses a tree delete beneath it
+            // clears that one's slot and leaves it held, R3-1).
             for slot in &plan.clears {
+                let at = self
+                    .ix
+                    .s
+                    .bases
+                    .get(slot)
+                    .and_then(|h| self.ix.s.base_meta(h))
+                    .map(|m| m.path.clone());
+                out.paths.extend(at);
                 self.ix
                     .s
                     .set_base(slot.clone(), None, None, Some(&mut self.undo));
@@ -837,6 +850,11 @@ impl Txn<'_> {
         }
         written.cleanup = true;
         written.dropped = out.dropped;
+        // The paths of what its cleanups dropped, those they expired by
+        // raising the folder's time included (S3-C).
+        written.paths = out.paths;
+        written.paths.sort();
+        written.paths.dedup();
         Ok(written)
     }
 }

@@ -176,43 +176,6 @@ fn fault_names_the_writer_fault_of_an_opaque_record_i2() {
     }
 }
 
-#[test]
-fn clear_bases_beneath_clears_every_slot_but_the_directory_itself_i2() {
-    let mut d = Dev::writer(0xd0);
-    let dv = d.mkdir("dir");
-    d.put("dir/a", 1);
-    d.put("dir/b/c", 2);
-    let dash = d.put("dir-x", 3);
-    let other = d.put("other", 4);
-    for p in ["dir", "dir/a", "dir/b/c", "dir-x", "other"] {
-        assert_eq!(d.ix.bases(p).len(), 1, "{p}: each write is its path's base");
-    }
-    let mut txn = d.ix.begin();
-    txn.clear_bases_beneath("dir");
-    let (changes, pending) = txn.finish();
-    let cleared: Vec<_> = changes.bases.iter().filter(|(_, h)| h.is_none()).collect();
-    assert_eq!(cleared.len(), 2, "dir/a and dir/b/c");
-    d.store.commit(&changes).unwrap();
-    pending.commit();
-    assert_eq!(
-        d.ix.bases("dir"),
-        vec![(Place::Path, dv)],
-        "its own slot stays"
-    );
-    assert!(d.ix.bases("dir/a").is_empty() && d.ix.bases("dir/b/c").is_empty());
-    assert_eq!(
-        d.ix.bases("dir-x"),
-        vec![(Place::Path, dash)],
-        "not beneath"
-    );
-    assert_eq!(d.ix.bases("other"), vec![(Place::Path, other)]);
-    // A sealed holder keeps no bases: nothing to clear, nothing staged.
-    let mut s = Dev::sealed(0xa2);
-    let mut txn = s.ix.begin();
-    txn.clear_bases_beneath("dir");
-    assert!(txn.finish().0.is_empty());
-}
-
 /// `Index::bases_beneath` lists the base slots at or beneath a directory in
 /// path order, a path's own slot first, from the path-ordered index of the
 /// slots, whether or not the path has heads: the engine's oracle checks
@@ -444,4 +407,31 @@ fn written_reports_the_paths_its_records_touched_i2() {
     sorted.sort();
     sorted.dedup();
     assert_eq!(w.paths, sorted, "sorted, each once");
+}
+
+/// `PathView::trees`: the tree deletes held at a path's tag, by ascending
+/// record hash (what the engine puts at a path left with no heads, the
+/// greatest of them). Two writers delete `d` apart; a third device holds
+/// both, and `d` shows no heads and both tree deletes; a path beneath it,
+/// and one with a version, show none.
+#[test]
+fn a_path_view_lists_the_tree_deletes_held_at_its_tag() {
+    let (mut a, mut b) = (Dev::writer(0xd0), Dev::writer(0xd1));
+    a.mkdir("d");
+    a.put("d/x", 1);
+    b.take_all(&a);
+    let ta = a.tree_delete("d").records[0].0;
+    let tb = b.tree_delete("d").records[0].0;
+    let mut r = Dev::reader(0xa1);
+    r.take_all(&a);
+    r.take_all(&b);
+    let v = r.ix.path("d").unwrap();
+    assert!(v.heads.is_empty(), "both tree deletes, no version");
+    let mut want = vec![ta, tb];
+    want.sort_unstable();
+    assert_eq!(v.trees, want);
+    assert!(r.ix.path("d/x").unwrap().trees.is_empty());
+    let mut w = Dev::writer(0xd2);
+    w.put("f", 1);
+    assert!(w.ix.path("f").unwrap().trees.is_empty());
 }

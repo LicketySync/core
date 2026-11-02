@@ -221,8 +221,10 @@ pub const MAX_CHUNK: usize = 64 * 1024;
 /// Nothing tells the engine that the queue has drained, so while it is over
 /// budget the engine arms a timer and reads `unsent` again when it fires.
 /// Every frame is itself bounded by the peer's `max_message_size` (protocol
-/// spec, 2).
-pub const MAX_SEND_QUEUE: usize = 128 * 1024 * 1024;
+/// spec, 2). The constant is defined once, in the protocol crate, and the
+/// runtime re-exports it (protocol spec, section 5, "Time": the engine and
+/// the runtime import each constant rather than define their own).
+pub use licketysync_protocol::limits::MAX_SEND_QUEUE;
 
 /// Why bytes were not handed to the transport.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,16 +257,26 @@ pub trait Clock {
     /// intervals and knowing how long ago something happened in this process.
     fn now(&self) -> Instant;
 
-    /// The wall clock as this device believes it: seconds since the Unix epoch.
-    /// It may be wrong by any amount, may jump forwards or backwards between two
-    /// readings, and differs between devices. Its one use is expiry: whether a
-    /// key, grant or proof is still within its validity window, and whether a
-    /// suspension has ended, as this device sees the date (protocol spec, 3.5
-    /// and section 5, "Time"). Beyond expiry, no conflict, ordering or
-    /// acceptance decision may depend on it: an `mtime` or `written_at` in a
-    /// record is data the writer supplied, not a reading of this clock, and
-    /// nothing is ordered or compared by when this device thinks it happened.
+    /// The wall clock as this device believes it: seconds since the Unix
+    /// epoch. It may be wrong by any amount, may jump forwards or backwards
+    /// between two readings, and differs between devices. It serves the
+    /// Hello's `clock_days` for the clock rule (`protocol.md` 3.2), and,
+    /// through [`Clock::wall_time_us`], the counters of the records this
+    /// device writes (a floor under them: `max(hw + 1, clock)`), its check of
+    /// each record's counter against the clock rule, and its informational
+    /// `written_at` (4.4). It orders nothing: versions are ordered by their
+    /// vectors, and a deletion expires by the folder's own time, the latest
+    /// counter it holds, never by this clock (4.4, "Expiry"; TM-40). Later
+    /// phases use it for the LAN beacon window and the daily discovery hash.
     fn wall_time(&self) -> u64;
+
+    /// The same wall clock in microseconds since the Unix epoch (0 before
+    /// 1970), the unit of the records' counters (4.4, "Dots and counters").
+    /// A runtime with a finer clock overrides it; the default has whole
+    /// seconds, which the counters' `hw + 1` floor keeps strictly rising.
+    fn wall_time_us(&self) -> u64 {
+        self.wall_time().saturating_mul(1_000_000)
+    }
 }
 
 /// Wake-ups. A timer fires through [`Peer::on_timer`] at or after its deadline,
@@ -382,8 +394,11 @@ pub trait Storage {
 
 /// Random bytes. The daemon backs this with the operating system's generator
 /// through the approved crates; the simulator with its seeded one, so that a
-/// run replays. Key material is derived under the keys crate's rules; this is
-/// for jitter, nonces the protocol spec allows to be random, and sampling.
+/// run replays. Everything the engine draws comes through here: write secrets
+/// and device seeds (`keys.md` 1.1, 8.1), the random nonces of sealed
+/// metadata and folder proofs (`keys.md` 0, 3.4, 4), the Hello nonce, jitter
+/// and sampling. Keys below those are derived under the keys crate's rules,
+/// never drawn.
 pub trait Randomness {
     /// Fills `buf` with random bytes.
     fn fill_random(&mut self, buf: &mut [u8]);

@@ -20,7 +20,7 @@ use licketysync_protocol::limits::{CLEANUP_HORIZON, MAX_CLEANUP_ENTRIES, TOMBSTO
 use serde_json::{json, Value};
 
 use super::kit::{
-    chunk, cleanup, dev, forge, forged, garbage, round, sealed_file, write_key, Dev, SEC, T0,
+    chunk, cleanup, dev, forge, forged, garbage, round, sealed_file, write_key, Dev, DAY, SEC, T0,
 };
 use super::vectors::{check, h};
 
@@ -589,4 +589,44 @@ fn vector_cleanups() {
 #[test]
 fn cleanup_group_acts_only_while_its_because_is_held_r1_b1() {
     cleanup_group_acts_only_while_its_because_is_held();
+}
+
+/// A round's end whose cleanup raises the folder's time past a tree
+/// delete's horizon expires it, and reports its path with what it dropped,
+/// as accepting a record that expires it does, so that the engine names that
+/// path's disk again (the engine port's round-3 security review, S3-C; the
+/// engine's test is
+/// `rules::a_rounds_end_cleanup_that_expires_the_greater_tree_delete_leaves_the_other_as_the_base`).
+#[test]
+fn a_rounds_end_reports_the_paths_of_what_its_cleanup_expires_s3_c() {
+    let (d, [v1, _, v3]) = three_versions();
+    let mut w = Dev::writer(0xb0);
+    w.take(&d, &[v3]);
+    // Two tree deletes of `t`, 200 days apart.
+    let tree = |device: u8, counter: u64| {
+        let mut m = sealed_file("t", dev(device), counter);
+        m.kind = 2;
+        m.size = 0;
+        m.plain_hashes.clear();
+        m.deleted = true;
+        m.tree = true;
+        forge("t", &[], &m, &[])
+    };
+    let old = tree(0x61, T0 + 2 * SEC);
+    let new = tree(0x62, T0 + 200 * DAY);
+    assert_eq!(w.accept(&old).unwrap().judgement, Judgement::Held);
+    assert_eq!(w.accept(&new).unwrap().judgement, Judgement::Held);
+    // 400 days on, V1 is offered: a stale copy, noted, named at the
+    // round's end by a cleanup whose counter expires the older delete.
+    w.clock = T0 + 400 * DAY;
+    assert!(w.accept(d.signed(&v1)).unwrap().noted);
+    let written = w.end_round();
+    assert!(written.cleanup);
+    assert!(written.dropped.contains(&old.hash()), "expired");
+    assert!(w.holds(&new.hash()), "within its horizon");
+    assert_eq!(
+        written.paths,
+        vec!["t".to_owned()],
+        "the expired delete's path"
+    );
 }

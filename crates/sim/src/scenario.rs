@@ -91,6 +91,18 @@ pub enum Fault {
         /// When it has room again.
         until: Instant,
     },
+    /// The peer's wall clock jumps `secs` seconds ahead at `at` and stays
+    /// ahead (its monotonic clock does not move): a clock set forward, or a
+    /// long absence compressed into an instant. It applies whether or not
+    /// the peer runs then.
+    ClockStep {
+        /// Which peer.
+        peer: PeerId,
+        /// When.
+        at: Instant,
+        /// By how many seconds.
+        secs: u64,
+    },
     /// A connection between `a` and `b` opens at `at` if both run, no
     /// partition cuts them and none is open; a no-op otherwise. The way back
     /// after a peer hung up with `Transport::close`, which the simulator never
@@ -253,6 +265,7 @@ impl<P: Peer> Scenario<P> {
                     peer: None,
                     storage,
                     skew: self.skews.get(&id).copied().unwrap_or(Duration::ZERO),
+                    stepped: 0,
                     timers: BTreeMap::new(),
                     heard: BTreeSet::new(),
                     origin: Instant::ZERO,
@@ -280,6 +293,9 @@ struct Node<P> {
     peer: Option<P>,
     storage: SimStorage,
     skew: Duration,
+    /// Seconds the wall clock has stepped ahead (`Fault::ClockStep`), on top
+    /// of the skew.
+    stepped: u64,
     /// The generation each armed timer was armed with; a scheduled firing
     /// carrying any other generation is stale and ignored. Generations come
     /// from one counter for the whole run that is never reset, so a firing
@@ -437,6 +453,7 @@ enum FaultEvent {
     PartitionEnd(u64),
     DiskFull(PeerId),
     DiskFreed(PeerId),
+    ClockStep(PeerId, u64),
     /// From a `Fault::Reconnect`.
     Reconnect(PeerId, PeerId),
     /// The network's own reconnection after a drop, carrying the epoch the
@@ -663,6 +680,9 @@ pub struct Outcome {
     pub trace_hash: u64,
     /// The most recent events, oldest first.
     pub last_events: Vec<TraceEvent>,
+    /// What an oracle run after the simulation found wrong, if it was run
+    /// and found anything; the run then counts as not converged.
+    pub failure: Option<String>,
 }
 
 impl fmt::Display for Outcome {
@@ -691,6 +711,9 @@ impl fmt::Display for Outcome {
             self.in_flight,
             self.trace_hash,
         )?;
+        if let Some(why) = &self.failure {
+            writeln!(f, "oracle: {why}")?;
+        }
         writeln!(f, "last {} events:", self.last_events.len())?;
         for e in &self.last_events {
             writeln!(f, "  {e}")?;
@@ -744,11 +767,11 @@ impl<P: Peer> Sim<P> {
     }
 
     /// What `id`'s wall clock reads now: the scenario's wall epoch plus the
-    /// whole seconds of `id`'s skewed instant. `None` for an unknown peer; a
-    /// stopped peer's clock keeps running.
+    /// whole seconds of `id`'s skewed instant, plus its clock steps. `None`
+    /// for an unknown peer; a stopped peer's clock keeps running.
     #[must_use]
     pub fn wall_time(&self, id: PeerId) -> Option<u64> {
-        self.nodes.get(&id).map(|n| self.wall_of(n.skew))
+        self.nodes.get(&id).map(|n| self.wall_of(n.skew, n.stepped))
     }
 
     /// The running instance of `id`, or `None` when it is crashed, stopped or
@@ -865,6 +888,7 @@ impl<P: Peer> Sim<P> {
             in_flight: self.in_flight,
             trace_hash: self.trace.hash(),
             last_events: self.trace.last_events(),
+            failure: None,
         }
     }
 
@@ -943,9 +967,10 @@ impl<P: Peer> Sim<P> {
         }
     }
 
-    fn wall_of(&self, skew: Duration) -> u64 {
+    fn wall_of(&self, skew: Duration, stepped: u64) -> u64 {
         self.wall_epoch
             .saturating_add(self.now.saturating_add(skew).as_secs())
+            .saturating_add(stepped)
     }
 
     fn record(&mut self, peer: Option<PeerId>, kind: EventKind) {
@@ -1005,6 +1030,9 @@ impl<P: Peer> Sim<P> {
             Fault::Reconnect { a, b, at } => {
                 self.schedule_fault_event(at, FaultEvent::Reconnect(a, b));
             }
+            Fault::ClockStep { peer, at, secs } => {
+                self.schedule_fault_event(at, FaultEvent::ClockStep(peer, secs));
+            }
         }
     }
 
@@ -1039,7 +1067,9 @@ impl<P: Peer> Sim<P> {
             .saturating_add(node.skew);
         let mut cx = SimContext {
             now: local,
-            wall: wall_epoch.saturating_add(now.saturating_add(node.skew).as_secs()),
+            wall: wall_epoch
+                .saturating_add(now.saturating_add(node.skew).as_secs())
+                .saturating_add(node.stepped),
             local: id,
             connected,
             unsent,
@@ -1442,6 +1472,12 @@ impl<P: Peer> Sim<P> {
                 if let Some(node) = self.nodes.get_mut(&p) {
                     node.storage.set_full(true);
                     self.record(Some(p), EventKind::DiskFull);
+                }
+            }
+            FaultEvent::ClockStep(p, secs) => {
+                if let Some(node) = self.nodes.get_mut(&p) {
+                    node.stepped = node.stepped.saturating_add(secs);
+                    self.record(Some(p), EventKind::ClockStep(secs));
                 }
             }
             FaultEvent::DiskFreed(p) => {

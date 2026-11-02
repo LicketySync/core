@@ -979,19 +979,19 @@ fn tree_delete_record(
     forge(dir, &[], &m, &[])
 }
 
-/// Holding a tree delete costs what lies beneath its directory, never a
-/// walk of every path or base slot (TM-22). The engine used to walk every
-/// path the index holds, and `clear_bases_beneath` every base slot, 51 ms a
-/// tree delete at 20 000 paths (the engine port's security review, EP-S1).
-/// At a read holder with 20 000 files at `d/…`, a file `e` with ten files at
-/// `e/…`, and neighbours that sort beside `e`'s runs (`e-x`, `e.x`, `e0`),
-/// each file its path's base: the paths at or beneath a directory and its
-/// base slots are what a walk finds, read in as many entries as they hold;
-/// and after a tree delete of `e` that drops `e`'s eleven, the engine's two
-/// reads of what lies beneath `e` cost no more than twice what it dropped,
-/// and clear exactly `e/…`'s ten slots.
+/// The base slots at or beneath a directory are read from the path-ordered
+/// index of the slots, never a walk of every slot (TM-22; the engine port's
+/// security review, EP-S1): `bases_beneath`, which the engine's views and
+/// the simulator's oracle use. At a read holder with 20 000 files at `d/…`,
+/// a file `e` with ten files at `e/…`, and neighbours that sort beside `e`'s
+/// runs (`e-x`, `e.x`, `e0`), each file its path's base: the slots at or
+/// beneath a directory are what a walk finds, read in as many entries as
+/// they hold; and a tree delete of `e` that covers `e` and its ten, not its
+/// neighbours, drops those eleven. (What the engine reads when it holds a
+/// tree delete, only the paths where it dropped records, is the engine's
+/// test.)
 #[test]
-fn holding_a_tree_delete_reads_only_what_lies_beneath_it_ep_s1() {
+fn the_base_slots_beneath_a_directory_are_read_by_range_ep_s1() {
     use licketysync_protocol::record::at_or_beneath;
     let mut r = Dev::reader(0xa1);
     let mut paths: Vec<(String, u8)> = (0..20_000).map(|i| (format!("d/{i:05}"), 0x31)).collect();
@@ -1021,65 +1021,28 @@ fn holding_a_tree_delete_reads_only_what_lies_beneath_it_ep_s1() {
     for dir in ["e", "d", "e/3", "e-x", "d/0000", "nothing"] {
         let walk: Vec<&str> = r.ix.paths().filter(|p| at_or_beneath(p, dir)).collect();
         let _ = r.ix.s.beneath_read.take();
-        let got: Vec<&str> = r.ix.paths_at_or_beneath(dir).collect();
-        assert_eq!(got, walk, "{dir}: the paths a walk finds");
-        assert_eq!(
-            r.ix.s.beneath_read.take(),
-            got.len(),
-            "{dir}: read as many as there are"
-        );
-        let slots = r.ix.s.base_slots_at_or_beneath(dir).count();
-        assert_eq!(slots, got.len(), "{dir}: one slot a file");
+        let got: Vec<&str> = r.ix.bases_beneath(dir).map(|(p, _, _)| p).collect();
+        assert_eq!(got, walk, "{dir}: the slots a walk finds, one a file");
         assert_eq!(
             r.ix.s.beneath_read.take(),
             2 * got.len(),
             "{dir}: a file ID and its slot each"
         );
     }
-    // The root, `""`, is every path and every slot.
-    let every: Vec<&str> = r.ix.paths().collect();
-    assert_eq!(r.ix.paths_at_or_beneath("").collect::<Vec<_>>(), every);
-    assert_eq!(r.ix.bases_beneath("").count(), every.len());
+    // The root, `""`, is every slot.
+    assert_eq!(r.ix.bases_beneath("").count(), r.ix.paths().count());
     // A tree delete of `e` that covers `e` and `e/…`, not its neighbours.
     let tree = tree_delete_record("e", 0x44, T0 + 40_000, &[(0x32, T0 + 30_000)]);
     let a = r.accept(&tree).unwrap();
     assert_eq!(a.judgement, Judgement::Held);
     assert_eq!(a.dropped.len(), 11, "e and its ten");
-    // What the engine then reads: the versions left beneath `e` (none; the
-    // tree delete itself is not one), and the base slots to clear.
-    let _ = r.ix.s.beneath_read.take();
-    assert_eq!(r.ix.paths_at_or_beneath("e").count(), 0);
-    let paths_read = r.ix.s.beneath_read.take();
-    assert_eq!(
-        paths_read, 1,
-        "the tree delete's own path, and nothing else"
-    );
-    let mut txn = r.ix.begin();
-    txn.clear_bases_beneath("e");
-    let clear_read = txn.index().s.beneath_read.take();
-    assert_eq!(
-        clear_read,
-        2 * 11,
-        "e's eleven file IDs and their slots, through the index of slots by path"
-    );
+    let mut at: Vec<&str> = a.paths.iter().map(String::as_str).collect();
+    at.sort_unstable();
+    at.dedup();
     assert!(
-        paths_read + clear_read <= 2 * (a.dropped.len() + 1),
-        "bounded by the {} it dropped, among 20 014 paths",
-        a.dropped.len()
+        at.contains(&"e") && at.contains(&"e/9") && !at.contains(&"e-x"),
+        "{at:?}"
     );
-    let (changes, pending) = txn.finish();
-    let cleared: Vec<_> = changes.bases.iter().filter(|(_, h)| h.is_none()).collect();
-    assert_eq!(
-        cleared.len(),
-        10,
-        "e/…'s slots, not e's own or its neighbours'"
-    );
-    r.store.commit(&changes).unwrap();
-    pending.commit();
-    for p in ["e", "e-x", "e.x", "e0", "d/00000", "d/19999"] {
-        assert_eq!(r.ix.bases(p).len(), 1, "{p} keeps its base");
-    }
-    assert!((0..10).all(|i| r.ix.bases(&format!("e/{i}")).is_empty()));
 }
 
 /// 4.4 "Judging a tree delete without a walk" (`protocol.md` 8 item 7; the
@@ -1345,4 +1308,48 @@ fn the_lost_update_r1_b2_s1() {
 #[test]
 fn expiry_by_the_folders_own_time_b1() {
     expiry_b1();
+}
+
+/// A tree delete whose pruned vector misses a tree delete held beneath its
+/// directory clears that one's slot and leaves it held; the write reports
+/// the slot's path with the paths whose heads changed, so that the engine
+/// names that path's disk again (the engine port's round-3 review, R3-1;
+/// the engine's test is `rules::a_local_tree_delete_with_a_pruned_vector_keeps_the_disk_of_a_tree_delete_it_leaves`).
+#[test]
+fn a_tree_delete_reports_the_path_of_a_slot_it_clears_and_leaves_held_r3_1() {
+    let mut w = Dev::writer(0xb0);
+    // B, a tree delete of `d/sub` with the lowest counter beneath `d`.
+    let b = tree_delete_record("d/sub", 0x60, T0 + 1, &[]);
+    assert_eq!(w.accept(&b).unwrap().judgement, Judgement::Held);
+    // One file each beneath `d` from 32 more devices, later.
+    for i in 1..=32u8 {
+        let p = format!("d/f{i:02}");
+        let r = forge(
+            &p,
+            &[chunk(1)],
+            &sealed_file(&p, dev(i), T0 + 100 + u64::from(i)),
+            &[],
+        );
+        assert_eq!(w.accept(&r).unwrap().judgement, Judgement::Held);
+        w.apply(&p);
+    }
+    // The engine's disk: B is `d/sub`'s base.
+    let mut txn = w.ix.begin();
+    txn.set_base("d/sub", Place::Path, Some(b.hash())).unwrap();
+    let (changes, pending) = txn.finish();
+    w.store.commit(&changes).unwrap();
+    pending.commit();
+    w.clock = T0 + 1_000 * SEC;
+    let written = w.tree_delete("d");
+    assert!(w.holds(&b.hash()), "the pruned vector misses B: it stays");
+    assert!(w.ix.bases("d/sub").is_empty(), "its slot cleared");
+    assert!(
+        written.paths.iter().any(|p| p == "d/sub"),
+        "the cleared slot's path is reported: {:?}",
+        written.paths
+    );
+    let mut sorted = written.paths.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(written.paths, sorted, "sorted, each once");
 }

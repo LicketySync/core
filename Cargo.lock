@@ -355,6 +355,13 @@ version = "0.0.1"
 [[package]]
 name = "licketysync-engine"
 version = "0.0.1"
+dependencies = [
+ "licketysync-index",
+ "licketysync-keys",
+ "licketysync-protocol",
+ "licketysync-sim",
+ "proptest",
+]
 
 [[package]]
 name = "licketysync-index"
@@ -406,6 +413,7 @@ name = "licketysync-sim"
 version = "0.0.1"
 dependencies = [
  "licketysync-engine",
+ "licketysync-keys",
 ]
 
 [[package]]

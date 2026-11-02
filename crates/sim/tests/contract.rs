@@ -17,8 +17,11 @@
 //! each case named after what it pins, then the `contract` probers over a few
 //! seeds.
 
+// The simulator library uses the keys crate for its engine scenarios; these
+// tests of the toy peers do not.
 use core::cell::RefCell;
 use core::time::Duration;
+use licketysync_keys as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 

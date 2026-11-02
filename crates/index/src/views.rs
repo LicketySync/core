@@ -20,7 +20,7 @@ use licketysync_protocol::record::{Chunk, Dot, Kind, Meta};
 
 use crate::index::{Index, Txn};
 use crate::state::BaseRecord;
-use crate::store::{BaseSlot, Place};
+use crate::store::Place;
 
 /// One head of a path, in display order (4.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +57,10 @@ pub struct PathView {
     /// Opaque records live at the path's tag, after every head, by ascending
     /// record hash: shown as updates this release cannot read.
     pub opaque: Vec<RecordHash>,
+    /// The tree deletes held at the path's tag (the path is their
+    /// directory), by ascending record hash: what the engine puts on its disk
+    /// at a path left with no heads, the greatest of them.
+    pub trees: Vec<RecordHash>,
 }
 
 /// What a record is to this device.
@@ -196,16 +200,18 @@ impl Index {
     fn view_at(&self, tag: &PathTag, path: &str) -> PathView {
         let mut heads: Vec<(RecordHash, &Meta)> = Vec::new();
         let mut opaque = Vec::new();
+        let mut trees = Vec::new();
         for h in self.s.at_tag.get(tag).into_iter().flatten() {
             let Some(held) = self.s.held.get(h) else {
                 continue;
             };
             match held.meta() {
                 Some(m) if !m.tree => heads.push((*h, m)),
-                Some(_) => {}
+                Some(_) => trees.push(*h),
                 None => opaque.push(*h),
             }
         }
+        trees.sort_unstable();
         heads.sort_by_key(|(h, m)| display_rank(h, m));
         let current = heads.iter().find(|(_, m)| !m.deleted).copied();
         let conflict_copies = match current {
@@ -232,6 +238,7 @@ impl Index {
                 })
                 .collect(),
             opaque,
+            trees,
         }
     }
 
@@ -247,18 +254,6 @@ impl Index {
         self.s
             .paths
             .iter()
-            .filter(|(_, hs)| self.holds_a_version(hs))
-            .map(|(p, _)| p.as_str())
-    }
-
-    /// The paths at or beneath `dir` that [`Index::paths`] gives, in path
-    /// order: two ranges of the paths by name (`dir` itself, then `dir/` up
-    /// to `dir0`; the root, `""`, is every path), so that the engine holding
-    /// a tree delete of `dir` reads what lies beneath it, never every path
-    /// (TM-22).
-    pub fn paths_at_or_beneath<'a>(&'a self, dir: &str) -> impl Iterator<Item = &'a str> + 'a {
-        self.s
-            .paths_at_or_beneath(dir)
             .filter(|(_, hs)| self.holds_a_version(hs))
             .map(|(p, _)| p.as_str())
     }
@@ -506,27 +501,5 @@ impl Txn<'_> {
             Some(&mut self.undo),
         );
         Ok(())
-    }
-
-    /// Clears every base slot at or beneath `dir` but its own `Place::Path`
-    /// slot: what the engine does when it applies a tree delete of `dir`,
-    /// whose own base it then names. The slots there are ranges of a
-    /// path-ordered index of the slots, so this reads what lies beneath
-    /// `dir`, never every slot (TM-22).
-    pub fn clear_bases_beneath(&mut self, dir: &str) {
-        let Some(own) = self.tag(dir) else {
-            return;
-        };
-        let slots: Vec<BaseSlot> = self
-            .ix
-            .s
-            .base_slots_at_or_beneath(dir)
-            .map(|(_, slot, _)| slot)
-            .filter(|(t, place)| !(*t == own && *place == Place::Path))
-            .cloned()
-            .collect();
-        for slot in slots {
-            self.ix.s.set_base(slot, None, None, Some(&mut self.undo));
-        }
     }
 }
