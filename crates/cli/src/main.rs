@@ -5,7 +5,7 @@
 //! The `licketysync` command line.
 //!
 //! Status: skeleton. Commands planned: status, doctor, issues, peers, folders,
-//! keys, owner, devices, config, ignore, schedule, scrub, relay, decrypt.
+//! keys, devices, config, ignore, schedule, scrub, relay, decrypt.
 
 // The command line is the one crate that talks to a terminal on purpose.
 #![allow(clippy::print_stdout, clippy::print_stderr)]

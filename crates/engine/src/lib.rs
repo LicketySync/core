@@ -6,16 +6,21 @@
 //! per peer over the runtime traits, keeps one index per folder, fetches and
 //! serves chunks, and writes and reads files in the simulator's file model.
 //!
-//! Status: phase 0. The engine runs the real `licketysync-keys`,
+//! Status: the engine runs the real `licketysync-keys`,
 //! `licketysync-protocol` and `licketysync-index` crates on the
-//! deterministic simulator (`licketysync-sim`): the latest-only index, its
-//! exchange and the phase 0 gate (simulated peers converge). The file system
-//! (scanning, journals, the path resolver, atomic writes), conflict copies'
-//! names on a real disk, the archive and the deletion brake, `FastCDC`,
-//! compression, `SQLite`, selective sync, the local API and libp2p are later
-//! phases'. The plan ("Lickety-Sync: Project Plan") is the specification;
-//! `spec/` carries the protocol, the keys and the threat model as they are
-//! written down.
+//! deterministic simulator (`licketysync-sim`), where every gate scenario
+//! converges: the latest-only index and its exchange, with fixed-size chunks
+//! and an in-memory store. It touches no real disk or network yet. By the
+//! plan's roadmap, phase 1 ("LAN sync from the command line") brings scanning
+//! and watching the disk, conflict copies on a real disk, ignore files and a
+//! per-path sync status, with LAN discovery and QUIC in `licketysync-net`;
+//! `FastCDC` or another keyed chunker replaces the fixed-size chunks from
+//! phase 1 (`keys.md` §3.2) and `SQLite` the in-memory store (the plan's
+//! decision of 2026-10-14). The local API comes in phase 3; selective sync,
+//! versioning and the archive come in phase 5; and the roadmap does not yet
+//! place compression, the change journals or the deletion brake. The plan
+//! ("Lickety-Sync: Project Plan") is the specification; `spec/` carries the
+//! protocol, the keys and the threat model as they are written down.
 //!
 //! # Shape
 //!

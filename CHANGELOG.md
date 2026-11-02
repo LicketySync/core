@@ -6,6 +6,41 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The docs now describe phase 1, "LAN sync from the command line", since phase 0's gate (simulated
+  peers converge; spec published) passed on 2026-11-02, its review recorded in `gates/phase-0.md`
+  (the owner's rule of 2026-10-25: the docs describe the current phase and the phases ahead, and
+  phase history lives here and in git). The README's Status opens with phase 1, its gate (two Linux
+  machines pass the fault-test suite) and what it brings, from the plan's roadmap, with SQLite (the
+  plan's decision of 2026-10-14) and FastCDC or another keyed chunker (`keys.md` §3.2); then it says
+  what main holds (the four specifications, the simulator, and the keys, protocol, index and engine
+  crates), that every gate scenario ends with the same records on every peer and the same files on
+  every read and write peer, that phase 0's gate passed with its record in `gates/phase-0.md`, and
+  that nothing syncs on a real disk or over a real network yet. In the crate table, the engine's row
+  describes what the engine holds now and what phase 1 and later add, in place of FastCDC, scanning,
+  versioning and the deletion brake, which it does not hold yet; the simulator's row no longer says
+  "phase 0's gate"; and `net`, `daemon`, `cli` and `decrypt` are marked as placeholders. The
+  engine's row cites TM-41 (conflict copies) and the sources of FastCDC or another keyed chunker
+  (`keys.md` §3.2) and SQLite (the plan's decision of 2026-10-14); the simulator's row says what its
+  oracle checks (the same records on every peer, the same files on every read and write peer); the
+  keys row names the libp2p identity and DHT key, discovery hashes and the linked-device code and
+  proof, which the crate holds. The README's opening says that the program contacts no server you
+  did not turn on, that "your own devices may relay for each other; no other relay is used unless
+  you turn it on" (`threat-model.md` §2), that only devices holding one of a folder's keys can join
+  it, and that anyone who holds a key can pass it on, in place of "never contacts a server", "no
+  relay you did not turn on" and "only the people you give a folder's key". The
+  specification bullet, and `SECURITY.md`, count TM-1 to TM-43, as `spec/threat-model.md` does since
+  TM-43 was added on 2026-10-25. `SECURITY.md` takes reports through GitHub's private vulnerability
+  reporting only, since licketysync.com receives no mail, and says an address will be listed once
+  one exists. The engine crate's doc (`crates/engine/src/lib.rs`) gives the same status in place of
+  "Status: phase 0."; the simulator's doc and its `Cargo.toml` description say that its gate
+  scenarios check that simulated peers converge, in place of "Phase 0's gate"; and the command
+  line's planned commands (`crates/cli/src/main.rs`) no longer list `owner`, since there has been no
+  owner key since 2026-10-18. The documentation site's new page, "Risks of using Lickety-Sync", is
+  in the site repository's own commit. Comments and docs only; no code changes.
+  - Reviewed 2026-11-02 by a053ca395ad2a83f3 (accuracy) and a759a3e97142a0717 (clarity and the
+    docs rule), with the site's risks page, over three rounds; every finding fixed, and both clean
+    once the merge agent removed a stray rebase line and set the relay wording to
+    `threat-model.md` §2. Author af0eea5d74ac27f5b; the merge agent wrote this line.
 - Phase 0 gate review: its record, and the tests and the rule its findings ask for. The phase 0
   gate record of 2026-11-02, added as `gates/phase-0.md` (the threat-model §6 walk and
   security-reviewer pass over 55ddfb4, and its re-review of this change), found no blocker and two

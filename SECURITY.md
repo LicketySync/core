@@ -7,8 +7,9 @@ work until it is fixed.
 ## Reporting
 
 Report privately through GitHub's "Report a vulnerability" button on this
-repository (Security advisories), or by email to security@licketysync.com once
-the domain is live. Please include steps to reproduce and the version or commit.
+repository (Security advisories). The project has no email address for reports
+yet; one will be listed here once it exists. Please include steps to reproduce
+and the version or commit.
 
 We acknowledge reports within 72 hours and aim to ship a fix within 90 days,
 sooner for anything that exposes content or keys. We will credit you in the
@@ -29,7 +30,7 @@ change or delete anything in it, and removing someone means sharing the folder
 again under new keys; the threat model states this as the design, not as a
 vulnerability. The threat model in `spec/threat-model.md` lists the adversaries
 we design against, the ones we explicitly do not, what stays visible to whom,
-and the numbered requirements (TM-1 to TM-42, of which TM-16, TM-19, TM-34,
+and the numbered requirements (TM-1 to TM-43, of which TM-16, TM-19, TM-34,
 TM-36 and TM-38 are retired) the code is reviewed against; `spec/suites.md`
 lists every algorithm, parameter and crate that may perform cryptography. A
 report that shows one of those requirements unmet is a vulnerability.

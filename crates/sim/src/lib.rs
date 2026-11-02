@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Deterministic simulator: many peers in one process over a simulated clock and
-//! network, seeded, with fault injection. Phase 0's gate: simulated peers
-//! converge.
+//! network, seeded, with fault injection. Its gate scenarios check that
+//! simulated peers converge.
 //!
 //! Design. A [`Scenario`] names a seed, a number of peers, a factory that builds
 //! each peer (any type implementing the engine's [`Peer`] trait), the network's
@@ -66,7 +66,7 @@
 //! the nightly job. The [`member`], [`world`] and [`oracle`] modules run the
 //! real engine: a [`member::Member`] is the engine plus a scripted workload,
 //! the world says who holds which key, and the oracle says what converged
-//! means for engines (the phase 0 gate).
+//! means for engines (the check every gate scenario ends with).
 //!
 //! [`Peer`]: licketysync_engine::runtime::Peer
 //! [`Context`]: licketysync_engine::runtime::Context

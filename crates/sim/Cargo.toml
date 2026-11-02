@@ -1,6 +1,6 @@
 [package]
 name = "licketysync-sim"
-description = "Deterministic simulator: many peers in one process over a simulated clock and network, seeded, with fault injection. Phase 0's gate: simulated peers converge."
+description = "Deterministic simulator: many peers in one process over a simulated clock and network, seeded, with fault injection. Its gate scenarios check that simulated peers converge."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
