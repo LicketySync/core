@@ -7,7 +7,7 @@ version = "0.0.1"
 edition = "2021"
 license = "MPL-2.0"
 repository = "https://github.com/licketysync/core"
-rust-version = "1.85"
+rust-version = "1.88"
 
 # One lint policy for every crate. The Engineering practice section of the plan
 # is the source of truth; these are the mechanical parts of it.

@@ -12,7 +12,13 @@
 # dependency compiles in that it does not scan; that exit is accepted when the
 # count it prints last matches the warnings and each of them names either a
 # file with a known non-Rust extension (below: documentation such as a
-# README.md through include_str!, or a C or C++ source for a build script) or
+# README.md through include_str!, or a C or C++ source for a build script), a
+# DER file of ring, rustls-webpki or rustls-pki-types in that package's own
+# directory in the registry, $CARGO_HOME/registry/src/<index>/<package>-<version>/
+# with <version> a semver version (the algorithm identifiers and key templates
+# they embed with include_bytes!; another package's .der fails, and so does one
+# in a directory of that name anywhere else, nested inside another package for
+# one, or under a name that only begins like one, ring-0x-1.0.0 for one), or
 # a generated Rust file the baseline accepts by producing package and file
 # name. Any other unscanned file fails, Rust or not (an .rs.in, an .inc or an
 # assembly file can hide code), as do a package with no metrics, any other exit
@@ -35,6 +41,14 @@ baseline=ci/geiger-baseline.txt
 # The extensions of files cargo-geiger may leave unscanned without a line in the
 # baseline. Not Rust, and not assembly.
 known_ext=' md markdown txt html svg c cc cpp cxx h hpp '
+# The packages whose .der files are accepted, by registry directory name (the
+# package, a dash and a semver version: three numbers, then an optional
+# pre-release or build suffix), and the registry's source directory they must
+# sit in, as cargo names it:
+# $CARGO_HOME (else ~/.cargo) and registry/src, with no doubled slash. A
+# relative CARGO_HOME matches no path, so its .der files fail.
+der_packages='ring|rustls-webpki|rustls-pki-types'
+registry=$(printf '%s/registry/src' "${CARGO_HOME:-$HOME/.cargo}" | tr -s /)
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target}/geiger"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -98,6 +112,9 @@ for manifest in crates/*/Cargo.toml; do
       fi
       base=${path##*/}
       if [[ $base == *.* && $known_ext == *" ${base##*.} "* ]]; then
+        continue
+      fi
+      if [[ $base == *.der && $path =~ ^"$registry"/[^/]+/($der_packages)-[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?/ ]]; then
         continue
       fi
       if [[ $path =~ /build/([A-Za-z0-9_-]+)-[0-9a-f]{16}/out/([A-Za-z0-9_.-]+)$ ]] &&

@@ -162,6 +162,9 @@ need_installs cargo-cyclonedx "$CARGO_CYCLONEDX" "cargo-cyclonedx@$CARGO_CYCLONE
 need_line ci/geiger-baseline.txt '^cargo-geiger ' "cargo-geiger $CARGO_GEIGER"
 need_line $wf/ci.yml '^[[:space:]]*image:[[:space:]]*semgrep/' "image: semgrep/semgrep:$SEMGREP@$SEMGREP_IMAGE_DIGEST"
 need_line $wf/ci.yml '^[[:space:]]*version:' "version: v$CODECOV_CLI"
+# net-cross's NDK and Xcode, which only CI uses.
+need_line $wf/ci.yml '^[[:space:]]*ANDROID_NDK:' "ANDROID_NDK: $ANDROID_NDK"
+need_line $wf/ci.yml '^[[:space:]]*XCODE:' "XCODE: \"$XCODE\""
 # semgrep, at the version of CI's image.
 if ! have=$(semgrep --version 2> /dev/null) || [ "$have" != "$SEMGREP" ]; then
   echo "semgrep $SEMGREP is needed (found: ${have:-none}; $rule); install it for this user:" >&2

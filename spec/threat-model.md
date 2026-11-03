@@ -134,6 +134,16 @@ no folder key ever travels inside the protocol (TM-33, section 5); link one day'
 to the next without the folder ID, a stable address or a stable published identifier (TM-24);
 impersonate a peer, because peers authenticate by key, not address (TM-32).
 
+What a network observer who answers at an address can also learn (recorded 2026-11-03): **a
+dialer's libp2p identity**. `net` dials with the peer ID it expects, but `libp2p-tls` builds its
+client configuration without one, so the dialer's TLS client certificate, which carries its
+identity, goes to whichever server answers at the address, and only after the handshake does the
+dialer compare the identity the server proved with the one it expected and close (`WrongPeerId`).
+Whoever can answer at an address a device dials (a spoofed LAN beacon's address, a poisoned DHT
+record) therefore learns the dialing device's stable identity, though not that it holds any folder.
+A phase 1 item: a dial path that gives the expected peer ID to `libp2p-tls`'s certificate verifier,
+so that the handshake fails before the dialer's certificate is sent.
+
 ### 3.2 A peer holding a valid key
 
 A device that holds one of the folder's three keys. Holding a key is the access: there is no owner,
@@ -419,7 +429,14 @@ QUIC, whose three-to-one anti-amplification limit stays at its default (TM-22), 
 (TM-24). A panic on malformed input is made unlikely and caught before merge rather than made
 impossible: every decoder is fuzzed, `unwrap`, `expect` and `panic` are denied, and indexing on
 untrusted data warns and the gate treats warnings as errors (TM-3, TM-23, rust-libp2p 2026 QUIC
-panic). Denial of service by sheer traffic volume is out of scope (3.12); a write holder's flood is
+panic). What it can still do to the transport as phase 0 builds it, each a phase 1 item required
+before 1.0 (TM-22's three residuals; owner, 2026-11-03): cost the device a QUIC connection and a TLS
+server handshake per Initial it sends, whatever the limits, at its own send rate, so that memory and
+CPU follow that rate and connections are refused while they last; hold every pending slot with
+connections that never finish their handshake, locking every inbound peer out for the handshake
+timeout (10 s) at a time; and, as one TCP peer that delays its yamux pings, grow its connection's
+receive window toward yamux's 1 GiB ceiling. Denial of service by sheer traffic volume is out of
+scope (3.12); a write holder's flood is
 section 3.6's.
 
 ### 3.11 Supply-chain and update attackers
@@ -535,7 +552,11 @@ keys are held in types that zeroize on drop, whose `Debug` output is redacted, a
 formatted into a log, error message or panic payload; logs redact folder IDs and addresses by
 default. Stops secrets leaking through crash reports, log files and debugging output, which is how
 the Tahoe-LAFS and BitTorrent Sync analyses found capability strings in the clear. Enforced by `keys`
-(types) and `daemon` (logging); the rules are in `suites.md` section 4.
+(types) and `daemon` (logging); the rules are in `suites.md` section 4. One recorded deviation
+(2026-11-03, to raise upstream): beneath `net`, `libp2p-identity` 0.3.1 keeps the libp2p identity's
+secret key in types that are not wiped on drop and are cloned into the TLS and QUIC configurations
+(`suites.md` 4.1); `net` refuses to build a node while `SSLKEYLOGFILE` is set, since `libp2p-tls`
+gives every TLS configuration rustls's key-log writer.
 
 **TM-7. No `unsafe` outside the platform-FFI crates.** The workspace lint `unsafe_code = "forbid"`
 applies everywhere; a platform-FFI crate opts out explicitly and is covered by Miri nightly;
@@ -757,9 +778,35 @@ the Hello's agreed limits, and is dropped with its connection; no table grows wi
 writers or records in a folder, since an index request carries one cursor and a reconcile request
 one prefix, and the one table that outlives a connection, per-peer state, holds at most
 `MAX_PEER_STATES` entries per folder (`protocol.md` §4.5); libp2p's connection, stream and transient
-connection limits are set and tested under a flood; QUIC's three-to-one anti-amplification limit
-stays at its default; and the advisory feed in CI (cargo-audit, daily) catches the next such
-advisory in a dependency. Stops resource exhaustion through unbounded streams, connections and
+connection limits are set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is
+residual (a) below); QUIC's three-to-one anti-amplification limit stays at its default; and the
+advisory feed in CI (cargo-audit, daily) catches the next such
+advisory in a dependency. Three residuals of the transport as phase 0 builds it (`net` on
+`libp2p-quic` 0.14 and `libp2p-yamux` 0.48; the security review of 2026-11-03), each a phase 1 item
+that the owner requires before 1.0 ("I want safety limits in version 1.0, no matter what. It is fine
+to pass until phase 1, but it must not get lost.", 2026-11-03): (a) **QUIC Initials cost per
+Initial, not per limit.** `libp2p-quic` accepts every Initial quinn hands it before the swarm's
+limits are asked, so each one, from an attacker who never answers, costs a QUIC connection and a TLS
+server handshake (the X25519MLKEM768 encapsulation and the certificate's signature) whatever
+`max_pending_incoming` is, until it is refused and drained or times out; the review measured 10 000
+Initials at about 412 MB of memory (about 41 KB each) and seconds of CPU, and connections refused
+while they lasted. The cost therefore scales with the attacker's send rate; quinn's Retry (address
+validation before any state) or its incoming-connection cap would bound it, and `libp2p-quic`
+exposes neither. **Required before 1.0 (owner, 2026-11-03)**; phase 1 item "QUIC Initial limit":
+Retry under load or a lower incoming cap, through an upstream change or QUIC configured by `net`
+itself, and a QUIC Initial flood test with the bound it then states. (b) **One pending counter for
+every source.** `max_pending_incoming` (32) connections that never finish their handshake, TCP
+sockets that never speak or QUIC handshakes never answered, lock every inbound peer out for the
+handshake timeout (10 s), and an attacker can renew them for as long as it likes. **Required before
+1.0 (owner, 2026-11-03)**; phase 1 item "pending lockout": a per-address pending limit, budgets per
+transport, and Retry when the pending slots are full. (c) **yamux's window on TCP.** `libp2p-yamux`
+0.48 does not set yamux's connection receive window, whose ceiling stays yamux's 1 GiB; the window
+auto-tunes from the round trip yamux measures with its pings and the rate this side reads, so a
+remote that delays its ping answers inflates the estimate and can grow one connection's window, and
+what it may send unread, toward that ceiling. **Required before 1.0 (owner, 2026-11-03)**; phase 1
+item "yamux window": yamux configured by `net` with `max_connection_receive_window`, or an upstream
+setter. QUIC's windows are set (`net`'s limits, 4 MiB a connection). Stops resource exhaustion
+through unbounded streams, connections and
 registrations, and amplification through QUIC (go-libp2p and rust-libp2p 2022; rendezvous 2026). The
 stated costs: any Hello that passes its checks costs one Ed25519 signature (the DeviceProof sent in
 answer) and one verification; a FolderProof from a peer with no key to the folder costs a lookup in

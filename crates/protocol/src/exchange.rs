@@ -51,8 +51,13 @@ pub type Key = [u8; KEY_BYTES];
 /// digit by which the set-digest trie descends at depth `i` (4.5).
 #[must_use]
 pub fn nibble(key: &Key, i: usize) -> u8 {
-    key.get(i / 2)
-        .map_or(0, |b| if i % 2 == 0 { b >> 4 } else { b & 0x0f })
+    key.get(i / 2).map_or(0, |b| {
+        if i.is_multiple_of(2) {
+            b >> 4
+        } else {
+            b & 0x0f
+        }
+    })
 }
 
 /// A subtree of the set-digest trie (4.5): the leading nibbles of a record's
@@ -129,7 +134,11 @@ impl Prefix {
     /// Writes nibble `n` (at most 15) at position `i`, which must be 0.
     fn set(&mut self, i: usize, n: u8) {
         if let Some(b) = self.packed.get_mut(i / 2) {
-            *b |= if i % 2 == 0 { n << 4 } else { n & 0x0f };
+            *b |= if i.is_multiple_of(2) {
+                n << 4
+            } else {
+                n & 0x0f
+            };
         }
     }
 

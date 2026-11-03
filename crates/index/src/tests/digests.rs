@@ -869,7 +869,7 @@ fn records_by_key_over_shared_tags_cleanups_and_changes_fc2() {
                 .hash()
         }));
         round += 1;
-        if round % 3 == 0 {
+        if round.is_multiple_of(3) {
             let in_sub: Vec<RecordHash> =
                 d.ix.s
                     .held

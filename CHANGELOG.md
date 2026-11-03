@@ -6,6 +6,205 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- `licketysync-net`, spike A of the phase 0 spikes (`brief-phase0-spikes.md`, pass conditions A1 to
+  A4): two peers connect over QUIC and over TCP, each connection TLS 1.3 on `aws-lc-rs` with
+  X25519MLKEM768 offered first (`suites.md` 2.6), each side's peer ID the one derived from its
+  device seed and proved in the handshake, both agree on `/licketysync/sync/1`, and a byte stream
+  goes through in order. The engine is not wired to it and no daemon runs (phase 1).
+  - The crate: `identity` (the keys crate's `Libp2pIdentity` as a libp2p keypair and peer ID, never
+    generated from randomness: `libp2p-identity`'s `rand` feature is off, so its generators do not
+    exist in this build, and `check_peer`, which refuses a peer whose identity key is not canonical
+    or is of small order, through the keys crate's new `device::check_peer_identity_key`);
+    `provider` (installs `aws_lc_rs::default_provider()` as the process default, or accepts an
+    installed one only when its key-exchange groups and cipher suites are that provider's own,
+    compared by address, not by name);
+    `limits` (every bound in it set explicitly and checked, TM-22, its defaults pinned by a test; the
+    library defaults left in place are TCP's listen backlog, 1024, QUIC's keep-alive, 5 s, the
+    swarm's event buffers and its dial concurrency, 8, and a stream's protocol negotiation timeout,
+    10 s, `libp2p-swarm`'s `SubstreamProtocol` default, which `sync` keeps);
+    `node` (the swarm: QUIC through `libp2p-quic`, its configuration built in a function of its own
+    whose test checks that each QUIC bound comes from `limits`, and TCP with exactly one security
+    protocol, `/tls/1.0.0`, and one muxer, yamux, with a handshake timeout that `libp2p`'s
+    `SwarmBuilder` does not set, so an idle connection cannot hold a pending slot for ever; the
+    connection limits, a process-memory limit, and the sync behaviour; it refuses to build while
+    `SSLKEYLOGFILE` is set, since `libp2p-tls` gives every configuration rustls's `KeyLogFile`,
+    TM-6); `sync` (a behaviour of its own, not the alpha `libp2p-stream`: it opens and accepts
+    streams of the protocol IDs it speaks, newest first, today only `/licketysync/sync/1`, at most
+    one inbound stream over a connection's life, refused in negotiation past it; it refuses a
+    connection whose peer fails `check_peer`, and answers a request on a connection that is not
+    established at once); `pieces` (a stream read as the engine's runtime contract hands bytes over:
+    in order, at most `MAX_CHUNK`, 64 KiB, imported from the engine, and the end reported).
+    `examples/spike.rs` is A1's check by hand on 127.0.0.1, with a reasoned allow for printing; it
+    dials exactly `/ip4/127.0.0.1/tcp/<port>/p2p/<peer ID>` or
+    `/ip4/127.0.0.1/udp/<port>/quic-v1/p2p/<peer ID>` and nothing else (its parser's tests run with
+    the crate's).
+  - Tests that fail without the change, all with deadlines and no sleeps (`tests/transport.rs`,
+    `tests/tcp_flood.rs`, `tests/provider_conflict.rs`, `tests/key_log.rs`, and unit tests). A4's
+    loopback condition: every socket that stays bound is on 127.0.0.1; quinn-udp's GSO and GRO
+    checks open and close `[::]` sockets without sending. The tests: A1's
+    exchange over QUIC and TCP; A2 (a) `libp2p-tls`'s own configurations negotiate X25519MLKEM768
+    and `TLS13_CHACHA20_POLY1305_SHA256`; (b) the installed default is `aws-lc-rs`'s with
+    X25519MLKEM768 first, rustls is built with TLS 1.3 only, and a default installed first without
+    it stops the build, as does a look-alike group under the hybrid's name; (c) a TCP dialer offering `/noise` or `/plaintext/2.0.0` is answered `na`
+    and gets no connection (`/tls/1.0.0` is the control); (d) a dial expecting another identity
+    fails with `WrongPeerId` on both transports, and a peer whose identity is the small-order identity
+    point (`12D3KooW9tGaPdJo5jmCpadQ971nfiq4kLcQjeBPYTfutBTtckPH`) is refused both ways; (e) a
+    connection past the established limit and one past the pending limit are refused by the limit;
+    a TCP socket that never speaks ends at a 1 s handshake timeout with the transport's timeout error,
+    after at least that and before the default 10 s, and its pending slot is free again;
+    in a test binary of its own, 513 idle TCP connections past a pending limit of 4 add less than
+    the stated bound of 16 MiB of resident memory (`FLOOD_MEMORY_BOUND`; measured about 0.5 MiB)
+    with never more than 4 pending, and a real peer connects afterwards; connections are refused
+    above the memory limit; a second sync stream on one connection is refused; (f) 3 MiB arrive in order in pieces of at most 64 KiB with a clean end,
+    and a connection that ends under an open stream is reported by the reader and the swarm; (g)
+    the peer ID of the keys crate's test seed is its vector, `12D3KooWLbwYSoxYfCSHg726dZA3cCSdzeMG18brSyhACQ2mo24f`.
+  - Dependencies (TM-8; each the newest release out at least 7 days on 2026-11-03T17:58Z, from the
+    crates.io API): `libp2p-core` 0.44.0, `libp2p-swarm` 0.48.0 (`macros`, `tokio`), `libp2p-tcp`
+    0.45.0, `libp2p-quic` 0.14.0, `libp2p-tls` 0.7.0, `libp2p-yamux` 0.48.0,
+    `libp2p-connection-limits` 0.7.0, `libp2p-memory-connection-limits` 0.6.0 (all 2026-09-11),
+    `libp2p-identity` 0.3.1 (2026-10-27T15:36Z; `ed25519` and `peerid`), `rustls` 0.23.46 (no
+    default features: `aws-lc-rs`, `prefer-post-quantum`, `std`, so no `tls12`), `futures` 0.3.34;
+    dev-only `tokio` 1.54.1, `multistream-select` 0.14.0, `memory-stats` 1.2.0, and the workspace's
+    `serde_json` and `hex`. Individual crates rather than the `libp2p` 0.57.1 facade, whose weak
+    `tokio` feature puts `libp2p-dns`, `libp2p-mdns`, `libp2p-upnp` and the hickory DNS crates into
+    `Cargo.lock` though nothing builds them. 192 new crates in `Cargo.lock`; held back in it to the
+    newest qualifying release: `aws-lc-rs` 1.18.2 (1.19.0 is from 2026-10-28), `aws-lc-sys` 0.46.0,
+    `log` 0.4.34 and `utf8_iter` 1.0.4. Held back by a requirement, not by choice: `libp2p-swarm`
+    0.48.0 requires `wasm-bindgen-futures` `=0.4.58` on wasm targets only, so `wasm-bindgen` and its
+    family stay at 0.2.108 and `js-sys` and `web-sys` at 0.3.85 (no native build compiles them;
+    `CONTRIBUTING.md`'s refresh note says so, and phase 6's browser build must settle it against
+    the 0.2.129 of the app's web UI). `idna_adapter` is 1.0.0, idna's ASCII-only back end, which
+    idna selects by this crate's version (1.0.0, 1.1.0 and 1.2.0 were published the same day as
+    back ends, not as successive releases): `url`, beneath `multiaddr`, needs no Unicode host names
+    here, and 1.2.2's ICU4X back end brings twenty crates and baked data with unsafe code that
+    cargo-geiger cannot scan. The owner approved this on 2026-11-03 as an exception to the "Stay
+    current" rule ("Keep 1.0.0. Record this decision as an exception to the rule, but we would
+    upgrade to 1.0.* if that ever appears."): `licketysync-net` requires `idna_adapter = "~1.0"`, so
+    `cargo update` takes any 1.0.* release and no other; `deny.toml` bans `icu_normalizer` and
+    `icu_properties`, `.github/dependabot.yml` skips 1.1 and later, and `CONTRIBUTING.md` names the
+    exception. Licences all within `deny.toml`'s list.
+  - `deny.toml`: `ring` gets the wrappers `cargo tree -e no-dev -i ring` shows (`libp2p-tls`, `rcgen`,
+    `quinn-proto`, `libp2p-quic`); `rand` those of the libp2p crates and `quinn-proto` (and
+    `deny-production.toml` the same without `proptest`, replacing its outright ban); `chacha20` gains
+    `rand` (rand's ChaCha12 generator); `ed25519-dalek` and `sha2` gain `libp2p-identity`; `ctutils`
+    gains `digest` (hmac's tag comparison); new wrapper entries for `rustls`, `aws-lc-rs`,
+    `aws-lc-sys`, `rustls-webpki`, `rcgen`, `hkdf`, `hmac`, `rand_pcg`, `libp2p-tls`, `quinn` and
+    `quinn-proto`; the bans on `der`, `pkcs8`, `spki`, `sha1`, `md5` and `openssl` hold, and no Noise,
+    plaintext, pnet, DNS, mDNS, UPnP, Kademlia, relay or AutoNAT crate is in the graph. One advisory
+    ignored with its reason: RUSTSEC-2024-0436, `paste` unmaintained, a build-time proc macro beneath
+    `if-watch`'s netlink crates with no maintained path yet. `supply-chain/`: 162 new exemptions, each
+    with its reason, and 8 dev-only exemptions raised to safe-to-deploy now that net ships them;
+    `imports.lock` refreshed. `ci/geiger-baseline.txt`: net's line (aws-lc-rs, ring, quinn, tokio
+    and the rest of the tree), and two generated files read and accepted (`thiserror`'s
+    `private.rs`, `oid-registry`'s `oid_db.rs`, neither with unsafe code); `ci/geiger.sh` accepts
+    unscanned `.der` files of `ring`, `rustls-webpki` and `rustls-pki-types` only (the DER data
+    they embed with `include_bytes!`), and only in those packages' own directories in the registry
+    (`$CARGO_HOME/registry/src/<index>/<package>-<version>/`, `<version>` a semver version, three
+    numbers and an optional pre-release or build suffix, `CARGO_HOME` defaulting to `~/.cargo`),
+    and `ci/test-geiger.sh` has that case (and the default `~/.cargo`, `ring-0.17.14` and the
+    pre-release `rustls-webpki-0.103.0-alpha.1`), another package's `.der`, look-alike package
+    names (`ring-compat-0.8.0`, and `ring-0x-1.0.0` and `ring-0-1.0.0`, which the semver anchor
+    refuses: the automated commit security review's finding, a test case each that fails without
+    the anchor), a `ring` directory nested in another package and one outside the registry
+    refused, and ICU4X's `.rs.data` refused.
+  - `rust-version` 1.85 to 1.88 (libp2p 0.57's), which turns on clippy's `manual_is_multiple_of` and
+    `chunks_exact_to_as_chunks` for the workspace: the same arithmetic as `is_multiple_of` in
+    `protocol`, `index`'s tests and `sim`, and `as_chunks::<8>` in `sim`'s toy decoder (no
+    behaviour change).
+  - CI: a `net-cross` job builds net for `aarch64-linux-android` (ubuntu-latest, NDK 30.0.16248370,
+    r30 of 2026-09-08) and `aarch64-apple-ios` (macos-latest, Xcode 26.6); `ANDROID_NDK` and `XCODE`
+    are new `ci/pins.env` keys that `gate.sh` checks against the job. `spec/allowed-hosts.txt` stays
+    empty. `spec/suites.md` 3.1: the rows of `libp2p-identity` (0.3.1, `peerid`, and
+    `libp2p-quic`'s HKDF-derived stateless-reset key), `aws-lc-rs` and the transports.
+  - The security review's rulings (`rulings-spikeA.md`, 2026-11-03), recorded where they apply:
+    - SA-B1, QUIC Initials: `libp2p-quic` 0.14 accepts every Initial before the swarm's limits are
+      asked, so each costs a QUIC connection and a TLS server handshake whatever the pending limit,
+      at the attacker's rate (the review measured 10 000 Initials at about 412 MB, about 41 KB
+      each, and seconds of CPU). quinn's Retry and incoming cap are not reachable through
+      `libp2p-quic` without a fork. `limits.rs` no longer claims a bound for it; TM-22 and the
+      threat model's 3.10 state the residual and its phase 1 item. A2(e) is met for TCP only: the
+      owner deferred the QUIC half to phase 1 and made it required before 1.0 ("I want safety
+      limits in version 1.0, no matter what. It is fine to pass until phase 1, but it must not get
+      lost.", 2026-11-03), so the QUIC Initial limit (Retry under load or a lower incoming cap) and
+      its flood test with a stated bound are not in this change, and TM-22 marks the residual
+      "required before 1.0 (owner, 2026-11-03)" with its phase 1 item named.
+    - SA-S1: one pending counter for every source, so 32 handshakes that never finish lock every
+      inbound peer out for the 10 s handshake timeout, renewably; SA-S2: yamux's connection window
+      on TCP auto-tunes from the round trip its pings measure, so a remote that delays them can grow
+      it toward 1 GiB (the old `limits.rs` text, "grows only as fast as this side reads", was
+      wrong). Both are stated in `limits.rs`, TM-22 and 3.10, with their phase 1 items ("pending
+      lockout", "yamux window"), and both are required before 1.0 by the same decision of the owner.
+    - SA-S3: `libp2p-identity` 0.3.1 verifies the TLS extension's Ed25519 signature with
+      `ed25519-dalek`'s non-strict `verify` and accepts small-order keys, so a forged extension
+      verifies under the identity point; `net` now refuses such a peer (tests above), and both
+      `suites.md` 3.1 rows and 2.6 record the deviation (the Hello's check of the libp2p identity
+      key is phase 1).
+    - SA-S4: the libp2p identity's secret key is not wiped beneath `libp2p-identity` (its plain
+      `SecretKey`, `derive_secret`'s copies, the `Keypair` clones in the TLS and QUIC
+      configurations): a deviation named in `suites.md` 4.1 and TM-6, to raise upstream once the
+      owner approves posting it.
+    - NITs: the TCP flood in its own test binary with the bound above; the example's exact address
+      forms; `provider::check` by identity; `suites.md` 2.6 says what the TCP listener does when
+      offered Noise (answers `na`; the connection ends unestablished); the dialer's identity goes to
+      whoever answers at the address it dials, before it compares the identity with the one it
+      expected (threat model 3.1; phase 1 item: give `libp2p-tls`'s verifier the expected peer);
+      `sync::Behaviour::open` on a connection that is not established answers `ConnectionClosed` at
+      once (test); `suites.md` 3.1's closing paragraph lists `ring`'s six roles (`libp2p-quic`'s
+      reset HMAC key among them) and its wrappers as they are, and 2.6 records the identity's
+      HKDF-derived reset key against its "nothing but"; on Windows, `aws-lc-sys` uses the prebuilt
+      NASM objects it ships (rustls's `aws_lc_rs` feature turns on `prebuilt-nasm`), recorded in
+      `suites.md` 3.1 with an item to build them with a pinned NASM before any Windows release;
+      `ci/geiger.sh`'s `.der` acceptance scoped as above.
+  - The correctness review's rulings and the security re-review's (`rulings-spikeA.md`,
+    2026-11-03): CA-B1, the TCP handshake timeout had no test that failed without it: the timeout
+    test above fails, at its deadline, when `.timeout(limits.handshake_timeout)` is taken off the
+    TCP upgrade. QUIC's configuration is a function of its own (`node::quic_config`) with a unit test
+    that its handshake timeout, idle timeout, stream limit and connection and stream windows come from
+    `Limits`, and a unit test pins every default of `Limits` (the 32 pending, 10 s and 4 MiB that
+    TM-22 and 3.10 quote among them) and `YAMUX_MAX_STREAMS` as 1 GiB over 256 KiB. NITs:
+    `ci/geiger.sh`'s `.der` acceptance anchored to the registry as above; `Pieces::get_mut`, which
+    nothing called, removed; the keys crate's `vector_device` names the net test that checks its
+    peer ID (`peer_id_of_the_keys_test_seed_is_the_keys_vector`); `suites.md` 2.6 says `net` tests
+    the Noise and plaintext refusals and the handshake timeout; `FLOOD_MEMORY_BOUND`'s comment says a
+    leak of 32 KiB an attempt would exceed it, failing the test.
+  - The second review's rulings (`rulings-spikeA.md`, 2026-11-03; CA-B1 confirmed):
+    - SR-1: `libp2p-quic` turns on `quinn-proto`'s `ring` feature, which takes precedence over its
+      `aws-lc-rs` one, so all of `quinn-proto`'s own cryptography runs on `ring`: the
+      stateless-reset HMAC-SHA256, the token keys (HKDF-SHA256, AES-256-GCM) and the Retry integrity
+      tag (AES-128-GCM); `aws-lc-rs` is linked beneath `quinn-proto` but not called there (QUIC's
+      packet protection is rustls's, on `aws-lc-rs`). `suites.md` 3.1's `aws-lc-rs` row, its count
+      of `ring`'s six roles (four in the graph) and `deny.toml`'s `ring` and `aws-lc-rs` comments
+      now say so.
+    - SR-2: the wasm-only hold-back of `wasm-bindgen` at 0.2.108 above, in `CONTRIBUTING.md`'s
+      refresh note too, with the phase 6 heads-up.
+    - SR-3: a QUIC dial from a swarm with no QUIC listener of that address family makes
+      `libp2p-quic` bind a dialing socket of its own on every address (`0.0.0.0` or `[::]`, port 0).
+      Every QUIC dialer in `tests/transport.rs` and `examples/spike.rs`'s dial now listens on
+      `/ip4/127.0.0.1/udp/0/quic-v1` first, so that `libp2p-quic` dials from that loopback endpoint.
+      Under strace, `tests/transport.rs` bound nine dialing sockets on `0.0.0.0` before and none
+      after; of its sockets and the example's, every socket that stays bound is on 127.0.0.1
+      (TM-31); quinn-udp's GSO and GRO checks open and close `[::]` sockets (port 0, one option
+      set, two per endpoint) without sending; a TCP dial binds nothing. `node.rs` states the
+      behaviour and the phase 1 item for real dials.
+    - NITs: the vet notes of `ring` (the six roles), `displaydoc`, `smallvec` and `syn` 3 (no
+      ICU4X in the graph) and the Windows bindings (the crates each is really beneath);
+      `deny.toml`'s `pkcs8`, `der` and `spki` bans say "no first-party key", and `suites.md` 2.6
+      describes the certificate key, the one PKCS#8 key, which `ring` writes and `aws-lc-rs` reads;
+      the stream negotiation timeout listed above among the library defaults; doc comments in
+      `identity.rs` and `node.rs` (the expected peer ID is compared after the handshake, its earlier
+      use a phase 1 item paired with the threat model's 3.1); TM-22 says the limits are flood-tested
+      on TCP, and on QUIC points to residual (a).
+  - Line coverage at this change's gate (`gate.sh`'s Lines column): keys 99.37% (4585 lines), protocol
+    98.32% (8374), index 97.66% (3165), engine 96.94% (6790); each at least the 90% gate.
+  - Reviewed 2026-11-03 by a7ca0582b9e6197af (security, the security-reviewer pass: two rounds,
+    clean), afffc29a7492db35a (correctness: blocked by 1, CA-B1, fixed) and a1e1890792146b04a (a
+    second review: blocked by 3, SR-1 to SR-3, fixed, clean; it also confirmed CA-B1's fix); the
+    `ci/geiger.sh` semver anchor, from the automated commit security review, glanced by
+    a1e1890792146b04a. The owner's decisions in it, both of 2026-11-03: the `idna_adapter`
+    exception to the "Stay current" rule (1.0.0 kept, any later 1.0.* taken), and A2(e)'s QUIC
+    half deferred to phase 1 and required before 1.0. Author ae906fe3f3104fa7a, with fixer
+    a68835e6737c85420; the merge agent wrote this line.
+
 - The weekly stay-current refresh of 2026-11-02, under the owner's "Stay current" rule of 2026-10-25
   (quoted in the project's CLAUDE.md; TM-8, TM-29): every pin is the newest release that had been
   out for at least 7 days at 2026-11-03T02:20Z (published on or before 2026-10-27T02:20Z), or a

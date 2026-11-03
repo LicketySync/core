@@ -245,6 +245,25 @@ impl Libp2pIdentity {
     }
 }
 
+/// Checks the libp2p identity key a peer's transport handshake authenticated
+/// (`suites.md` 2.2 and 3.1, `keys.md` 0.3): the canonical encoding of an
+/// Ed25519 point that is not of small order, the rule every public key
+/// received from anywhere follows. `libp2p-identity` decodes by ZIP-215's
+/// rules and verifies the TLS certificate's extension with `ed25519-dalek`'s
+/// non-strict `verify`, so under a small-order key, such as the identity point
+/// `01 00 … 00`, a forged extension signature verifies and anyone can present
+/// that peer ID; the transport therefore refuses such a peer.
+///
+/// # Errors
+///
+/// [`DeviceKeyError::Key`] for a non-canonical encoding, bytes that are not a
+/// point, or a point of small order.
+pub fn check_peer_identity_key(public: &[u8; sizes::ED25519_PK]) -> Result<(), DeviceKeyError> {
+    crate::sig::canonical_public_key(public)
+        .map(|_| ())
+        .ok_or(DeviceKeyError::Key)
+}
+
 /// The device's DHT key (phase 2): a third Ed25519 key, which signs nothing
 /// but the BEP 44 mutable items the device publishes (`keys.md` 2.2, 8.1).
 pub struct DhtKey {
@@ -319,6 +338,8 @@ mod tests {
             &*derive_key(labels::KEY_LIBP2P_IDENTITY, s.expose())
         );
         assert_eq!(format!("{identity:?}"), "Libp2pIdentity([redacted])");
+        // A derived identity passes the check the transport applies to peers.
+        assert_eq!(check_peer_identity_key(&identity.public_key()), Ok(()));
         assert_eq!(format!("{dht:?}"), "DhtKey([redacted])");
         assert_eq!(
             format!("{device:?}"),
@@ -376,6 +397,7 @@ mod tests {
             crate::sig::tests::non_canonical_point(),
             identity,
         ] {
+            assert_eq!(check_peer_identity_key(&bad), Err(DeviceKeyError::Key));
             let mut hello = [0u8; 34];
             hello[1] = 1;
             hello[2..].copy_from_slice(&bad);

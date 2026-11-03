@@ -34,10 +34,55 @@ version = "0.7.8"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): stack vectors beneath blake3 and bip39's hashes; bluss, widely used. Not covered by the imported audits at this version."
 
+[[exemptions.asn1-rs]]
+version = "0.7.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): ASN.1 parsing beneath x509-parser and der-parser; rusticata. Not covered by the imported audits at this version."
+
+[[exemptions.asn1-rs-derive]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time derive macros of asn1-rs; rusticata. Not covered by the imported audits at this version."
+
+[[exemptions.asn1-rs-impl]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time proc macros of asn1-rs; rusticata. Not covered by the imported audits at this version."
+
+[[exemptions.async-io]]
+version = "2.6.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): async I/O beneath if-watch; smol-rs. Not covered by the imported audits at this version."
+
 [[exemptions.autocfg]]
 version = "1.5.1"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): build-time only, num-traits' build script beneath proptest (dev-only since the keys-crate rework removed module-lattice); cuviper. Not covered by the imported audits at this version."
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): build-time only, the build scripts of num-traits (beneath proptest and der-parser's num-bigint) and async-io; cuviper. Not covered by the imported audits at this version."
+
+[[exemptions.aws-lc-rs]]
+version = "1.18.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): rustls's crypto provider (suites.md 3.1; deny.toml wrappers rustls, rustls-webpki, quinn-proto), never called directly; aws/aws-lc-rs. AWS-LC's FIPS build is FIPS 140-3 validated, this build is not the FIPS one. Not covered by the imported audits at this version."
+
+[[exemptions.aws-lc-sys]]
+version = "0.46.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): AWS-LC itself, C and assembly built by its build script with the system C compiler and prebuilt NASM objects on Windows (suites.md 3.1; deny.toml wrapper aws-lc-rs); aws/aws-lc-rs. Not covered by the imported audits at this version."
+
+[[exemptions.base-x]]
+version = "0.2.11"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): a multibase encoding beneath multibase. Not covered by the imported audits at this version."
+
+[[exemptions.base256emoji]]
+version = "1.0.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): a multibase encoding beneath multibase. Not covered by the imported audits at this version."
+
+[[exemptions.base45]]
+version = "3.2.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): a multibase encoding beneath multibase. Not covered by the imported audits at this version."
 
 [[exemptions.base64]]
 version = "0.23.1"
@@ -61,8 +106,8 @@ notes = "Phase 0 exemption (licketysync-keys): SHA-256 for the BIP39 checksum in
 
 [[exemptions.bitflags]]
 version = "2.13.2"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): dev-only via proptest; KodrAus. Not covered by the imported audits at this version."
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): flags types beneath rustix, nix, the netlink crates and system-configuration (licketysync-net), and proptest; KodrAus. Not covered by the imported audits at this version."
 
 [[exemptions.blake3]]
 version = "1.8.7"
@@ -73,6 +118,11 @@ notes = "Phase 0 exemption (licketysync-keys): the approved hash (suites.md 3.1)
 version = "0.12.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): block buffering beneath the RustCrypto hashes; RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.bs58]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the peer ID's base58 text beneath libp2p-identity (peerid feature); Nullus157. Not covered by the imported audits at this version."
 
 [[exemptions.bytes]]
 version = "1.12.1"
@@ -89,6 +139,11 @@ version = "1.0.5"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): build configuration helper; rust-lang (alexcrichton). Not covered by the imported audits at this version."
 
+[[exemptions.cfg_aliases]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time cfg aliases beneath nix; katharostech. Not covered by the imported audits at this version."
+
 [[exemptions.chacha20poly1305]]
 version = "0.11.0"
 criteria = "safe-to-deploy"
@@ -99,15 +154,40 @@ version = "0.5.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): cipher traits beneath chacha20 and chacha20poly1305 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
 
+[[exemptions.cmake]]
+version = "0.1.58"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time only, beneath aws-lc-sys (its CMake path, used on targets without its cc build); rust-lang. Not covered by the imported audits at this version."
+
 [[exemptions.cmov]]
 version = "0.5.4"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): constant-time conditional moves beneath ctutils; RustCrypto. Not covered by the imported audits at this version."
 
+[[exemptions.concurrent-queue]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): a queue beneath async-io and polling; smol-rs. Not covered by the imported audits at this version."
+
+[[exemptions.const-oid]]
+version = "0.10.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): object identifiers beneath digest (sha2 0.11); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.const-str]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): compile-time strings beneath base256emoji. Not covered by the imported audits at this version."
+
 [[exemptions.constant_time_eq]]
 version = "0.4.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): constant-time comparison beneath blake3; cesarb. Not covered by the imported audits at this version."
+
+[[exemptions.crossbeam-utils]]
+version = "0.8.23"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): concurrency utilities beneath concurrent-queue; crossbeam-rs. Not covered by the imported audits at this version."
 
 [[exemptions.crypto-common]]
 version = "0.2.2"
@@ -129,10 +209,40 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): proc macro of curve25519-dalek; dalek-cryptography. Not covered by the imported audits at this version."
 
+[[exemptions.data-encoding]]
+version = "2.11.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): base32/base64 beneath multibase, multiaddr and x509-parser; ia0. Not covered by the imported audits at this version."
+
+[[exemptions.data-encoding-macro]]
+version = "0.1.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): compile-time data-encoding beneath multibase; ia0. Not covered by the imported audits at this version."
+
+[[exemptions.data-encoding-macro-internal]]
+version = "0.1.19"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time proc macro of data-encoding-macro; ia0. Not covered by the imported audits at this version."
+
+[[exemptions.der-parser]]
+version = "10.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): DER parsing beneath x509-parser; rusticata. Not covered by the imported audits at this version."
+
+[[exemptions.deranged]]
+version = "0.5.9"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): ranged integers beneath time; jhpratt. Not covered by the imported audits at this version."
+
 [[exemptions.digest]]
 version = "0.11.3"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): hash traits beneath the RustCrypto hashes; RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.displaydoc]]
+version = "0.2.7"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): a Display derive beneath asn1-rs and der-parser (x509-parser, in libp2p-tls); yaahc. Not covered by the imported audits at this version."
 
 [[exemptions.ed25519]]
 version = "3.0.0"
@@ -149,25 +259,145 @@ version = "1.19.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): build-time only, a dependency of itertools; bluss. Not covered by the imported audits at this version."
 
+[[exemptions.fastbloom]]
+version = "0.17.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the bloom filter beneath quinn-proto (bloom feature, which libp2p-quic turns on). Not covered by the imported audits at this version."
+
 [[exemptions.find-msvc-tools]]
 version = "0.1.15"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): build-time only, beneath cc; rust-lang; 0.1.15 read in the weekly refresh of 2026-11-02 (its diff from 0.1.14: two more Windows API bindings, OpenSemaphoreA and WaitForMultipleObjects, and their constants). Not covered by the imported audits at this version."
+
+[[exemptions.fs_extra]]
+version = "1.3.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time only, copying sources in aws-lc-sys's build script; webdesus. Not covered by the imported audits at this version."
+
+[[exemptions.futures]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): async traits and combinators (net and every libp2p crate); rust-lang/futures-rs, taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.futures-channel]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): part of futures (rust-lang/futures-rs); taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.futures-executor]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): part of futures (rust-lang/futures-rs); taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.futures-io]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): part of futures (rust-lang/futures-rs); taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.futures-lite]]
+version = "2.6.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): async helpers beneath async-io; smol-rs. Not covered by the imported audits at this version."
+
+[[exemptions.futures-macro]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): part of futures (rust-lang/futures-rs); taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.futures-rustls]]
+version = "0.26.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): rustls over futures I/O beneath libp2p-tls (TCP); rustls. Not covered by the imported audits at this version."
+
+[[exemptions.futures-sink]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): part of futures (rust-lang/futures-rs); taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.futures-task]]
+version = "0.3.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): part of futures (rust-lang/futures-rs); taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.futures-timer]]
+version = "3.0.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): timers beneath libp2p-core, -swarm, -tcp and -quic (the handshake and idle timeouts); async-rs. Not covered by the imported audits at this version."
+
+[[exemptions.futures-util]]
+version = "0.3.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): part of futures (rust-lang/futures-rs); taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.getrandom]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the system generator beneath ring 0.17 (getrandom 0.2); rust-random. Not covered by the imported audits at this version."
+
+[[exemptions.hashbrown]]
+version = "0.14.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): hash maps beneath libp2p's dependencies; rust-lang. Not covered by the imported audits at this version."
+
+[[exemptions.hashlink]]
+version = "0.12.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): an LRU map beneath libp2p-swarm. Not covered by the imported audits at this version."
+
+[[exemptions.hermit-abi]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): HermitOS bindings beneath polling (HermitOS only; never built here). Not covered by the imported audits at this version."
 
 [[exemptions.hex-conservative]]
 version = "0.2.3"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): hex helper beneath bitcoin_hashes; rust-bitcoin. Not covered by the imported audits at this version."
 
+[[exemptions.hkdf]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): HKDF-SHA256 inside libp2p-identity's derive_secret only, QUIC's stateless-reset key (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.hmac]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): HMAC beneath hkdf only (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
 [[exemptions.hybrid-array]]
 version = "0.4.15"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): fixed-size array types beneath the RustCrypto crates; RustCrypto. Not covered by the imported audits at this version."
 
+[[exemptions.idna]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): IDNA beneath url; servo. Not covered by the imported audits at this version."
+
+[[exemptions.idna_adapter]]
+version = "1.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the ASCII-only IDNA back end beneath idna (url, beneath multiaddr), chosen by its version as idna documents: 212 lines of stubs, no dependencies, no unsafe code, read 2026-11-03. 1.2.2 is the ICU4X back end, whose baked data cargo-geiger cannot scan (deny.toml bans it). hsivonen. Not covered by the imported audits at this version."
+
+[[exemptions.if-addrs]]
+version = "0.15.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): interface addresses beneath if-watch. Not covered by the imported audits at this version."
+
+[[exemptions.if-watch]]
+version = "3.2.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): interface address watching beneath libp2p-tcp and libp2p-quic (listening on loopback only in phase 0); libp2p. Not covered by the imported audits at this version."
+
 [[exemptions.inout]]
 version = "0.2.5"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): in-place buffer types beneath aead and cipher; RustCrypto; 0.2.5 read in the weekly refresh of 2026-11-02 (its diff from 0.2.4: into_padded_blocks returns PadError, where it had a debug assertion, when a Padding implementation breaks the buffer's invariants). Not covered by the imported audits at this version."
+
+[[exemptions.ipnet]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): IP network types beneath if-watch; krisprice. Not covered by the imported audits at this version."
 
 [[exemptions.itertools]]
 version = "0.14.0"
@@ -179,20 +409,255 @@ version = "1.0.18"
 criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): dev-only via serde_json; dtolnay. Not covered by the imported audits at this version."
 
+[[exemptions.jobserver]]
+version = "0.1.35"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time only, the make jobserver beneath cc (aws-lc-sys's and ring's builds); rust-lang. Not covered by the imported audits at this version."
+
+[[exemptions.js-sys]]
+version = "0.3.85"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): wasm32 browser bindings beneath getrandom and libp2p-swarm's wasm executor (wasm32 only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.lazy_static]]
+version = "1.5.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): statics beneath x509-parser; rust-lang-nursery. Not covered by the imported audits at this version."
+
 [[exemptions.libc]]
 version = "0.2.191"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): platform bindings beneath cpufeatures and getrandom; rust-lang; 0.2.191 read in the weekly refresh of 2026-11-02 (its diff from 0.2.190: constants and types for Apple, FreeBSD, Haiku, Hurd, NuttX, OpenBSD, QuRT, WASI and Emscripten, and build-script cfgs for Emscripten versions; Android's prop_info made an opaque extern type; AIX's statvfs.f_fsid back to c_ulong; FreeBSD aarch64's gpregs and fpregs fixed; nothing for Linux on x86_64). Not covered by the imported audits at this version."
 
+[[exemptions.libm]]
+version = "0.2.16"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): pure-Rust math beneath fastbloom; rust-lang. Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-connection-limits]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-core]]
+version = "0.44.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-identity]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p identity key with the ed25519 and peerid features only (suites.md 3.1), deny.toml wrapper of ed25519-dalek, sha2 and hkdf; rust-libp2p. Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-memory-connection-limits]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-quic]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the QUIC transport (suites.md 2.6 and 3.1) on quinn, deny.toml-wrapped to net; rust-libp2p. Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-swarm]]
+version = "0.48.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-swarm-derive]]
+version = "0.36.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-tcp]]
+version = "0.45.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-tls]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): TLS 1.3 for QUIC and TCP on aws-lc-rs (suites.md 2.6 and 3.1), deny.toml-wrapped to net and libp2p-quic; rust-libp2p. Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-yamux]]
+version = "0.48.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.linux-raw-sys]]
+version = "0.12.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Linux system-call bindings beneath rustix (Linux only); sunfishcode. Not covered by the imported audits at this version."
+
+[[exemptions.lock_api]]
+version = "0.4.14"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): lock traits beneath parking_lot; Amanieu. Not covered by the imported audits at this version."
+
+[[exemptions.log]]
+version = "0.4.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the log facade beneath yamux, if-watch and the netlink crates; rust-lang. Not covered by the imported audits at this version."
+
+[[exemptions.match-lookup]]
+version = "0.1.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): a proc macro beneath base256emoji. Not covered by the imported audits at this version."
+
 [[exemptions.memchr]]
 version = "2.8.3"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): dev-only via serde_json; BurntSushi. Not covered by the imported audits at this version."
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): byte search beneath nom (x509-parser), futures-util and sysinfo (licketysync-net), and serde_json in tests; BurntSushi. Not covered by the imported audits at this version."
+
+[[exemptions.memory-stats]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the process's resident memory, read by libp2p-memory-connection-limits (TM-22) and by the flood test; Arc-blroth. Not covered by the imported audits at this version."
+
+[[exemptions.minimal-lexical]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): float parsing beneath nom (x509-parser's parser); Alexhuszagh. Not covered by the imported audits at this version."
+
+[[exemptions.mio]]
+version = "1.2.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): non-blocking I/O beneath tokio; tokio-rs. Not covered by the imported audits at this version."
+
+[[exemptions.multiaddr]]
+version = "0.19.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): libp2p addresses beneath libp2p-core; multiformats/rust-multiaddr. Not covered by the imported audits at this version."
+
+[[exemptions.multibase]]
+version = "0.9.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): multiaddr's text encodings beneath multiaddr; multiformats/rust-multibase. Not covered by the imported audits at this version."
+
+[[exemptions.multihash]]
+version = "0.19.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): peer ID multihashes beneath libp2p-identity and libp2p-core; multiformats/rust-multihash. Not covered by the imported audits at this version."
+
+[[exemptions.multistream-select]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.netlink-packet-core]]
+version = "0.8.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Linux netlink beneath if-watch (interface changes; Linux only); rust-netlink. Not covered by the imported audits at this version."
+
+[[exemptions.netlink-packet-route]]
+version = "0.28.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Linux netlink route messages beneath if-watch; rust-netlink. Not covered by the imported audits at this version."
+
+[[exemptions.netlink-proto]]
+version = "0.12.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Linux netlink protocol beneath if-watch; rust-netlink. Not covered by the imported audits at this version."
+
+[[exemptions.netlink-sys]]
+version = "0.8.8"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Linux netlink sockets beneath if-watch; rust-netlink. Not covered by the imported audits at this version."
+
+[[exemptions.nix]]
+version = "0.15.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Unix system calls beneath if-watch's netlink and rtnetlink; nix-rust. Not covered by the imported audits at this version."
+
+[[exemptions.nohash-hasher]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): an identity hasher for yamux's stream table; paritytech. Not covered by the imported audits at this version."
+
+[[exemptions.ntapi]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows native API bindings beneath sysinfo (Windows only). Not covered by the imported audits at this version."
+
+[[exemptions.num-bigint]]
+version = "0.4.8"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): big integers beneath der-parser (certificate serial numbers); cuviper. Not covered by the imported audits at this version."
+
+[[exemptions.num-integer]]
+version = "0.1.47"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): integer traits beneath num-bigint; cuviper. Not covered by the imported audits at this version."
+
+[[exemptions.objc2-io-kit]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): macOS IOKit bindings beneath sysinfo (macOS only); madsmtm. Not covered by the imported audits at this version."
+
+[[exemptions.oid-registry]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): OID names beneath x509-parser; rusticata. Not covered by the imported audits at this version."
+
+[[exemptions.once_cell]]
+version = "1.12.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): lazy statics beneath the TLS and libp2p crates; matklad. Not covered by the imported audits at this version."
+
+[[exemptions.parking_lot]]
+version = "0.12.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): locks beneath libp2p-core and yamux; Amanieu. Not covered by the imported audits at this version."
+
+[[exemptions.parking_lot_core]]
+version = "0.9.12"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): lock internals beneath parking_lot; Amanieu. Not covered by the imported audits at this version."
+
+[[exemptions.paste]]
+version = "1.0.10"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time token pasting beneath the netlink crates; dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.pem]]
+version = "3.0.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): PEM encoding beneath rcgen (not used for any key of ours); jcreekmore. Not covered by the imported audits at this version."
+
+[[exemptions.pin-project]]
+version = "1.1.13"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): pin projection beneath libp2p-core, multistream-select and yamux; taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.pin-project-internal]]
+version = "1.1.13"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time proc macro of pin-project; taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.pin-project-lite]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): pin projection beneath tokio, quinn and futures; taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.polling]]
+version = "3.11.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): epoll/kqueue/IOCP beneath async-io; smol-rs. Not covered by the imported audits at this version."
 
 [[exemptions.poly1305]]
 version = "0.9.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): Poly1305 beneath chacha20poly1305 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.portable-atomic]]
+version = "1.15.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): atomics beneath fastbloom; taiki-e. Not covered by the imported audits at this version."
+
+[[exemptions.powerfmt]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): formatting beneath time; jhpratt. Not covered by the imported audits at this version."
 
 [[exemptions.proc-macro2]]
 version = "1.0.107"
@@ -214,35 +679,110 @@ version = "0.14.4"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): derive macro of prost; tokio-rs. Not covered by the imported audits at this version."
 
+[[exemptions.quinn]]
+version = "0.11.12"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): QUIC beneath libp2p-quic only (deny.toml wrapper); quinn-rs. Not covered by the imported audits at this version."
+
+[[exemptions.quinn-proto]]
+version = "0.11.19"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the QUIC state machine beneath quinn and libp2p-quic (deny.toml wrapper; its anti-amplification limit at its default, TM-22); quinn-rs. Not covered by the imported audits at this version."
+
 [[exemptions.r-efi]]
 version = "6.0.0"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): dev-only via getrandom beneath proptest; UEFI targets only. Not covered by the imported audits at this version."
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): UEFI bindings beneath getrandom (UEFI targets only; never built here). Not covered by the imported audits at this version."
 
 [[exemptions.rand_xorshift]]
 version = "0.5.0"
 criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): dev-only via proptest; rust-random. Not covered by the imported audits at this version."
 
+[[exemptions.rcgen]]
+version = "0.13.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p TLS certificate (a fresh P-256 key, self-signed, with the libp2p extension) inside libp2p-tls only (deny.toml wrapper); rustls/rcgen. Not covered by the imported audits at this version."
+
+[[exemptions.redox_syscall]]
+version = "0.5.18"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Redox bindings beneath parking_lot_core (Redox only; never built here). Not covered by the imported audits at this version."
+
 [[exemptions.regex-syntax]]
 version = "0.8.11"
 criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): dev-only via proptest; BurntSushi, whom the Mozilla set trusts. Not covered by the imported audits at this version."
 
+[[exemptions.ring]]
+version = "0.17.11"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): beneath libp2p-tls, rcgen, quinn-proto and libp2p-quic only, the four of the six roles of suites.md 3.1 in the graph (deny.toml wrappers); briansmith/ring, ctz, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.rtnetlink]]
+version = "0.20.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Linux route netlink beneath if-watch; rust-netlink. Not covered by the imported audits at this version."
+
+[[exemptions.rustc-hash]]
+version = "2.1.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): a non-cryptographic hasher inside quinn and quinn-proto; rust-lang. Not covered by the imported audits at this version."
+
+[[exemptions.rusticata-macros]]
+version = "4.1.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): parser macros beneath x509-parser; rusticata. Not covered by the imported audits at this version."
+
+[[exemptions.rustix]]
+version = "1.1.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): POSIX system calls beneath async-io and polling; bytecodealliance, sunfishcode, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.rustls]]
+version = "0.23.37"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): TLS 1.3 only (no tls12 feature), aws-lc-rs provider with prefer-post-quantum (suites.md 2.6 and 3.1; deny.toml wrappers); rustls, djc, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.rustls-pki-types]]
+version = "1.15.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): shared certificate and key types beneath rustls; rustls. Not covered by the imported audits at this version."
+
+[[exemptions.rustls-webpki]]
+version = "0.103.10"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): certificate parsing beneath rustls and libp2p-tls (deny.toml wrappers), on aws-lc-rs; rustls. Not covered by the imported audits at this version."
+
+[[exemptions.rustversion]]
+version = "1.0.23"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time compiler-version checks beneath wasm-bindgen; dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.rw-stream-sink]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.scopeguard]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): scope guards beneath lock_api; bluss. Not covered by the imported audits at this version."
+
 [[exemptions.serde]]
 version = "1.0.229"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): dev-only: reading and writing the committed test vectors; dtolnay, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): beneath multiaddr (licketysync-net) and serde_json in tests; dtolnay, whom the Mozilla set trusts. Not covered by the imported audits at this version."
 
 [[exemptions.serde_core]]
 version = "1.0.229"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): dev-only via serde_json; dtolnay. Not covered by the imported audits at this version."
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): beneath serde, pem and time (licketysync-net) and serde_json in tests; dtolnay. Not covered by the imported audits at this version."
 
 [[exemptions.serde_derive]]
 version = "1.0.229"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): dev-only via serde; dtolnay. Not covered by the imported audits at this version."
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): build-time derive macro beneath serde_core; dtolnay. Not covered by the imported audits at this version."
 
 [[exemptions.serde_json]]
 version = "1.0.154"
@@ -259,6 +799,26 @@ version = "3.0.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): signature traits beneath ed25519 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
 
+[[exemptions.siphasher]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): SipHash beneath fastbloom (quinn-proto's bloom filter, its retry-token replay check); jedisct1. Not covered by the imported audits at this version."
+
+[[exemptions.slab]]
+version = "0.4.12"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): slab storage beneath quinn-proto and futures; tokio-rs. Not covered by the imported audits at this version."
+
+[[exemptions.smallvec]]
+version = "1.16.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): small vectors beneath libp2p-swarm, multistream-select, idna and parking_lot_core; servo. Not covered by the imported audits at this version."
+
+[[exemptions.socket2]]
+version = "0.6.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): socket options beneath tokio, libp2p-tcp, libp2p-quic and quinn; rust-lang. Not covered by the imported audits at this version."
+
 [[exemptions.syn]]
 version = "2.0.119"
 criteria = "safe-to-deploy"
@@ -266,8 +826,73 @@ notes = "Phase 0 exemption (licketysync-keys): build-time only, proc-macro parsi
 
 [[exemptions.syn]]
 version = "3.0.9"
-criteria = "safe-to-run"
-notes = "Phase 0 exemption (licketysync-keys): build-time only, proc-macro parsing; dtolnay. Not covered by the imported audits at this version."
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): build-time only, proc-macro parsing (libp2p-swarm-derive, thiserror-impl, tokio-macros, futures-macro, displaydoc and serde_derive); dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.sysinfo]]
+version = "0.38.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): beneath libp2p-memory-connection-limits, which uses it only for its percentage limit, never called here; GuillaumeGomez. Not covered by the imported audits at this version."
+
+[[exemptions.system-configuration]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): macOS network configuration beneath if-watch (macOS only); mullvad. Not covered by the imported audits at this version."
+
+[[exemptions.system-configuration-sys]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): macOS SystemConfiguration bindings beneath system-configuration (macOS only); mullvad. Not covered by the imported audits at this version."
+
+[[exemptions.thiserror]]
+version = "1.0.30"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): error derives beneath the libp2p crates and quinn; dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.thiserror]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): error derives beneath the libp2p crates and quinn; dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.thiserror-impl]]
+version = "1.0.30"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time proc macro of thiserror; dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.thiserror-impl]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time proc macro of thiserror; dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.time]]
+version = "0.3.55"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): certificate validity times beneath rcgen, yasna and x509-parser; time-rs. Not covered by the imported audits at this version."
+
+[[exemptions.time-macros]]
+version = "0.2.32"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time macros of time; time-rs. Not covered by the imported audits at this version."
+
+[[exemptions.tokio]]
+version = "1.54.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the async runtime (the workspace's first: libp2p's tokio provider, quinn's runtime; tests and the example use it too); tokio-rs, Darksonn, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.tokio-macros]]
+version = "2.7.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time macros of tokio (#[tokio::test], #[tokio::main]); tokio-rs. Not covered by the imported audits at this version."
+
+[[exemptions.tracing]]
+version = "0.1.44"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the logging facade of libp2p and quinn; tokio-rs. Nothing subscribes in phase 0; the daemon's subscriber redacts addresses (TM-6, phase 1). Not covered by the imported audits at this version."
+
+[[exemptions.tracing-attributes]]
+version = "0.1.31"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): build-time proc macro of tracing; tokio-rs. Not covered by the imported audits at this version."
 
 [[exemptions.typenum]]
 version = "1.20.1"
@@ -283,6 +908,191 @@ notes = "Phase 0 exemption (licketysync-keys): build-time only, beneath proc-mac
 version = "0.6.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): universal hash traits beneath poly1305 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.unsigned-varint]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): varint framing of multistream-select and multiaddr; paritytech. Not covered by the imported audits at this version."
+
+[[exemptions.url]]
+version = "2.5.8"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): URL parsing beneath multiaddr (its /http and /dns parts; no DNS resolution is built); servo. Not covered by the imported audits at this version."
+
+[[exemptions.wasi]]
+version = "0.11.0+wasi-snapshot-preview1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): WASI bindings beneath getrandom 0.2 (wasm32-wasi only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen]]
+version = "0.2.108"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): wasm32 browser bindings beneath getrandom and libp2p-swarm's wasm executor (wasm32 only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-futures]]
+version = "0.4.58"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): wasm32 browser bindings beneath getrandom and libp2p-swarm's wasm executor (wasm32 only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-macro]]
+version = "0.2.108"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): wasm32 browser bindings beneath getrandom and libp2p-swarm's wasm executor (wasm32 only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-macro-support]]
+version = "0.2.108"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): wasm32 browser bindings beneath getrandom and libp2p-swarm's wasm executor (wasm32 only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-shared]]
+version = "0.2.108"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): wasm32 browser bindings beneath getrandom and libp2p-swarm's wasm executor (wasm32 only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.web-sys]]
+version = "0.3.85"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): wasm32 browser bindings beneath getrandom and libp2p-swarm's wasm executor (wasm32 only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.winapi]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows API bindings beneath ntapi (Windows only); retep998. Not covered by the imported audits at this version."
+
+[[exemptions.winapi-i686-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows import libraries beneath winapi (Windows GNU only). Not covered by the imported audits at this version."
+
+[[exemptions.winapi-x86_64-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows import libraries beneath winapi (Windows GNU only). Not covered by the imported audits at this version."
+
+[[exemptions.windows]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-collections]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-core]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-future]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-implement]]
+version = "0.60.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-interface]]
+version = "0.59.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-numerics]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-result]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-strings]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-sys]]
+version = "0.52.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-sys]]
+version = "0.61.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath tokio, mio, socket2, quinn-udp, if-watch, rustix and errno (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-targets]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows-threading]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath if-watch (in libp2p-tcp and libp2p-quic) and sysinfo (in libp2p-memory-connection-limits) (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows_i686_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows_i686_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows_i686_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.x509-parser]]
+version = "0.18.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): parsing the peer's libp2p certificate inside libp2p-tls only; rusticata. Not covered by the imported audits at this version."
+
+[[exemptions.yamux]]
+version = "0.14.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): the TCP stream muxer beneath libp2p-yamux (TM-22: its stream count is set, its connection window is upstream's); libp2p/rust-yamux. Not covered by the imported audits at this version."
+
+[[exemptions.yasna]]
+version = "0.5.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): DER writing of the libp2p certificate extension beneath libp2p-tls and rcgen; qnighy. Not covered by the imported audits at this version."
+
+[[exemptions.yasna]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike A): DER writing of the libp2p certificate extension beneath libp2p-tls and rcgen; qnighy. Not covered by the imported audits at this version."
 
 [[exemptions.zeroize_derive]]
 version = "1.5.0"

@@ -178,15 +178,19 @@ as one change, with its CHANGELOG entry. Some keys need one more step:
 as the baseline's header says; `SEMGREP_IMAGE_DIGEST` is the new tag's index
 digest on Docker Hub; `GITLEAKS_LINUX_X64_SHA256` is the linux_x64 line of the
 release's checksums file (`ci/gitleaks-install.sh` says how to read it);
-`RUST_NIGHTLY` must be a date whose nightly has miri and rust-src.
+`RUST_NIGHTLY` must be a date whose nightly has miri and rust-src;
+`ANDROID_NDK` and `XCODE`, which only `ci.yml`'s `net-cross` job uses, must be
+versions the runner images carry (ubuntu-latest's `$ANDROID_HOME/ndk/<version>`,
+macos-latest's `/Applications/Xcode_<version>.app`; their README files in
+actions/runner-images list them), the NDK named by its full version.
 
 **The weekly refresh.** At each weekly Dependabot review the agent applies the
 rule to what Dependabot cannot see, and lands what it finds as one reviewed
 change:
 
 - every key in `ci/pins.env`: the Rust stable and dated nightly, the cargo
-  tools, typos, semgrep and its image digest, gitleaks and its SHA-256, and
-  the Codecov CLI;
+  tools, typos, semgrep and its image digest, gitleaks and its SHA-256, the
+  Codecov CLI, and `net-cross`'s Android NDK and Xcode;
 - cargo-geiger, which moves only with the baseline's counts;
 - site's zola, in its `pages.yml` (site has no `pins.env`);
 - the commit pins of `dtolnay/rust-toolchain` and `google/clusterfuzzlite`:
@@ -197,7 +201,18 @@ change:
   checked), taking back with `cargo update --precise` any version younger than
   7 days, then `cargo deny`, `cargo audit` (and `cargo audit --file
   fuzz/Cargo.lock`), `cargo vet` and the geiger baseline as for any
-  dependency change.
+  dependency change. One exception, which the owner approved on 2026-11-03:
+  `idna_adapter`, idna's back end chosen by its version, stays on its 1.0
+  line, the ASCII-only one (`crates/net/Cargo.toml` requires `~1.0`,
+  `deny.toml` bans the ICU4X back end of later lines, and `dependabot.yml`
+  skips them); a 1.0.* release is taken as usual. One hold-back that is no
+  one's choice: `libp2p-swarm` 0.48.0 requires `wasm-bindgen-futures`
+  `=0.4.58` on wasm targets only, which holds `wasm-bindgen` and its macro
+  and shared crates at 0.2.108 and `js-sys` and `web-sys` at 0.3.85 in
+  `Cargo.lock` (no native build compiles them), so a refresh leaves them
+  until `libp2p-swarm` moves. Phase 6's browser build must settle it: the
+  app's web UI and the `wasm-bindgen-cli` the spikes use are on 0.2.129, and
+  one wasm build holds one `wasm-bindgen`.
 
 The same review reads the result of the last `codecov` job on `main`, since
 that job may fail without turning the run red, so a broken upload shows only

@@ -26,7 +26,11 @@
 # package and file name only after someone has read what the build script
 # writes; any other unscanned Rust file fails. serde and serde_core (1.0.229
 # read) write private.rs, a module that re-exports serde's private API and holds
-# no unsafe code; no crate depends on serde outside its tests yet.
+# no unsafe code; net depends on serde through multiaddr. thiserror (2.0.21
+# read 2026-11-03) writes private.rs, five lines re-exporting its private
+# module, no unsafe code; oid-registry (0.8.1 read 2026-11-03) writes oid_db.rs,
+# 540 lines of `pub const` object identifiers built with asn1-rs's `oid!`
+# macro, no unsafe code.
 #
 # Format: one `cargo-geiger <version>` line, then
 #   <directory under crates/> <functions> <expressions> <impls> <traits> <methods>
@@ -38,8 +42,10 @@ decrypt 0 0 0 0 0
 engine 94 4333 23 2 63
 index 94 4333 23 2 63
 keys 94 4333 23 2 63
-net 0 0 0 0 0
+net 261 20643 336 22 574
 protocol 94 4333 23 2 63
 sim 94 4333 23 2 63
+generated oid-registry oid_db.rs
 generated serde private.rs
 generated serde_core private.rs
+generated thiserror private.rs

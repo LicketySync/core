@@ -5,8 +5,10 @@
 # code. It answers --version with $GEIGER_STUB_VERSION (or fails as a missing
 # subcommand does when that is "missing"), refuses a relative --manifest-path
 # as cargo-geiger does, and refuses a CARGO_TARGET_DIR that is not ci/geiger.sh's
-# own. Each case asserts the exit code of ci/geiger.sh, and some also a line of
-# its output. Run by gate.sh and CI. Exit 1 if any case fails.
+# own. ci/geiger.sh runs with CARGO_HOME=/cargo, so the registry's packages are
+# under $reg, unless a case sets $cargo_home (and $home). Each case asserts the
+# exit code of ci/geiger.sh, and some also a line of its output. Run by gate.sh
+# and CI. Exit 1 if any case fails.
 set -euo pipefail
 script="$(cd "$(dirname "$0")" && pwd)/geiger.sh"
 tmp=$(mktemp -d)
@@ -37,9 +39,11 @@ STUB
 chmod +x "$tmp/bin/cargo"
 
 never='WARNING: Dependency file was never scanned:'
+reg=/cargo/registry/src/index.crates.io-1949cf8c6b5b557f
 readme="$never /reg/aead-0.6.1/README.md"
 csrc="$never /reg/cc-1.8.0/src/detect_compiler_family.c"
 cppsrc="$never /reg/cc-1.8.0/src/detect_cpp_stdlib.cpp"
+dersrc="$never $reg/ring-0.17.14/src/data/alg-rsa-encryption.der"
 gen_serde="$never /t/geiger/debug/build/serde_core-0123456789abcdef/out/private.rs"
 rsfile="$never /t/geiger/debug/build/x-0123456789abcdef/out/generated.rs"
 nometrics='WARNING: No metrics found for package: foo 1.0.0'
@@ -71,6 +75,7 @@ case_() {
     shift 4
   done
   GEIGER_STUB="$dir/stub" GEIGER_STUB_VERSION="${stub_version:-$version}" PATH="$tmp/bin:$PATH" \
+    CARGO_HOME="${cargo_home-/cargo}" HOME="${home-$HOME}" \
     "$script" "$dir/repo" > "$dir/stdout" 2> "$dir/stderr" || rc=$?
   cat "$dir/stdout" "$dir/stderr" > "$dir/out"
   if [ "$rc" = "$want" ]; then
@@ -96,6 +101,21 @@ has_() {
 case_ "clean run at the baseline"               0 "$keys" a 0 "    Checking a v0.0.1" "$at"
 has_ stdout "== a: at the baseline ($keys)"
 case_ "README, C and C++ files, count matches"  0 "$keys" a 1 "$readme"$'\n'"$csrc"$'\n'"$cppsrc"$'\n'"error: Found 3 warnings" "$at"
+case_ "DER data of ring, rustls-webpki, rustls-pki-types" 0 "$keys" a 1 "$readme"$'\n'"$dersrc"$'\n'"$never $reg/rustls-webpki-0.103.16/src/data/alg-ed25519.der"$'\n'"$never $reg/rustls-pki-types-1.15.1/src/data/alg-rsa-encryption.der"$'\n'"error: Found 4 warnings" "$at"
+cargo_home='' home=/h/
+case_ "ring's DER data under the default ~/.cargo" 0 "$keys" a 1 "$never /h/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ring-0.17.14/src/data/alg-rsa-encryption.der"$'\n'"error: Found 1 warnings" "$at"
+unset cargo_home home
+case_ "another package's DER file never scanned" 1 "$keys" a 1 "$never $reg/x509-cert-0.2.5/tests/examples/cert.der"$'\n'"error: Found 1 warnings" "$at"
+case_ "a ring look-alike's DER file"            1 "$keys" a 1 "$never $reg/ring-compat-0.8.0/src/key.der"$'\n'"error: Found 1 warnings" "$at"
+# the version after the package name must be semver: three numbers, then an
+# optional pre-release or build suffix
+case_ "a ring look-alike with a version, ring-0x" 1 "$keys" a 1 "$never $reg/ring-0x-1.0.0/x.der"$'\n'"error: Found 1 warnings" "$at"
+case_ "a ring look-alike with a version, ring-0" 1 "$keys" a 1 "$never $reg/ring-0-1.0.0/x.der"$'\n'"error: Found 1 warnings" "$at"
+case_ "ring's own directory, ring-0.17.14"      0 "$keys" a 1 "$never $reg/ring-0.17.14/x.der"$'\n'"error: Found 1 warnings" "$at"
+case_ "a pre-release, rustls-webpki-0.103.0-alpha.1" 0 "$keys" a 1 "$never $reg/rustls-webpki-0.103.0-alpha.1/x.der"$'\n'"error: Found 1 warnings" "$at"
+case_ "a ring directory nested in another package" 1 "$keys" a 1 "$never $reg/x-1.0.0/vendor/ring-0.17.14/src/key.der"$'\n'"error: Found 1 warnings" "$at"
+case_ "a ring directory outside the registry"   1 "$keys" a 1 "$never /src/ring-0.17.14/src/data/alg-rsa-encryption.der"$'\n'"error: Found 1 warnings" "$at"
+case_ "a .data file never scanned (ICU4X's baked Rust)" 1 "$keys" a 1 "$never /reg/icu_properties_data-2.4.0/data/property_binary_blank_v1.rs.data"$'\n'"error: Found 1 warnings" "$at"
 case_ "coloured count line"                     0 "$keys" a 1 "$readme"$'\n\e[1m\e[91merror\e[0m: Found 1 warnings' "$at"
 # what cargo-geiger printed for the keys crate on 2026-10-18, abridged
 case_ "real noise around the warnings"          0 "$keys" a 1 '    Blocking waiting for file lock on package cache

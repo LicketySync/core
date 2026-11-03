@@ -541,21 +541,21 @@ impl Prober {
             return;
         }
         let r = random(cx);
-        if eager || r % 3 == 0 {
+        if eager || r.is_multiple_of(3) {
             if let Some(q) = self.pick(r >> 8) {
                 self.write(cx, q, DATA);
             }
         }
-        if (r >> 16) % 40 == 0 {
+        if (r >> 16).is_multiple_of(40) {
             if let Some(q) = self.pick(r >> 22) {
-                if (r >> 30) % 2 == 0 {
+                if (r >> 30).is_multiple_of(2) {
                     self.hang_up(cx, q);
                 } else {
                     self.say_goodbye(cx, q);
                 }
             }
         }
-        if eager && (r >> 31) % 2 == 0 {
+        if eager && (r >> 31).is_multiple_of(2) {
             if let Some(q) = self.pick(r >> 32) {
                 self.write(cx, q, DATA);
             }
@@ -664,7 +664,7 @@ impl Peer for Prober {
                 // Half the time the receiver keeps the connection open, so
                 // that the goodbye's sender ends it: its own timer, or, for a
                 // stopped peer, the runtime's flush.
-                if !self.hung_up.contains(&from) && random(cx) % 2 == 0 {
+                if !self.hung_up.contains(&from) && random(cx).is_multiple_of(2) {
                     self.hang_up(cx, from);
                 }
             }
@@ -735,7 +735,7 @@ impl Peer for Prober {
             return;
         }
         self.write(cx, peer, DATA);
-        if random(cx) % 60 == 0 {
+        if random(cx).is_multiple_of(60) {
             self.hang_up(cx, peer);
         }
         self.act(cx, true);
@@ -760,9 +760,9 @@ impl Peer for Prober {
             return;
         }
         let r = random(cx);
-        if r % 20 == 0 {
+        if r.is_multiple_of(20) {
             if let Some(q) = self.pick(r >> 8) {
-                if (r >> 16) % 2 == 0 {
+                if (r >> 16).is_multiple_of(2) {
                     self.hang_up(cx, q);
                 } else {
                     self.say_goodbye(cx, q);
@@ -780,7 +780,7 @@ impl Peer for Prober {
                 if self.leaving.contains(&q) {
                     continue;
                 }
-                if random(cx) % 3 == 0 {
+                if random(cx).is_multiple_of(3) {
                     self.hang_up(cx, q);
                     self.count(|r| &mut r.stop_hang_ups);
                 } else if self.write(cx, q, GOODBYE) {

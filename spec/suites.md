@@ -357,7 +357,10 @@ observer what a sealed peer would otherwise see (threat model section 5).
 **One security protocol per transport (decision).** Each transport offers exactly one security
 protocol, so multistream-select has nothing to choose between before either side is authenticated:
 TLS 1.3 on QUIC and on TCP; Noise only inside WebSocket, WebTransport and WebRTC, where TLS is not
-offered. A side that is offered the other protocol on a transport closes the connection. This
+offered. On TCP, a listener offered any other security protocol answers `na` (multistream-select)
+and the connection ends without being established, when the dialer gives up or the handshake
+timeout passes (`net` tests the Noise and plaintext refusals and the handshake timeout); on QUIC
+nothing is offered, TLS being part of QUIC. This
 qualifies the plan's "nothing is negotiated before the secure channel exists": libp2p does negotiate
 the security protocol, so the sentence is made true by giving it one candidate per transport (threat
 model, section 3.1 and TM-1). What the rule does not prevent is the choice of transport: an attacker
@@ -391,11 +394,20 @@ unless every crate that depends on rustls disables default features; the change 
   dropping the 128-bit suite would buy little, and removing it means `net` building its own crypto
   provider, which is deferred until some other need forces it. Certificates follow the libp2p TLS
   specification: each side's certificate is self-signed by its own freshly generated P-256 key and
-  carries the libp2p extension, in which the libp2p identity key signs the certificate's public key;
+  carries the libp2p extension, in which the libp2p identity key signs the certificate's public key.
+  The certificate key is not a Lickety-Sync key: `rcgen` generates it on `ring` for each of the four
+  TLS configurations a node builds (two per transport), it is neither derived from the seed nor
+  stored, and it reaches rustls as PKCS#8 bytes that `ring` writes and `aws-lc-rs` reads (and signs
+  the CertificateVerify with), with no `pkcs8`, `der` or `spki` crate, which `deny.toml` bans
+  because no first-party key is encoded so;
   inside `libp2p-tls`, `ring` verifies the certificate's own self-signature (P-256 for the
   certificates we generate) and the TLS 1.3 CertificateVerify signature, and the extension's Ed25519
-  signature is verified by `libp2p-identity` on `ed25519-dalek`. `ring`'s other roles are listed under
-  section 3.1. **Providers are passed explicitly (decision).** `libp2p-tls` and `libp2p-quic` build on
+  signature is verified by `libp2p-identity` on `ed25519-dalek`, with its non-strict `verify` and no
+  check against small-order keys **(deviation from section 2.2, recorded 2026-11-03)**: under the
+  identity point, say, a forged extension verifies, so `net` refuses a peer whose identity key is not
+  canonical or is of small order before any stream is opened or accepted (the keys crate's check of
+  every received key; the Hello's own check of the libp2p identity key is phase 1). `ring`'s other
+  roles are listed under section 3.1. **Providers are passed explicitly (decision).** `libp2p-tls` and `libp2p-quic` build on
   `aws_lc_rs::default_provider()` and `libp2p-websocket` on `ring`, each passing its provider rather
   than using a process default. First-party code builds every rustls configuration with
   `builder_with_provider` and `rustls::crypto::aws_lc_rs::default_provider()` and never calls the
@@ -430,7 +442,13 @@ unless every crate that depends on rustls disables default features; the change 
 Ed25519 key. It is not the device key, which signs only the DeviceProof, because no key serves two
 protocols (TM-11). It is a separate Ed25519 key derived under `licketysync/v1/key/libp2p-identity`
 from the device seed, used for nothing but what the libp2p TLS and Noise specifications require
-(signing the libp2p extension in the certificate; signing the Noise static key), and it is bound to
+(signing the libp2p extension in the certificate; signing the Noise static key) and one derivation
+inside `libp2p-quic` **(deviation, recorded 2026-11-03)**: `libp2p-quic` 0.14 derives QUIC's
+stateless-reset key from the identity's secret key with HKDF-SHA256 (`libp2p-identity`'s
+`derive_secret`, info `libp2p quic stateless reset key`) and keys an HMAC on `ring` with it, so that
+a device's reset tokens survive restarts. The key gains a second purpose, separated by HKDF's label,
+which first-party code never calls; ending it means QUIC configured by `net` itself (a phase 1
+option, with the Retry and incoming-limit items of the threat model's TM-22). The identity is bound to
 the device key by the DeviceProof: the device key's Ed25519 signature over the handshake transcript,
 which includes both libp2p identity public keys (32 bytes each, as the Hellos carry them). A verifier
 therefore knows that the device whose identity the transport authenticated is the device whose key
@@ -473,16 +491,16 @@ unaudited post-quantum crates required goes with them.
 
 | Crate | Pin | Checked | Audit status | May be used for | May not be used for |
 | --- | --- | --- | --- | --- | --- |
-| `ed25519-dalek` | `3` | 3.0.0, 2026-07-06 | none named | Every signature in suite 1: the folder signing key, the device key, the libp2p identity key and the BEP 44 DHT signing key (section 2.6; the last signs only BEP 44 mutable items, phase 2): `SigningKey::from_bytes` on a derived seed; `verify_strict`; the canonical-encoding and small-order checks on a decoded public key | `verify` (non-strict); `hazmat`, `legacy_compatibility`, `pkcs8`; signing anything a label does not name |
-| `libp2p-identity` | with `libp2p` `0.57` | 0.3.0, 2026-09-11 | none named; its Ed25519 is `ed25519-dalek` | The libp2p identity key of section 2.6 with the `ed25519` feature only: an `ed25519::SecretKey` from the derived 32-byte seed, its `Keypair` and `PeerId` | Its `secp256k1`, `ecdsa` and `rsa` features; generating an identity from randomness instead of the derived seed; signing anything the libp2p TLS and Noise specifications do not |
+| `ed25519-dalek` | `3` | 3.0.0, 2026-07-06 | none named | Every signature in suite 1: the folder signing key, the device key, the libp2p identity key and the BEP 44 DHT signing key (section 2.6; the last signs only BEP 44 mutable items, phase 2): `SigningKey::from_bytes` on a derived seed; `verify_strict`; the canonical-encoding and small-order checks on a decoded public key; inside `libp2p-identity` only, the non-strict `verify` of the libp2p TLS extension's signature, which `libp2p-identity` 0.3.1 calls (deviation, recorded 2026-11-03; section 2.6: `net` refuses a peer whose identity key is not canonical or of small order) | `verify` (non-strict) in first-party code; `hazmat`, `legacy_compatibility`, `pkcs8`; signing anything a label does not name |
+| `libp2p-identity` | `0.3` (`net` depends on it directly, beside `libp2p-core` `0.44`) | 0.3.1, 2026-10-27 (0.3.0 is dated 2026-07-28 on crates.io, not 2026-09-11) | none named; its Ed25519 is `ed25519-dalek` | The libp2p identity key of section 2.6 with the `ed25519` and `peerid` features only (`peerid` is the `PeerId` type): an `ed25519::SecretKey` from the derived 32-byte seed, its `Keypair` and `PeerId`; inside `libp2p-quic`, `Keypair::derive_secret`, HKDF-SHA256 (`hkdf`, `hmac`, `sha2`) over the identity's secret key under the label `libp2p quic stateless reset key`, once per transport, for QUIC's stateless-reset HMAC key (read 2026-11-03; a use the libp2p QUIC transport adds beyond the TLS and Noise specifications, section 2.6); its non-strict verification of the TLS extension's Ed25519 signature, which accepts small-order keys (deviation, recorded 2026-11-03: `net` refuses such a peer, section 2.6; the Hello's check of the libp2p identity key is phase 1) | Its `secp256k1`, `ecdsa`, `rsa` and `rand` features; generating an identity from randomness instead of the derived seed; signing anything the libp2p TLS and Noise specifications do not; `derive_secret` in first-party code |
 | `chacha20poly1305` | `0.11` | 0.11.0, 2026-06-28 | NCC Group 2020, no significant findings | `XChaCha20Poly1305` as section 2.3 | `ChaCha20Poly1305` (96-bit nonce) directly; the stream cipher without the MAC |
 | `blake3` | `1` | 1.8.7, 2026-08-20 | none named; the designers' reference implementation | The labelled hash `H`, `keyed_hash`, `derive_key` under a registered label; `Hasher` for streaming; `rayon` feature for large files | Extendable output; as a password hash; as a MAC without the keyed mode; plain `hash` without a label |
 | `argon2` | `0.6` | 0.6.0, 2026-08-27 | none named | Argon2id with the parameters of section 2.5, `zeroize` feature; from phase 1, with the key store | Argon2i or Argon2d; the crate's defaults; the `password-hash` PHC API as a verifier |
 | `zeroize` | `1` | 1.9.1, 2026-10-06 | none named; small, widely reviewed | Every secret type: `Zeroize`, `ZeroizeOnDrop`, `Zeroizing<T>`, the `derive` feature | — |
 | `subtle` | `2` | 2.6.1, 2024-06-24 | none named; small, widely reviewed | Constant-time comparison of secrets and tags: `ConstantTimeEq`, `Choice`, `CtOption` | — |
 | `rustls` | `0.23` | 0.23.46, 2026-10-14 | Cure53 2020 | TLS 1.3 for QUIC and TCP as section 2.6, through `libp2p-tls` and `libp2p-quic`: `aws-lc-rs` provider, `prefer-post-quantum`; first-party configurations only through `builder_with_provider` with `aws_lc_rs::default_provider()`; `net` installs that provider as the process default at startup; the `ring` provider only as `libp2p-websocket` ships it | TLS 1.2; the default builders in first-party code; the `ring` provider in first-party code or as the installed default; its HPKE module |
-| `aws-lc-rs` | `1` | 1.18.2, 2026-10-12 | AWS-LC's FIPS build is FIPS 140-3 validated | rustls's crypto provider only | Direct calls to any primitive |
-| `libp2p-tls`, `libp2p-quic`, `libp2p-noise` | with `libp2p` `0.57` | 0.7.0, 0.14.0, 0.47.0, 2026-09-11 | none named | The transports of section 2.6 | Noise patterns other than XX; Noise on QUIC or TCP; TLS inside WebSocket, WebTransport or WebRTC |
+| `aws-lc-rs` | `1` (1.18.2 in `Cargo.lock`) | 1.18.2, 2026-10-12 | AWS-LC's FIPS build is FIPS 140-3 validated | rustls's crypto provider, so the TLS 1.3 handshake on both transports and QUIC's packet protection, Initial keys included, which `quinn-proto` takes from rustls's QUIC API on the configuration's provider; beneath it, `rustls-webpki`'s signature verification. `quinn-proto` links it too, through the `rustls-aws-lc-rs` feature `libp2p-quic` turns on, but calls none of it: `libp2p-quic` also turns on `quinn-proto`'s `ring` feature, which takes precedence, so `quinn-proto`'s own primitives run on `ring` (read 2026-11-03 in `quinn-proto` 0.11.19; the link is why `deny.toml` lists `quinn-proto` as a wrapper). On Windows, AWS-LC's assembly comes as the prebuilt NASM objects that `aws-lc-sys` ships (rustls's `aws_lc_rs` feature turns on `prebuilt-nasm`), assembled by AWS, not here (recorded 2026-11-03; an item before any Windows release: build them with a pinned NASM instead) | Direct calls to any primitive in first-party code |
+| `libp2p-tls`, `libp2p-quic`, `libp2p-noise` | `0.7`, `0.14`, `0.47` (`net` depends on `libp2p-tls` and `libp2p-quic` directly, not through the `libp2p` facade, whose weak `tokio` feature would put DNS, mDNS and UPnP crates in `Cargo.lock`; `libp2p-noise` not yet) | 0.7.0, 0.14.0, 0.47.0, 2026-09-11 | none named | The transports of section 2.6: `make_client_config` and `make_server_config` as `libp2p-tls` builds them (its `Config` on TCP, `libp2p-quic`'s `Config::new` on QUIC); `libp2p-quic` on quinn, with its stateless-reset HMAC key on `ring` from the identity's derived secret | Noise patterns other than XX; Noise on QUIC or TCP; TLS inside WebSocket, WebTransport or WebRTC; building a node while `SSLKEYLOGFILE` is set (both configurations carry rustls's `KeyLogFile`, which writes session secrets to that file; `net` refuses, TM-6) |
 | `libp2p-websocket` | with `libp2p` `0.57` | 0.46.0, read 2026-10-17 | none named | The WebSocket transport of section 2.6, its outer TLS classical as shipped (rustls on `ring`) | Any claim that its outer TLS is post-quantum until the phase 2 change lands; the linked-device channel |
 
 Transitive dependencies these crates pull in, among them `curve25519-dalek`, `sha2`, `p256`, `snow`,
@@ -501,19 +519,24 @@ includes dev-dependencies, an entry for a crate that test tooling also reaches l
 its wrappers (`proptest` for `chacha20`), and a second configuration, `deny-production.toml`, with
 `[graph] exclude-dev = true` and the same entry without the tool, which `gate.sh` and CI also run,
 keeps the test-only path out of production builds, as the `cargo tree` check does **(decision)**.
-`ring` has five roles, all beneath listed crates: in `libp2p-tls`, verifying the certificate's
-self-signature and the TLS 1.3 CertificateVerify signature; in `rcgen`, generating that certificate;
-in `snow` via `libp2p-noise`, the Noise cipher and hash on native targets; in `quinn-proto` through
-its `ring` feature via `libp2p-quic`, QUIC's stateless-reset HMAC and its token key; and in
-`libp2p-websocket`, the whole outer TLS (rustls's `ring` provider, which also turns on `webpki`'s
-`ring` feature). The exact wrappers of `ring`'s `deny.toml` entry are fixed in the change that adds
-`net`, from `cargo tree -e no-dev -i ring` **(decision; `deny.toml` today bans `openssl`,
-`openssl-sys`, `md5`, `sha1`, `rust-crypto`, `pkcs8`, `der` and `spki` outright, bans `ring` outright
-until the change that adds `net` gives it wrappers, restricts the crates `keys` uses, and the
-primitives beneath them, to listed wrappers, and confines `rand` and `rand_xorshift` beneath
-`proptest` (`deny-production.toml` bans both outright, until that change gives `rand` the wrappers
-named above); it has no entries for `hpke`, `ml-dsa`, `x-wing`, `ml-kem` or `x25519-dalek`, which no
-crate depends on)**. Expect `multiple-versions` warnings, which `deny.toml` sets to `warn`, wherever
+`ring` has six roles, all beneath listed crates, four of them in the graph today: (1) in
+`libp2p-tls`, verifying the certificate's self-signature and the TLS 1.3 CertificateVerify
+signature; (2) in `rcgen`, generating the certificate's P-256 key and its self-signature; (3) in
+`quinn-proto`, through the `ring` feature `libp2p-quic` turns on, all of `quinn-proto`'s own
+cryptography: the stateless-reset HMAC-SHA256, the address-validation token keys (HKDF-SHA256, then
+AES-256-GCM) and the AES-128-GCM integrity tag of Retry packets (QUIC's packet protection is
+rustls's, on `aws-lc-rs`); (4) in `libp2p-quic` itself, building that HMAC key from the identity's
+HKDF-derived secret (section 2.6); and, not in the graph yet, (5) in `snow` via `libp2p-noise`, the
+Noise cipher and hash on native targets, and (6) in `libp2p-websocket`, the whole outer TLS
+(rustls's `ring` provider, which also turns on `webpki`'s `ring` feature). `ring`'s `deny.toml`
+wrappers
+are what `cargo tree -e no-dev -i ring` showed when `net` was added (2026-11-03): `libp2p-tls`,
+`rcgen`, `quinn-proto` and `libp2p-quic` **(decision; `deny.toml` bans `openssl`, `openssl-sys`,
+`md5`, `sha1`, `rust-crypto`, `pkcs8`, `der` and `spki` outright, restricts the crates `keys` and
+`net` use, and the primitives beneath them, to listed wrappers, and confines `rand` beneath the
+libp2p crates and `quinn-proto` and, with `rand_xorshift`, beneath `proptest`; `deny-production.toml`
+gives `rand` the same wrappers without `proptest` and bans `rand_xorshift` outright; it has no
+entries for `hpke`, `ml-dsa`, `x-wing`, `ml-kem` or `x25519-dalek`, which no crate depends on)**. Expect `multiple-versions` warnings, which `deny.toml` sets to `warn`, wherever
 two listed crates require different lines of a shared dependency; each is read when it appears.
 
 ### 3.2 Encodings and non-cryptographic helpers
@@ -567,6 +590,18 @@ newtype over `Zeroizing<[u8; 32]>` or a struct deriving `Zeroize, ZeroizeOnDrop`
   does let its holder confirm and track the folder, so logs, where errors end up, redact it by
   default (`threat-model.md` TM-6).
 - Memory locking (`mlock`) and swap are the operating system's concern and are not promised.
+
+**Deviation: the libp2p identity's seed beneath `libp2p-identity` (recorded 2026-11-03, to raise
+upstream).** `net` hands the identity's 32-byte seed to `libp2p-identity` 0.3.1 from the keys crate's
+zeroizing buffer, which `ed25519::SecretKey::try_from_bytes` wipes, but beyond that point the rules
+above do not hold: its `ed25519::SecretKey` is a plain array that is `Clone` and is not wiped on drop,
+`Keypair::secret` and `derive_secret` (which `libp2p-quic` calls for the stateless-reset key, section
+2.6) leave copies of the secret and of the derived key, and `libp2p-tls` and `libp2p-quic` keep clones
+of the `Keypair` in their configurations. Copies of the identity's secret key may therefore stay in
+memory after use. The key authenticates the transport only (no folder key or device key passes
+through these crates), so what a memory read could take is the device's transport identity. Raising
+it upstream (an issue or a change to `libp2p-identity`) needs the owner's approval to post; until
+then it is recorded here, in the threat model's TM-6, and in the changelog.
 
 ### 4.2 Constant-time comparison
 

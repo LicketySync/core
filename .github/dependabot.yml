@@ -15,6 +15,12 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 10
+    # idna_adapter stays on its 1.0 line, an exception to the rule above that
+    # the owner approved on 2026-11-03 (crates/net/Cargo.toml, deny.toml); a
+    # 1.0.* release is still taken.
+    ignore:
+      - dependency-name: "idna_adapter"
+        versions: [">= 1.1"]
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]

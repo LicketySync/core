@@ -136,13 +136,17 @@ impl SetUnion {
     /// items or carries more than [`MAX_ITEMS_PER_MESSAGE`].
     #[must_use]
     pub fn decode(bytes: &[u8]) -> Option<Vec<u64>> {
-        if bytes.len() % 8 != 0 || bytes.len() / 8 > MAX_ITEMS_PER_MESSAGE {
+        if !bytes.len().is_multiple_of(8) || bytes.len() / 8 > MAX_ITEMS_PER_MESSAGE {
             return None;
         }
-        bytes
-            .chunks_exact(8)
-            .map(|chunk| <[u8; 8]>::try_from(chunk).ok().map(u64::from_be_bytes))
-            .collect()
+        Some(
+            bytes
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|chunk| u64::from_be_bytes(*chunk))
+                .collect(),
+        )
     }
 
     fn key(item: u64) -> Vec<u8> {

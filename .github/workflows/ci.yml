@@ -203,6 +203,69 @@ jobs:
           use_oidc: true
           fail_ci_if_error: true
 
+  # licketysync-net for the phone targets (spike A of phase 0): aws-lc-sys,
+  # ring and quinn cross-compile for aarch64-linux-android with the pinned
+  # NDK and for aarch64-apple-ios with the pinned Xcode, so that the app shells
+  # (phases 3 and 4) link a transport that builds. A build, not a test: no
+  # Android or iOS device or simulator runs here. ANDROID_NDK and XCODE are
+  # ci/pins.env's (gate.sh checks these copies); the runner images change, so
+  # a step stops when the pinned one is not on the image. API level 24, Tauri
+  # 2's default minimum SDK, until phase 4 fixes the app's.
+  net-cross:
+    name: net builds for ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    env:
+      ANDROID_NDK: 30.0.16248370
+      XCODE: "26.6"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+          - os: macos-latest
+            target: aarch64-apple-ios
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.target }}
+      - name: Use the pinned NDK
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          ndk="$ANDROID_HOME/ndk/$ANDROID_NDK"
+          if [ ! -d "$ndk" ]; then
+            echo "NDK $ANDROID_NDK is not on this runner image; it has:" >&2
+            ls "$ANDROID_HOME/ndk" >&2
+            exit 1
+          fi
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "ANDROID_NDK_ROOT=$ndk"
+            echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
+            echo "CXX_aarch64_linux_android=$bin/aarch64-linux-android24-clang++"
+            echo "AR_aarch64_linux_android=$bin/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang"
+          } >> "$GITHUB_ENV"
+      - name: Use the pinned Xcode
+        if: matrix.target == 'aarch64-apple-ios'
+        run: |
+          app="/Applications/Xcode_$XCODE.app"
+          if [ ! -d "$app" ]; then
+            echo "Xcode $XCODE is not on this runner image; it has:" >&2
+            ls -d /Applications/Xcode_*.app >&2
+            exit 1
+          fi
+          sudo xcode-select --switch "$app"
+          xcodebuild -version
+      - run: cargo build --locked -p licketysync-net --target ${{ matrix.target }}
+
   docs:
     name: rustdoc (-D warnings)
     runs-on: ubuntu-latest

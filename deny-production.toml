@@ -15,10 +15,11 @@ wildcards = "deny"
 # every one of them is `publish = false`.
 allow-wildcard-paths = true
 deny = [
-  { crate = "chacha20", wrappers = ["chacha20poly1305"], reason = "never without the MAC" },
+  { crate = "chacha20", wrappers = ["chacha20poly1305", "rand"], reason = "never without the MAC, except as rand's generator" },
+  # rand in a shipped build only beneath the transport crates (suites.md 3.1
+  # and 3.2): deny.toml's wrappers without proptest.
+  { crate = "rand", wrappers = ["libp2p-core", "libp2p-quic", "libp2p-swarm", "quinn-proto"], reason = "first-party randomness is getrandom (suites.md 4.3); rand only beneath the libp2p crates and quinn" },
   # Reached only through proptest, a dev-dependency, so no shipped build has
-  # them (deny.toml's entries). Banned outright until the change that adds net
-  # gives rand its wrappers there (suites.md 3.1 and 3.2).
-  { crate = "rand", reason = "first-party randomness is getrandom (suites.md 4.3); rand only beneath test tooling" },
+  # it (deny.toml's entry).
   { crate = "rand_xorshift", reason = "proptest's test generator; never in a shipped build" },
 ]

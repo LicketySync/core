@@ -410,7 +410,8 @@ fn device_seed(start: u8) -> DeviceSeed {
 
 /// Section 9 item 4. The peer ID is the identity multihash of the protobuf
 /// encoding of the Ed25519 public key (libp2p peer-ids specification); the
-/// `net` crate's test checks it against `libp2p-identity` when that lands.
+/// `net` crate's `peer_id_of_the_keys_test_seed_is_the_keys_vector` checks
+/// it against `libp2p-identity`.
 #[test]
 fn vector_device() {
     let seed = device_seed(0xa0);
