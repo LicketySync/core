@@ -6,9 +6,11 @@ compiles for Windows, macOS, Linux (x86 and ARM), Android, iOS and WebAssembly.
 
 Lickety-Sync syncs folders between your own devices and the people you share
 with, and contacts no server you did not turn on: there are no accounts and no
-tracker, and your own devices may relay for each other; no other relay is used
-unless you turn it on. Every connection is encrypted; only devices that hold
-one of a folder's keys can join it, and anyone who holds a key can pass it on.
+tracker; no relay is used, and your devices relay for no one, unless you turn
+that on (a relay passes encrypted traffic, which it cannot read, between
+devices that cannot reach each other). Every connection is encrypted; only
+devices that hold one of a folder's keys can join it, and anyone who holds a
+key can pass it on.
 Licensed under the Mozilla Public License 2.0.
 
 - Plan and design: "Lickety-Sync: Project Plan" (the living document).
@@ -41,18 +43,22 @@ Licensed under the Mozilla Public License 2.0.
 
 ## Status
 
-Now: phase 1, "LAN sync from the command line". Its gate: two Linux machines
+Now: phase 0, spikes and the protocol. Main holds the four specifications, the
+simulator, and the keys, protocol, index and engine crates. Every gate scenario
+on the simulator ends with the same records on every peer and the same files
+on every read and write peer. Phase 0 is not finished: its gate (simulated
+peers converge; spec published) passed on 2026-11-02, with its threat-model §6
+review recorded in [`gates/phase-0.md`](gates/phase-0.md); still to do, from
+the plan's work list (the owner's decision of 2026-11-02): the libp2p
+transports, the phone shells and the WebTransport native-side check (the
+network connections, the Android and iOS app shells, and a check that browser
+connections work from the device side). Nothing syncs on a real disk or over a
+real network yet, and there is nothing to install.
+
+Next: phase 1, "LAN sync from the command line". Its gate: two Linux machines
 pass the fault-test suite. By the plan's roadmap it brings the folder keys into
 use, LAN discovery (mDNS and broadcast), QUIC, scanning and watching the disk,
 conflicts and ignore files on a real disk, and a per-path sync status in the
 engine; with them come SQLite storage (the plan's decision of 2026-10-14) and
 FastCDC or another keyed chunker (`spec/keys.md` §3.2). The roadmap and the
 later phases' gates are in the plan.
-
-Main holds the four specifications, the simulator, and the keys, protocol,
-index and engine crates. Every gate scenario on the simulator ends with the
-same records on every peer and the same files on every read and write peer.
-Phase 0's gate (simulated peers converge; spec published) passed on
-2026-11-02; its review is recorded in [`gates/phase-0.md`](gates/phase-0.md).
-Nothing syncs on a real disk or over a real network yet, and there is nothing
-to install.

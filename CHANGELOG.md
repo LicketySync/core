@@ -6,6 +6,38 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Docs: phase 0 is current again, the Risks page records two of the owner's decisions, and the
+  relay sentences follow the owner's answer that only public relays exist. Docs only; no code
+  changes.
+  - Phase 0. Of the plan's phase 0 work list (the libp2p transports, the phone shells and the
+    WebTransport native-side check), the owner decided on 2026-11-02: "I wanted phase 0 completed.
+    Get this done as part of phase 0." Phase 0's gate (simulated peers converge; spec published)
+    passed on 2026-11-02, its threat-model §6 review recorded in `gates/phase-0.md`, but the phase
+    is not finished until that work is done. The README's Status now opens with "Now: phase 0,
+    spikes and the protocol" (the plan's name for it): what main holds (as before), that phase 0
+    is not finished, that its gate passed with its review in `gates/phase-0.md`, and those three
+    items as still to do, also in plain words; phase 1, "LAN sync from the command line", with its
+    gate (two Linux machines pass the fault-test suite) and what it brings, follows as "Next", in
+    place of "Now: phase 1".
+  - The Risks page. Its two design choices marked as awaiting the owner's review (sealed
+    metadata's size classes rounded up to a power of two; cleanups that show which records were
+    folder deletions or deletions more than a year old), which the owner approved on 2026-11-02
+    ("Okay"), are now marked as the owner's decision, in the site repository's own commit.
+  - Relays. The owner's answers: "Only relay when configured to do so. By default, we do not relay
+    publicly but it could be enabled." (2026-11-02) and "I think we should drop the
+    private/protected relay idea and only work with public relays." (2026-11-03). The README's
+    opening says "no relay is used, and your devices relay for no one, unless you turn that on",
+    and what a relay is, in place of "your own devices may relay for each other; no other relay is
+    used unless you turn it on". The Risks page says the same in its glossary and its relay item;
+    the glossary adds that every relay is a public one, which may belong to anyone, and both add
+    that any of your computers can be set up as a public relay, with limits on rate and open
+    connections, and a minimum transfer rate below which a connection can be dropped.
+    `threat-model.md` §2, §3.9 and TM-25, and the plan's summary and comparison tables, still
+    describe private or own-device relays; the relay design change that follows rewrites them,
+    with the protocol spec's relay text.
+  - Reviewed 2026-11-03 by a27c3602c6374ec6f (accuracy, clean on the final text) and
+    a9625fde653494bc0 (clarity, its findings fixed as ruled), with the site's Risks page. Author
+    a94ccee62e12b9dfd; the merge agent wrote this line.
 - The docs now describe phase 1, "LAN sync from the command line", since phase 0's gate (simulated
   peers converge; spec published) passed on 2026-11-02, its review recorded in `gates/phase-0.md`
   (the owner's rule of 2026-10-25: the docs describe the current phase and the phases ahead, and
