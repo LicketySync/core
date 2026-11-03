@@ -80,9 +80,9 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): prost's buffer type; tokio-rs (Darksonn), whom the Mozilla and Bytecode Alliance sets trust. Not covered by the imported audits at this version."
 
 [[exemptions.cc]]
-version = "1.8.0"
+version = "1.10.0"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): build-time only, blake3's build script; rust-lang. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): build-time only, blake3's build script; rust-lang; 1.10.0 read in the weekly refresh of 2026-11-02 (its diff from 1.8.0: libtool support, compile_commands.json output, AddressSanitizer flags passed on to the C compiler, Cargo's variables read from its environment snapshot, RUSTC_WRAPPER applied to the cl.exe it finds itself, MSVC archiver paths relative to the output directory, regenerated target tables, and jobserver and process-exit polling in its parallel module, whose new unsafe code is libc and Windows calls for pipes, kqueue and semaphores). Not covered by the imported audits at this version."
 
 [[exemptions.cfg-if]]
 version = "1.0.5"
@@ -115,9 +115,9 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): common traits beneath the RustCrypto crates; RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.ctutils]]
-version = "0.4.4"
+version = "0.4.6"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): constant-time helpers beneath the RustCrypto crates; RustCrypto; 0.4.4 reviewed in the RUSTSEC-2026-0385 fix of 2026-10-23 (its diff from 0.4.3: choice.rs, ct_lt.rs, ct_gt.rs and tests, plus packaging metadata; still forbids unsafe code). Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): constant-time helpers beneath the RustCrypto crates; RustCrypto; 0.4.4 reviewed in the RUSTSEC-2026-0385 fix of 2026-10-23, and 0.4.6 in the weekly refresh of 2026-11-02 (its diff from 0.4.4: the comparison macros move, with the same formulas, into a new public primitives module, which adds borrowing-subtraction, zero-count and carry helpers; optimization barriers on Thumb-1 alone; tests; still forbids unsafe code). Not covered by the imported audits at this version."
 
 [[exemptions.curve25519-dalek]]
 version = "5.0.0"
@@ -150,9 +150,9 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): build-time only, a dependency of itertools; bluss. Not covered by the imported audits at this version."
 
 [[exemptions.find-msvc-tools]]
-version = "0.1.14"
+version = "0.1.15"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): build-time only, beneath cc; rust-lang. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): build-time only, beneath cc; rust-lang; 0.1.15 read in the weekly refresh of 2026-11-02 (its diff from 0.1.14: two more Windows API bindings, OpenSemaphoreA and WaitForMultipleObjects, and their constants). Not covered by the imported audits at this version."
 
 [[exemptions.hex-conservative]]
 version = "0.2.3"
@@ -165,9 +165,9 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): fixed-size array types beneath the RustCrypto crates; RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.inout]]
-version = "0.2.4"
+version = "0.2.5"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): in-place buffer types beneath aead and cipher; RustCrypto. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): in-place buffer types beneath aead and cipher; RustCrypto; 0.2.5 read in the weekly refresh of 2026-11-02 (its diff from 0.2.4: into_padded_blocks returns PadError, where it had a debug assertion, when a Padding implementation breaks the buffer's invariants). Not covered by the imported audits at this version."
 
 [[exemptions.itertools]]
 version = "0.14.0"
@@ -180,9 +180,9 @@ criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): dev-only via serde_json; dtolnay. Not covered by the imported audits at this version."
 
 [[exemptions.libc]]
-version = "0.2.190"
+version = "0.2.191"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys): platform bindings beneath cpufeatures and getrandom; rust-lang. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys): platform bindings beneath cpufeatures and getrandom; rust-lang; 0.2.191 read in the weekly refresh of 2026-11-02 (its diff from 0.2.190: constants and types for Apple, FreeBSD, Haiku, Hurd, NuttX, OpenBSD, QuRT, WASI and Emscripten, and build-script cfgs for Emscripten versions; Android's prop_info made an opaque extern type; AIX's statvfs.f_fsid back to c_ulong; FreeBSD aarch64's gpregs and fpregs fixed; nothing for Linux on x86_64). Not covered by the imported audits at this version."
 
 [[exemptions.memchr]]
 version = "2.8.3"

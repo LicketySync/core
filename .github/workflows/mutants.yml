@@ -61,7 +61,7 @@ jobs:
           toolchain: 1.99.1
       # The version gate.sh checks, with no fallback (see the note in ci.yml's
       # deps job).
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
         with:
           tool: cargo-mutants@27.1.0
           fallback: none

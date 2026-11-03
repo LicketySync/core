@@ -6,6 +6,124 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- The weekly stay-current refresh of 2026-11-02, under the owner's "Stay current" rule of 2026-10-25
+  (quoted in the project's CLAUDE.md; TM-8, TM-29): every pin is the newest release that had been
+  out for at least 7 days at 2026-11-03T02:20Z (published on or before 2026-10-27T02:20Z), or a
+  younger one that fixes a critical or high vulnerability or, on the owner's ruling of 2026-11-03,
+  holds only the data needed to install such a fix. Dates come from the crates.io API, `gh api
+  .../releases` (each tag resolved to its commit, an annotated tag dereferenced), Docker Hub, PyPI
+  and static.rust-lang.org, read under a User-Agent with no personal data. Moved, by
+  `CONTRIBUTING.md`'s procedure (`ci/pins.env`, then the workflow copies, then `git grep -F` for
+  each old version):
+  - Rust nightly `nightly-2026-10-18` to `nightly-2026-10-27` (rustc 1.101.0-nightly, 16d1ffac1
+    2026-10-26; its manifest was published 2026-10-27T01:13Z and has miri and rust-src), in
+    `pins.env` and the four nightly jobs (`ci.yml`'s `udeps`, `nightly.yml`'s `fuzz`, `careful` and
+    `miri`). `gates/phase-0.md` still names `nightly-2026-10-18`: it records what the gate ran.
+  - cargo-nextest 0.9.148 to 0.9.150 (crates.io, 2026-10-26T18:33Z), which fixes GHSA-vc25-qg58-w57c
+    (High, CVSS 7.8): from 0.9.125 to 0.9.149, `cargo nextest run --rerun` with a crafted portable
+    recording could run code during the build. Nothing here records or reruns runs, but the pinned
+    release was in the affected range.
+  - taiki-e/install-action `v2.87.29` to `v2.87.33` (`645d1ab48b3cb8591684a8b730b2ccf4cb3f9568`,
+    2026-10-28T12:37Z), taken six days old on the owner's ruling, since it is what lets CI install
+    the fix above. It fixes no vulnerability itself, so the review put it to the owner, who on
+    2026-11-03 chose "Take it now (Recommended)", the reading: "a release under 7 days old may be
+    taken when its only change is the data needed to install a critical or high fix". It is the
+    first release whose manifest lists cargo-nextest 0.9.150 (`v2.87.32`, of 2026-10-26 and the
+    newest that is 7 days old, lists 0.9.149 at most), and every install here has `fallback: none`,
+    which fails on a version the manifest lacks. Its diff from `v2.87.32` is manifest files and its
+    changelog only (cargo-about, cargo-nextest, espup, kingfisher, mise, release-plz, tombi, trunk,
+    uv, vacuum), and its manifests list every version the workflows install (cargo-nextest 0.9.150,
+    cargo-llvm-cov, cargo-udeps, cargo-deny, cargo-audit, cargo-machete, typos, cargo-mutants,
+    cargo-careful, cargo-auditable, cargo-cyclonedx). Its SHA-256 for 0.9.150's x86_64 Linux
+    archives (gnu `b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f`, musl
+    `84f0f9ba75d0b6fa117bc418d49747ba78e20e4583057f6fa628f1b17c17234d`) equals the digests of
+    nextest's GitHub release assets. It is 7 days old from 2026-11-04T12:37Z.
+  - semgrep 1.181.0 to 1.182.0 (GitHub 2026-10-20T20:27Z, PyPI 20:32Z; features and fixes), and its
+    image digest to `sha256:4a34048c04fef049f71665047f074cffb00cc3d89482f965a5cd151d589237af`
+    (Docker Hub's API and the registry's `Docker-Content-Digest` agree; the tag was pushed
+    2026-10-20T20:26Z).
+  - The Codecov CLI `v11.3.1` to `v11.3.2` (2026-10-28T17:37Z), taken five days old under the
+    critical-or-high exception, as cargo-vet 0.10.3 was on 2026-10-25. The advisory that reaches the
+    codecov job is GHSA-6q48-6c7w-9gw2 (Critical: certifi bundles emSign root CAs whose intermediate
+    CA keys were compromised; fixed in certifi 2026.10.18): 11.3.1's lockfile (`uv.lock`) has
+    certifi 2024.12.14 and 11.3.2's has 2026.10.23, and the CLI checks Codecov's TLS certificate
+    against certifi's roots when it uploads. Its urllib3 moves from 2.6.3 to 2.7.0 as well, past
+    GHSA-mf9v-mfxr-j63j and GHSA-qccp-gfcp-xxvc (both High), which the security review found do not
+    reach the job; urllib3 2.7.0 is still in the range of GHSA-vxq7-64xx-v4gw and
+    GHSA-8988-9cw3-xx77 (High, fixed in 2.8.0), which no Codecov CLI release has yet. The Linux
+    `codecov.SHA256SUM` on cli.codecov.io names the digest of the GitHub release's
+    `codecovcli_linux`, `8e1bfb71661378530f6ea21e82b414095899e565cbb4cf555c613064be17b973`, and its
+    signature verifies with Codecov's key as codecov-action fetches it from keybase.io (fingerprint
+    `2703 4E7F DB85 0E0B BC2C 62FF 806B B28A ED77 9869`): the checks codecov-action makes in CI; and
+    `.typos.toml` lists `certifi` as a word, which typos took for a misspelling of "certify".
+  - github/codeql-action `v4.39.0` to `v4.39.1` (`9b3254085494b55a0f7c4c2b3d2d52cc712ce370`, an
+    annotated tag dereferenced, 2026-10-21), for `init`, `analyze` and `upload-sarif`: its default
+    CodeQL bundle moves from 2.27.2 to 2.27.3, whose Rust extractor's `FIXED_RUST_TOOLCHAIN` moves
+    from 1.98.1 to 1.99.0, and its `action.yml` files differ only in `init`'s description of
+    `trap-caching`. This is the release the pin-all series passed over as too young.
+  - Swatinem/rust-cache `v2.9.2` to `v2.9.3` (`d1527c8f67ef9af357290475d4af4b0fab8f12e0`, an
+    annotated tag dereferenced, 2026-10-20), which the pin-all series also passed over: its
+    timestamp pruning no longer stops after the first entry, two calls in its target cleanup gain
+    their missing `await`s, a failed `rustup toolchain list` is logged as info instead of a warning,
+    and its bundled dependencies move (`@actions/cache` 6.3.0, `smol-toml` 1.9.1, with `dist/`
+    rebuilt).
+  - `Cargo.lock` and `fuzz/Cargo.lock`, the same five crates in each, by `cargo update` and then
+    `cargo update --precise` for the two whose newest release is too young: cc 1.8.0 to 1.10.0
+    (2026-10-23), ctutils 0.4.4 to 0.4.6 (2026-10-25T23:01Z), find-msvc-tools 0.1.14 to 0.1.15
+    (2026-10-19), inout 0.2.4 to 0.2.5 (2026-10-19) and libc 0.2.190 to 0.2.191 (2026-10-16), each
+    lockfile checksum equal to the one crates.io publishes; no package is added or removed, and no
+    manifest changes. `supply-chain/config.toml` moves the five exemptions to the new versions with
+    the same criteria, safe-to-deploy, since no imported audit set covers them (`cargo vet` unlocked
+    left `imports.lock` unchanged), and each note says what the diff holds, read with `cargo vet
+    diff`: for ctutils, the constant-time comparisons keep their formulas on every target but
+    Thumb-1, and the crate still forbids unsafe code; inout's `into_padded_blocks` returns
+    `PadError` where it had a debug assertion; cc's new unsafe code is in its build-time jobserver
+    polling. `ctutils` is still reached only beneath `universal-hash`, as `deny.toml` requires.
+  - Unchanged, each the newest release and old enough: Rust stable 1.99.1 (the stable channel's
+    manifest is still that of 2026-10-15), cargo-llvm-cov 0.9.1, cargo-udeps 0.1.61, cargo-deny
+    0.20.2, cargo-audit 0.22.2, cargo-machete 0.9.2, cargo-vet 0.10.3, cargo-mutants 27.1.0,
+    cargo-fuzz 0.13.2, cargo-careful 0.4.10, cargo-geiger 0.14.0, cargo-auditable 0.7.7,
+    cargo-cyclonedx 0.5.9, cargo-semver-checks 0.51.0, typos-cli 1.51.1, gitleaks 8.30.1, site's
+    zola 0.23.6; checkout `v7.0.1`, upload-artifact `v7.0.2`, download-artifact `v8.0.2`,
+    attest-build-provenance `v4.2.2`, codecov-action `v7.1.1`, scorecard-action `v2.5.0`;
+    rust-toolchain `v1` (still `683b588c487a69d01f6c6ddf40f036ff682cc2c8`, of 2026-10-16) and
+    clusterfuzzlite `v1` (still `884713a6c30a92e5e8544c39945cd7cb630abcd1`, of 2023-08-09).
+  - Held back, younger than 7 days and fixing nothing critical or high: cargo-nextest 0.9.151
+    (2026-11-03; two bug fixes; no install-action release lists it yet). Its lockfile moves
+    pulldown-cmark from 0.13.4 to 0.13.5, past RUSTSEC-2026-0414 (CVSS 7.5), which, like
+    RUSTSEC-2026-0433 (fixed in 0.13.6, so in both releases), only the `ENABLE_WIKILINKS` option
+    reaches, set alone or through `Options::all()`; in 0.9.150 neither crate that parses with it
+    sets it (`nextest-runner` 0.128.0's `help_render.rs` sets `ENABLE_DEFINITION_LIST |
+    ENABLE_STRIKETHROUGH`, `clap_derive` 4.6.7's `doc_comments.rs` `ENABLE_STRIKETHROUGH`). Both
+    releases also hold quick-xml 0.38.4, in the range of RUSTSEC-2026-0194 and RUSTSEC-2026-0195
+    (CVSS 7.5, fixed in 0.41.0), beneath `self_update` alone, which only `cargo nextest self update`
+    runs, and nothing here does. Also held back: typos-cli 1.52.0 (2026-11-02; the dictionary);
+    semgrep 1.183.0 (2026-10-29; features and fixes); install-action `v2.88.0` to `v2.89.1`
+    (2026-10-28 to 2026-11-02; manifests and new tools); cc 1.11.0 (2026-11-02); ctutils 0.4.7
+    (2026-10-29) and 0.4.8 (2026-11-02), whose "Security" entries harden Thumb-1 (Cortex-M0) and
+    32-bit RISC-V code, targets nothing here builds, with no advisory (RustSec lists only
+    RUSTSEC-2026-0385 for ctutils, fixed in 0.4.4); and the nightlies after 2026-10-27.
+  - `gate.sh` passes on bdb7d18 with this change, run with the user's cargo-nextest 0.9.150 and
+    semgrep 1.182.0: 656 tests, 1 skipped; line coverage keys 99.37%, protocol 98.32%, index 97.60%,
+    engine 96.94% (the runs before the rebase gave the same, but index 97.66% on the first of them,
+    when llvm-cov counted 3,165 lines and not 3,167); `cargo deny`, `cargo audit` (both lockfiles),
+    `cargo vet --locked` and cargo-udeps on `nightly-2026-10-27` pass, and every cargo-geiger count
+    equals `ci/geiger-baseline.txt`, which does not change. With `nightly-2026-10-27`, `cargo fuzz
+    build` builds all 19 targets, a 5-second `cargo fuzz run frame_decode` from its seeds runs
+    clean, `cargo careful test --workspace` passes (658 passed, 1 ignored) and `cargo miri
+    --version` answers.
+  - On the dev machine: `nightly-2026-10-27` installed with miri and rust-src (rustup checks each
+    component's SHA-256 against the manifest). cargo-nextest 0.9.150 (crates.io, `cargo install
+    --locked`) and semgrep 1.182.0 (PyPI, through pipx) were first installed beside the pinned ones,
+    under the refresh's scratch directory, so that worktrees still on `main`'s pins kept passing
+    their gate, and then for the user, over 0.9.148 and 1.181.0, before the merge agent's gate run
+    (`cargo install --locked cargo-nextest --version 0.9.150`, `pipx install --force
+    semgrep==1.182.0`, as `gate.sh` prints).
+  - Reviewed 2026-11-03 by a4ee053f5f0941bb0 (pins) and a1ae94e8e32a1fe4a (supply-chain security),
+    both clean once the rulings were applied: SC-1, install-action `v2.87.33` taken six days old,
+    approved by the owner on 2026-11-03; SCS-1, the Critical certifi advisory named as the one that
+    reaches the codecov job; and their NITs on the cc, libc, rust-cache and held-back nextest notes.
+    Author aa4eaa4a25e86b635; the merge agent wrote this line.
 - Docs: phase 0 is current again, the Risks page records two of the owner's decisions, and the
   relay sentences follow the owner's answer that only public relays exist. Docs only; no code
   changes.

@@ -87,7 +87,7 @@ jobs:
       # install-action checks each download's SHA-256 against its manifest, and
       # `fallback: none` makes a version missing from it fail here instead of
       # going to cargo-binstall (see the note in ci.yml's deps job).
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@645d1ab48b3cb8591684a8b730b2ccf4cb3f9568 # v2.87.33
         with:
           tool: cargo-auditable@0.7.7,cargo-cyclonedx@0.5.9
           fallback: none

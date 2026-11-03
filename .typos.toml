@@ -2,5 +2,9 @@
 # The last pattern is a review agent's ID (a and 16 hex digits), as review records name them.
 extend-ignore-re = ["(?i)licketysync", "Padm[eé]", "FastCDC", "Noise_XX", "UPnP\\w*", "\\ba[0-9a-f]{16}\\b"]
 
+[default.extend-words]
+# Python's root-certificate package, which the Codecov CLI bundles.
+certifi = "certifi"
+
 [files]
 extend-exclude = ["target/", "Cargo.lock"]
