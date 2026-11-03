@@ -33,11 +33,12 @@
 //! sealed holder, every record kept sealed and every named blob matching its
 //! ciphertext hash and the stored length a record names; (d) no issue naming
 //! a peer or a record and only the issues the scenario expects, no close
-//! blaming a peer, no overflowed connection, no internal error, every start
-//! shown as Checking, and, over every instance of each member, no high-water
-//! mark that fell and no counter given to two records (no counter reuse
-//! within one device, the brief's engine-crash criterion, checked
-//! everywhere).
+//! blaming a peer, no overflowed connection, no internal error, exactly as
+//! many writes refused as the scenario expects (none unless members write
+//! with a read or sealed key), every start shown as Checking, and, over
+//! every instance of each member, no high-water mark that fell and no counter
+//! given to two records (no counter reuse within one device, the brief's
+//! engine-crash criterion, checked everywhere).
 
 use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -151,6 +152,9 @@ pub struct Expect {
     /// The warning that the folder's time is more than a day ahead of a
     /// device's clock is expected.
     pub clock_ahead: bool,
+    /// How many writes the engine refuses ([`Ledger::refused`]): exactly
+    /// these, so that fewer writes never pass for convergence.
+    pub refused: u64,
 }
 
 impl Expect {
@@ -225,6 +229,12 @@ fn check_ledger(sim: &Sim<Member>, ledger: &Ledger, expect: Expect) -> Result<()
     }
     if ledger.internal_errors > 0 {
         return Err(format!("{} internal errors", ledger.internal_errors));
+    }
+    if ledger.refused != expect.refused {
+        return Err(format!(
+            "{} writes refused, not {}",
+            ledger.refused, expect.refused
+        ));
     }
     if let Some((peer, before, after)) = ledger.hw_fell.first() {
         return Err(format!(

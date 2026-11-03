@@ -126,6 +126,42 @@ pub fn resolve(path: &std::path::Path) {
     let _ = std::fs::symlink_metadata(path);
 }
 
+// The same through an import, and Path's methods (the gate review's finding
+// S3: the method forms were not flagged).
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub fn resolve_by_method(path: &Path, owned: PathBuf) {
+    // ruleid: no-follow-symlinks
+    let _ = fs::canonicalize(path);
+    // ruleid: no-follow-symlinks
+    let _ = fs::read_link(path);
+    // ruleid: no-follow-symlinks
+    let _ = path.canonicalize();
+    // ruleid: no-follow-symlinks
+    let _ = path.read_link();
+    // ruleid: no-follow-symlinks
+    let _ = owned.canonicalize();
+    // ruleid: no-follow-symlinks
+    let _ = path.join("sub").canonicalize();
+    // ruleid: no-follow-symlinks
+    let _ = Path::canonicalize(path);
+    // ruleid: no-follow-symlinks
+    let _ = std::path::Path::read_link(path);
+    // ruleid: no-follow-symlinks
+    let _ = PathBuf::canonicalize(&owned);
+    // ok: no-follow-symlinks
+    let _ = path.symlink_metadata();
+}
+
+// The same passed as function values, not called.
+pub fn resolve_as_values(paths: &[PathBuf]) {
+    // ruleid: no-follow-symlinks
+    let _ = paths.iter().map(fs::canonicalize).count();
+    // ruleid: no-follow-symlinks
+    let _ = paths.iter().map(Path::read_link).count();
+}
+
 // no-expect-on-remote-data: in crates/protocol and crates/net (and here) every
 // `expect` is flagged, since what it unwraps may come from a peer (TM-23).
 pub fn decode_hello(bytes: &[u8]) -> Hello {

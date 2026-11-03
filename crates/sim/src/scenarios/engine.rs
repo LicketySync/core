@@ -624,15 +624,13 @@ fn sealed_relay(seed: u64) -> Run {
         .holds(p(3), MAIN, Some(Tier::Read))
         .holds(p(4), MAIN, Some(Tier::Sealed));
     plan.cuts.push((vec![p(0), p(1)], vec![p(2), p(3)]));
+    // The default workload's seven writes, refused for each of 1, 3 and 4:
+    // a read or sealed key cannot sign.
+    plan.expect.refused = 21;
     plan.build("engine-sealed-relay", seed, |s| s)
 }
 
 fn sealed_expect(run: &Run) -> Result<(), String> {
-    let refused = run.ledger.borrow().refused;
-    // The default workload's seven writes, refused for each of 1, 3 and 4.
-    if refused != 21 {
-        return Err(format!("{refused} writes refused, not 21"));
-    }
     let folder = run.folder();
     let e = run
         .sim
@@ -1215,4 +1213,32 @@ pub fn run(name: &str, seed: u64) -> Outcome {
     outcome.converged = false;
     outcome.failure = Some(format!("no engine scenario `{name}`"));
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Peer 0 holds the write key and 1 the read key; 1 writes one file,
+    /// which the engine refuses (`NotWriteKey`), and the run expects
+    /// `refused` writes refused.
+    fn one_refused(refused: u64) -> Run {
+        let mut plan =
+            Plan::quiet(2, SMALL_CHUNK).then(p(1), vec![write(1, 1, "r.txt", 40, FIRST)]);
+        plan.world = plan.world.holds(p(1), MAIN, Some(Tier::Read));
+        plan.expect.refused = refused;
+        plan.build("one-refused", 0, |s| s)
+    }
+
+    /// The bug: the oracle never read the ledger's refused writes, so a run
+    /// in which the engine refused writes passed (fewer writes still
+    /// converge; the phase 0 gate review's finding S2). Exactly the count
+    /// expected passes, any other fails.
+    #[test]
+    fn a_run_with_a_write_refused_unexpectedly_fails_the_oracle() {
+        let failure = |refused| one_refused(refused).check().outcome.failure;
+        assert_eq!(failure(0).as_deref(), Some("1 writes refused, not 0"));
+        assert_eq!(failure(2).as_deref(), Some("1 writes refused, not 2"));
+        assert_eq!(failure(1), None);
+    }
 }

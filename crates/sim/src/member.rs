@@ -10,9 +10,10 @@
 //! transaction as the engine's write: it stages its key, then calls the
 //! engine, whose commit carries both; when the engine fails for its store, the
 //! rollback discards both and the step is tried again later. A write the
-//! engine refuses up front (a read or sealed key) commits the step alone. So
-//! a member continues after a crash or a restart from the step after the
-//! last one committed, and a step is never done twice.
+//! engine refuses for another reason (a read or sealed key, say) commits the
+//! step alone and is counted in the ledger. So a member continues after a
+//! crash or a restart from the step after the last one committed, and a step
+//! is never done twice.
 //!
 //! A member may be cut from some peers for the whole run ([`Member::cut`]):
 //! it never passes their connection to the engine, as if the two devices
@@ -103,7 +104,12 @@ pub struct Ledger {
     /// Each start, with whether it showed Checking first and then Syncing or
     /// Up to date.
     pub starts: Vec<(PeerId, bool)>,
-    /// Writes the engine refused up front (a read or sealed key).
+    /// Writes the engine refused for anything but its store (every
+    /// [`WriteFailure`] but `Paused` and `Store`, which are tried again): a
+    /// read or sealed key, but also an unknown folder, a folder not usable,
+    /// a bad path, no such path, too large, the counter exhausted or an
+    /// internal error. The workload moves past each; the oracle compares the
+    /// count with the scenario's [`crate::oracle::Expect::refused`].
     pub refused: u64,
     /// Every write that made a record: its peer, path and record hash.
     pub written: Vec<(PeerId, String, RecordHash)>,

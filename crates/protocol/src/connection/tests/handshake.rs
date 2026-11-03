@@ -18,20 +18,23 @@
 )]
 
 use licketysync_keys::folder::FolderKey;
-use licketysync_keys::{Role, Tier};
+use licketysync_keys::{CipherHash, FolderId, Role, Tier};
 use prost::Message as _;
 
 use crate::connection::{
-    Config, ConfigError, Connection, Event, Keys, ProveError, SendError, Side, State, Tick,
+    ChunkAnswer, Config, ConfigError, Connection, Event, Keys, ProveError, SendError, Side, State,
+    Tick,
 };
 use crate::frame::Frame;
 use crate::limits::{MAX_PROOFS_PER_CONNECTION, MAX_REQUESTS_IN_FLIGHT, PRE_HELLO_LIMIT};
 use crate::messages::{
-    Close, CloseReason, DeviceProof, FolderProof, Hello, Message, ProofResult, Status, Unsupported,
+    ChunkReply, ChunkRequest, Close, CloseReason, DeviceProof, FolderProof, FolderStatus, Hello,
+    IndexRecords, IndexRequest, Message, ProofResult, ReconcileReply, ReconcileRequest, Status,
+    Unsupported,
 };
 use crate::proof::FolderCredential;
 use crate::rules::Cause;
-use crate::testkit::{device, folder, s, Pair, Rng};
+use crate::testkit::{device, folder, s, signed, Pair, Rng};
 
 fn frame(m: &Message) -> Vec<u8> {
     m.to_frame().unwrap().encode()
@@ -522,6 +525,183 @@ fn the_open_folder_bound_rejects_the_65th() {
     assert_eq!(opened, 64);
     assert_eq!(results(&p.a).iter().filter(|r| r.status == 2).count(), 1);
     assert_eq!(p.a.conn.state(), State::Established);
+}
+
+/// The second folder of [`held_not_open`], of seed `0x20`.
+fn other() -> FolderKey {
+    FolderKey::from(folder(0x20))
+}
+
+/// How a folder A holds and has proven stays not open on the connection.
+#[derive(Clone, Copy, Debug)]
+enum NotOpen {
+    /// B does not hold it: B answers A's proof REJECTED.
+    Rejected,
+    /// A accepts B's proof, but B's answer to A's never arrives.
+    Unanswered,
+    /// B accepts A's proof, but B's own proof never arrives.
+    Unproven,
+}
+
+/// The hint of a FolderProof or ProofResult frame.
+fn hint_of(frame: &[u8]) -> Option<Vec<u8>> {
+    match frame[4..6] {
+        [0x80, 0x04] => crate::parse::Parse::parse(&frame[6..])
+            .ok()
+            .map(|m: FolderProof| m.hint),
+        [0x80, 0x05] => crate::parse::Parse::parse(&frame[6..])
+            .ok()
+            .map(|m: ProofResult| m.hint),
+        _ => None,
+    }
+}
+
+/// A pair where the folder of seed `0x10` is open and [`other`], which A
+/// holds and has proven, is not, as `how` says; B is scripted by hand.
+fn held_not_open(how: NotOpen) -> Pair {
+    let b_holds = match how {
+        NotOpen::Rejected => vec![write()],
+        NotOpen::Unanswered | NotOpen::Unproven => vec![write(), other()],
+    };
+    let mut p = Pair::new(0xa0, 0xb0, &[write(), other()], &b_holds);
+    p.settle();
+    p.b.auto = false;
+    p.a.prove_all(p.now);
+    let proofs = core::mem::take(&mut p.a.outbox);
+    let before = p.b.sent.len();
+    p.b.receive(p.now, &proofs);
+    p.b.outbox.clear();
+    // B's answers reach A but for the one `how` loses, found by its hint:
+    // B's ProofResult carries A's hint, B's FolderProof B's own.
+    let th = *p.a.conn.transcript_hash().unwrap();
+    let credential = FolderCredential::new(&other());
+    let lost = match how {
+        NotOpen::Rejected => None,
+        NotOpen::Unanswered => Some(credential.hint(&th, p.a.conn.role().unwrap())),
+        NotOpen::Unproven => Some(credential.hint(&th, p.b.conn.role().unwrap())),
+    };
+    let answers: Vec<u8> = p.b.sent[before..]
+        .iter()
+        .filter(|(_, f)| lost.is_none_or(|h| hint_of(f) != Some(h.to_vec())))
+        .flat_map(|(_, f)| f.clone())
+        .collect();
+    p.a.receive(p.now, &answers);
+    let id = credential.folder_id();
+    // Read without `is_open`, which the test checks.
+    let open: Vec<FolderId> = p.a.conn.open_folders().copied().collect();
+    assert_eq!(open, [p.a.folder_id()], "{how:?}");
+    assert_eq!(
+        p.a.saw(|e| matches!(e, Event::ProofRejected { folder } if *folder == id)),
+        matches!(how, NotOpen::Rejected),
+        "{how:?}"
+    );
+    p
+}
+
+/// A folder this side holds and has proven, but that is not open on the
+/// connection (the peer answered REJECTED, never answered, or never proved
+/// it), is refused as one not held is: every message naming it closes with
+/// nothing of it handed to the engine (`Close(PROTOCOL_ERROR)`, 3.5 and
+/// section 5, "a message for a folder not open here"), and every send for it
+/// is refused. It fails if `Connection::is_open` answers "held" (TM-10,
+/// TM-14, TM-32; the phase 0 gate review's finding S1).
+#[test]
+fn a_folder_held_and_proven_but_not_open_is_refused_both_ways() {
+    let (f, g) = (
+        write().verifier().folder_id(),
+        other().verifier().folder_id(),
+    );
+    let id = g.0.to_vec();
+    let record = signed(&folder(0x20), 1, 1, 1).to_bytes();
+    let page = |request_id, records: Vec<Vec<u8>>| IndexRecords {
+        folder_id: id.clone(),
+        records,
+        request_id,
+        epoch: 1,
+        ..IndexRecords::default()
+    };
+    let reply = ReconcileReply {
+        folder_id: id.clone(),
+        request_id: 1,
+        outcome: 1,
+        epoch: 1,
+        ..ReconcileReply::default()
+    };
+    let status = |folders: &[FolderId]| Status {
+        folders: folders
+            .iter()
+            .map(|x| FolderStatus {
+                folder_id: x.0.to_vec(),
+                ..FolderStatus::default()
+            })
+            .collect(),
+        device_name: String::new(),
+    };
+    let messages = [
+        Message::IndexRequest(IndexRequest {
+            folder_id: id.clone(),
+            max_records: 0,
+            request_id: 77,
+            epoch: 1,
+            since: 0,
+        }),
+        Message::ReconcileRequest(ReconcileRequest {
+            folder_id: id.clone(),
+            request_id: 77,
+            prefix: vec![],
+            digest: vec![0; 32],
+        }),
+        // A reply page, a push of one of the folder's records, an empty push.
+        Message::IndexRecords(page(1, vec![])),
+        Message::IndexRecords(page(0, vec![record.clone()])),
+        Message::IndexRecords(page(0, vec![])),
+        Message::ReconcileReply(reply.clone()),
+        Message::ChunkRequest(ChunkRequest {
+            folder_id: id.clone(),
+            cipher_hash: vec![7; 32],
+        }),
+        Message::ChunkReply(ChunkReply {
+            folder_id: id.clone(),
+            cipher_hash: vec![7; 32],
+            status: 2,
+            data: vec![],
+        }),
+        Message::Status(status(&[g])),
+        Message::Status(status(&[f, g])),
+    ];
+    for how in [NotOpen::Rejected, NotOpen::Unanswered, NotOpen::Unproven] {
+        for m in &messages {
+            let mut p = held_not_open(how);
+            let events = p.a.receive(p.now, &frame(m));
+            assert_eq!(
+                closed(&p.a),
+                Some((CloseReason::ProtocolError, Some(Cause::Malformed))),
+                "{how:?}: {m:?}"
+            );
+            assert!(
+                events.iter().all(|e| matches!(e, Event::Closed { .. })),
+                "{how:?}: {events:?}"
+            );
+        }
+        let mut p = held_not_open(how);
+        let tick = p.a.tick(p.now);
+        let hash = CipherHash([7; 32]);
+        let conn = &mut p.a.conn;
+        let refused = [
+            conn.send_request(tick, g, &p.a.store).err(),
+            conn.push(tick, &page(0, vec![record.clone()])).err(),
+            conn.send_page(tick, &page(1, vec![record.clone()])).err(),
+            conn.send_reset(tick, g, 1, 1, false).err(),
+            conn.send_reconcile_reply(tick, &reply).err(),
+            conn.chunk_position(tick, &g).err(),
+            conn.request_chunk(tick, g, hash).err(),
+            conn.reply_chunk(tick, g, hash, ChunkAnswer::NotFound).err(),
+            conn.send_status(tick, &status(&[g]).folders).err(),
+        ];
+        assert_eq!(refused, [Some(SendError::FolderNotOpen); 9], "{how:?}");
+        assert!(p.a.conn.memories_mut(tick, &g).is_none(), "{how:?}");
+        assert_eq!(p.a.conn.state(), State::Established, "{how:?}");
+    }
 }
 
 #[test]

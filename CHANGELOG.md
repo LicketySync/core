@@ -6,6 +6,59 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Phase 0 gate review: its record, and the tests and the rule its findings ask for. The phase 0
+  gate record of 2026-11-02, added as `gates/phase-0.md` (the threat-model §6 walk and
+  security-reviewer pass over 55ddfb4, and its re-review of this change), found no blocker and two
+  SHOULD FIX findings that block the gate, S1 and S2, both missing tests; S3 is phase 1's, and
+  cheap. Its verdict on this change: the gate passes. Tests, the simulator's oracle, comments, a
+  Semgrep rule and the record: the code of the keys, protocol, index and engine crates is
+  unchanged.
+  - S1 (TM-10, TM-14, TM-32): every "not open" test used a folder the device does not hold, so
+    none would notice `Connection::is_open` answering "held". The new test
+    `a_folder_held_and_proven_but_not_open_is_refused_both_ways` (`connection/tests/handshake.rs`)
+    opens one folder and leaves a second, which A holds and has proven, not open in three ways: B
+    lacks it and answers REJECTED; B's answer to A's proof is lost; B's own proof is lost. For the
+    second folder, each of IndexRequest, ReconcileRequest, a reply page, a push with one of its
+    records, an empty push, ReconcileReply, ChunkRequest, ChunkReply, a Status naming it and one
+    naming both folders closes `PROTOCOL_ERROR` (`Malformed`) with no event but the close, and
+    each of `send_request`, `push`, `send_page`, `send_reset`, `send_reconcile_reply`,
+    `chunk_position`, `request_chunk`, `reply_chunk` and `send_status` returns `FolderNotOpen`.
+    Undo-checked: it fails, and no other test does, with `is_open` answering "held"
+    (`self.folders.contains_key(folder)`; the inbound ChunkRequest is then served); with the
+    inbound ChunkRequest's check, the inbound Status's, `reply_chunk`'s, `page_folder`'s,
+    `send_reset`'s or `send_reconcile_reply`'s alone changed to "held"; and with `is_open`
+    counting a folder open on either side's ACCEPTED alone. The two checks it cannot see are
+    repeated ones: `on_chunk_reply`'s follows the unsolicited check, which refuses first since no
+    request goes out for a folder not open, and `on_reconcile_request`'s is made again by
+    `begin_serving`.
+  - S2: the oracle's `Expect` has `refused`, the writes the engine refuses (0 by default), and
+    `check_ledger` fails a run whose `Ledger::refused` differs ("N writes refused, not M"). Fewer
+    writes still converge, so before this an engine that refused writes would have passed
+    `clean`, `drops`, `reconnect`, `cross_reorder` and `chaos`, whose only check is the oracle.
+    `engine-sealed-relay` expects 21, the default workload's seven writes for each of its read
+    holders 1 and 3 and its sealed holder 4, in place of its own check; no other gate scenario
+    gives a read or sealed holder a write (`engine-late-joiner`, `engine-chaos` and
+    `engine-sealed-cleanup` give theirs no workload), so each expects 0. `Ledger::refused`'s
+    comment says what it counts: every `WriteFailure` but `Paused` and `Store`, which are tried
+    again. Test `a_run_with_a_write_refused_unexpectedly_fails_the_oracle`
+    (`scenarios/engine.rs`): a read holder's one write fails the oracle expecting 0 or 2 and
+    passes it expecting 1; with the check removed, the run expecting 0 passes.
+  - S3 (TM-4): `no-follow-symlinks` also flags `Path::canonicalize` and `Path::read_link` called
+    as methods (on a `Path`, a `PathBuf` or any expression) or by path
+    (`std::path::Path::read_link(p)`, `Path::canonicalize(p)`), and, folding in the fresh
+    reviewer's tested NIT, names the `std::fs`, `Path` and `PathBuf` forms as bare paths, so a
+    function value such as `.map(fs::canonicalize)` is caught too; eleven more `ruleid` cases in
+    `.semgrep/tests/project.rs`, nine of which the rule before this missed (the import forms
+    `fs::canonicalize` and `fs::read_link` it already flagged). `symlink_metadata`, which does not
+    follow, stays allowed, now in its method form too. Nothing in the workspace calls either
+    today.
+  - `gate.sh` passes: 656 tests, 1 skipped; line coverage keys 99.37%, protocol 98.32%, index
+    97.66%, engine 96.94%. The 17 gate scenarios converge and pass the oracle on seeds 0 to 49 on
+    the release simulator.
+  - Reviewed 2026-11-02 by a67a2d4f536955fe3 (the phase 0 gate reviewer, security: its own
+    findings S1 to S3 re-reviewed and undo-checked, and its NIT N12, the coverage figures, fixed
+    here) and ac98c5b168abe9156 (a fresh review: one NIT, tested, folded in), both clean. Author
+    aec20e1fe952da578; the merge agent wrote this line.
 - The engine on the latest-only index, and the phase 0 gate: simulated peers converge.
   `licketysync-engine` now has `Engine` (`runtime::Peer`) and `EngineConfig` (device seed and folder
   keys given at every start, none stored, `keys.md` 8.2; at most `MAX_FOLDERS`, 256, folders, the

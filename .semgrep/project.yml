@@ -62,6 +62,10 @@ rules:
       - pattern-regex: '(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:use|extern[ \t]+crate)[ \t]+[^;]*\bblake3\b'
       - pattern-not-inside: |
           mod tests { ... }
+  # TM-4: canonicalize and read_link follow symlinks, in std::fs's free
+  # functions and in Path's methods (PathBuf derefs to Path) alike, called as a
+  # method or by path, or passed as a function value: the bare paths match both.
+  # symlink_metadata does not follow; the resolver uses it.
   - id: no-follow-symlinks
     languages: [rust]
     severity: ERROR
@@ -69,8 +73,14 @@ rules:
       Paths from peers or the index go through the beneath-root resolver; never
       canonicalize or open them directly (Syncthing 2016 traversal, CVE-2017-1000420).
     pattern-either:
-      - pattern: std::fs::canonicalize($P)
-      - pattern: std::fs::read_link($P)
+      - pattern: std::fs::canonicalize
+      - pattern: std::fs::read_link
+      - pattern: std::path::Path::canonicalize
+      - pattern: std::path::Path::read_link
+      - pattern: std::path::PathBuf::canonicalize
+      - pattern: std::path::PathBuf::read_link
+      - pattern: $P.canonicalize()
+      - pattern: $P.read_link()
   - id: no-expect-on-remote-data
     languages: [rust]
     severity: ERROR
