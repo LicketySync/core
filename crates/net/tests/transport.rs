@@ -16,7 +16,8 @@
 //!   `tcp_flood_of_idle_connections_stays_within_the_pending_limit_and_memory_bound`
 //!   (in `tests/tcp_flood.rs`, a binary of its own),
 //!   `tcp_connection_that_never_speaks_ends_at_the_handshake_timeout`,
-//!   `connections_are_refused_above_the_memory_limit`,
+//!   `connections_are_refused_above_the_memory_limit` (every target but iOS,
+//!   which has no memory limit yet, so no node),
 //!   `second_sync_stream_on_one_connection_is_refused`
 //! - (f) `{quic,tcp}_pieces_arrive_in_order_at_most_64_kib_and_the_end_is_reported`
 //! - (g) `peer_id_of_the_keys_test_seed_is_the_keys_vector`
@@ -720,6 +721,9 @@ async fn tcp_connection_that_never_speaks_ends_at_the_handshake_timeout() {
     drop(silent);
 }
 
+// iOS has no memory limit yet, and no node is built there (TM-22's residual
+// (d)); the memory-limit crate this names is not compiled in for iOS.
+#[cfg(not(target_os = "ios"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn connections_are_refused_above_the_memory_limit() {
     // Any process is above one byte.

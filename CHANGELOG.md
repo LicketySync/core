@@ -6,6 +6,54 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Fix the red `main` left by b550c02: `licketysync-net` builds for `aarch64-apple-ios` again (CI
+  run 41744692314, job "net builds for aarch64-apple-ios"; every other job was green), without its
+  memory limit, and so refuses to start there until phase 4 brings one. Cause:
+  `libp2p-memory-connection-limits` 0.6.0 requires sysinfo `^0.38`, and sysinfo 0.38.4, the newest
+  0.38, uses four libc items on iOS (`RTM_IFINFO2`, `proc_pidinfo`, `PROC_PIDLISTFDS`,
+  `proc_fdinfo`) that libc 0.2.190 (2026-10-02, rust-lang/libc#5158) removed from iOS as macOS-only;
+  the lock's libc is 0.2.191, the newest. No qualifying release fixes it: 0.6.0 is the newest
+  `libp2p-memory-connection-limits` and takes no sysinfo but 0.38 (rust-libp2p's open Dependabot
+  pull request #6735 moves it to 0.40.0), and sysinfo's iOS changes are in 0.40.0 (2026-10-28),
+  under 7 days old.
+  - `libp2p-memory-connection-limits` is a dependency on every target but iOS
+    (`[target.'cfg(not(target_os = "ios"))'.dependencies]`). Every other target builds, and
+    refuses connections above the memory limit, as before; `Cargo.lock` is unchanged.
+  - `net` refuses to start where it has no memory limit, by the owner's answer of 2026-11-03 on
+    the iOS gap. `node::build` asks the new pure function `limits::has_memory_limit` about
+    `std::env::consts::OS` before it does anything else, and returns the new
+    `BuildError::NoMemoryLimitOnThisPlatform` unless the answer is yes; it is yes for Linux,
+    Android, macOS and Windows only, so iOS is refused, and so is every OS the project neither
+    builds nor tests (on most of them `memory-stats` reads nothing and the limit would refuse
+    nothing). On iOS the behaviour's memory-limit slot is `libp2p-swarm`'s `dummy::Behaviour`, so
+    that the crate compiles; no node is ever built with it.
+  - TM-22 gains residual (d), "No process-memory limit on iOS, so no node on iOS": required before
+    1.0, fixed in phase 4, and `net` refuses to start on iOS until then (the owner's answer of
+    2026-11-03 on the iOS gap, under the same 1.0 safety-limits rule as (a) to (c)), with the
+    phase 4 item "iOS memory limit": an iOS memory check of `net`'s own, or an upstream release of
+    `libp2p-memory-connection-limits` on a sysinfo that builds for iOS. The threat model's 3.10,
+    `limits.rs`, `node.rs`, `Cargo.toml` and the README say so.
+  - The test that fails without the build fix is CI's iOS build. On Linux, type-checking the crate
+    for `aarch64-apple-ios` (with the C build scripts of aws-lc-sys, ring and blake3 bypassed,
+    since there is no iOS SDK) gives sysinfo's four errors on b550c02 and none with the change,
+    for the library, tests and examples (clippy clean too); `aarch64-linux-android` still
+    type-checks the same way. The guard's tests: `ios_has_no_memory_limit_so_no_node_is_built_there`,
+    `linux_android_macos_and_windows_have_the_memory_limit` and
+    `every_other_os_has_no_memory_limit` (the function), and
+    `a_node_on_ios_is_refused_for_want_of_a_memory_limit`, which calls `build`'s body (`build_on`)
+    with `"ios"` on any OS, so that it fails if the guard is removed from the build path (checked
+    by removing it, and by making the function say yes for every OS). `build` itself only passes
+    `std::env::consts::OS` to `build_on`, and every other test of the crate builds its nodes
+    through it. Also `memory_limit_off_ios_takes_its_bound_from_limits`;
+    `connections_are_refused_above_the_memory_limit` runs on every target but iOS, where it is
+    compiled out.
+  - Reviewed 2026-11-03 by a1e1890792146b04a (blocked by 1, residual (d)'s owner attribution, now
+    fixed; clean) and a7ca0582b9e6197af (security, the security-reviewer pass: clean; its note that
+    a `memory-stats` that fails from the start leaves the memory limit open, TM-10, is pre-existing
+    and goes to phase 1). The owner's answer of 2026-11-03 on the iOS gap: the memory limit on iOS
+    is required before 1.0 and fixed in phase 4, and `net` refuses to start on iOS until it exists.
+    Author a45d07e17f1e2bd00; the merge agent wrote this line.
+
 - `licketysync-net`, spike A of the phase 0 spikes (`brief-phase0-spikes.md`, pass conditions A1 to
   A4): two peers connect over QUIC and over TCP, each connection TLS 1.3 on `aws-lc-rs` with
   X25519MLKEM768 offered first (`suites.md` 2.6), each side's peer ID the one derived from its

@@ -38,6 +38,12 @@
 //! [`Limits::handshake_timeout`], which `libp2p`'s own `SwarmBuilder` does not
 //! set, so that a connection that never speaks cannot hold a pending slot
 //! for ever.
+//!
+//! No node is built on an operating system where `net` has no process-memory
+//! limit ([`has_memory_limit`]): on iOS today (TM-22's residual (d)),
+//! [`build`] returns [`BuildError::NoMemoryLimitOnThisPlatform`] before it
+//! does anything else, so that `net` does not start there until the limit
+//! exists (the owner's answer of 2026-11-03).
 
 use core::convert::Infallible;
 use core::fmt;
@@ -49,7 +55,7 @@ use libp2p_core::upgrade::Version;
 use libp2p_identity::{DecodingError, PeerId};
 use licketysync_keys::device::Libp2pIdentity;
 
-use crate::limits::{Limits, LimitsError};
+use crate::limits::{has_memory_limit, Limits, LimitsError};
 use crate::provider::{self, ProviderError};
 use crate::{identity, sync};
 
@@ -82,14 +88,40 @@ mod behaviour {
     use crate::sync;
 
     /// The behaviours of a node, in the order the swarm consults them: the
-    /// connection limits, the memory limit, then the sync streams.
+    /// connection limits, the memory limit (none on iOS yet, TM-22's
+    /// residual (d)), then the sync streams.
     #[derive(NetworkBehaviour)]
     #[behaviour(prelude = "libp2p_swarm::derive_prelude", to_swarm = "Event")]
     pub struct Behaviour {
         pub(super) connection_limits: libp2p_connection_limits::Behaviour,
-        pub(super) memory_limit: libp2p_memory_connection_limits::Behaviour,
+        pub(super) memory_limit: super::MemoryLimit,
         pub(super) sync: sync::Behaviour,
     }
+}
+
+/// The process-memory limit: `libp2p-memory-connection-limits`, which
+/// refuses every new connection, inbound or outbound, while the process's
+/// resident memory is above [`Limits::max_process_memory_bytes`].
+#[cfg(not(target_os = "ios"))]
+type MemoryLimit = libp2p_memory_connection_limits::Behaviour;
+
+/// On iOS, where `libp2p-memory-connection-limits` does not build (its
+/// sysinfo 0.38 needs libc items that libc keeps for macOS), a behaviour that
+/// refuses nothing, there only so that [`Behaviour`] compiles: [`build`]
+/// refuses on iOS before it would make one ([`has_memory_limit`]; TM-22's
+/// residual (d)), so no node runs with it. Phase 4 replaces it with an iOS
+/// memory check of `net`'s own or an upstream fix.
+#[cfg(target_os = "ios")]
+type MemoryLimit = libp2p_swarm::dummy::Behaviour;
+
+#[cfg(not(target_os = "ios"))]
+fn memory_limit(limits: &Limits) -> MemoryLimit {
+    libp2p_memory_connection_limits::Behaviour::with_max_bytes(limits.max_process_memory_bytes)
+}
+
+#[cfg(target_os = "ios")]
+fn memory_limit(_limits: &Limits) -> MemoryLimit {
+    libp2p_swarm::dummy::Behaviour
 }
 
 impl fmt::Debug for Behaviour {
@@ -130,6 +162,10 @@ impl From<Infallible> for Event {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum BuildError {
+    /// The operating system this runs on is one where `net` has no
+    /// process-memory limit, iOS among them ([`has_memory_limit`]; TM-22's
+    /// residual (d)).
+    NoMemoryLimitOnThisPlatform,
     /// [`KEY_LOG_VARIABLE`] is set in the environment.
     KeyLogRequested,
     /// The process-default rustls provider is not the one `suites.md` 2.6
@@ -147,6 +183,10 @@ pub enum BuildError {
 impl fmt::Display for BuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NoMemoryLimitOnThisPlatform => write!(
+                f,
+                "no process-memory limit on this platform: net does not start without one"
+            ),
             Self::KeyLogRequested => write!(
                 f,
                 "{KEY_LOG_VARIABLE} is set: TLS session secrets would be written to a file"
@@ -162,16 +202,29 @@ impl fmt::Display for BuildError {
 impl std::error::Error for BuildError {}
 
 /// Builds the swarm of the device whose libp2p identity is `identity`, with
-/// `limits`. Installs the process-default rustls provider first
+/// `limits`. Refuses first, before anything else, on an operating system
+/// where `net` has no process-memory limit ([`has_memory_limit`]: iOS
+/// today). Installs the process-default rustls provider
 /// ([`provider::install_default_provider`]). Must run inside a Tokio
 /// runtime: connections run as Tokio tasks.
 ///
 /// # Errors
 ///
-/// [`BuildError`]: the key-log variable is set, the process default is
-/// another provider, a limit is out of range, the identity's key is refused,
-/// or the certificate could not be generated.
+/// [`BuildError`]: there is no memory limit on this platform, the key-log
+/// variable is set, the process default is another provider, a limit is out
+/// of range, the identity's key is refused, or the certificate could not be
+/// generated.
 pub fn build(identity: &Libp2pIdentity, limits: &Limits) -> Result<Swarm, BuildError> {
+    build_on(std::env::consts::OS, identity, limits)
+}
+
+/// [`build`] on the operating system `os`, which `build` passes as
+/// [`std::env::consts::OS`]; a test passes another, to check the refusal on
+/// a platform it does not run on.
+fn build_on(os: &str, identity: &Libp2pIdentity, limits: &Limits) -> Result<Swarm, BuildError> {
+    if !has_memory_limit(os) {
+        return Err(BuildError::NoMemoryLimitOnThisPlatform);
+    }
     if std::env::var_os(KEY_LOG_VARIABLE).is_some() {
         return Err(BuildError::KeyLogRequested);
     }
@@ -190,9 +243,7 @@ pub fn build(identity: &Libp2pIdentity, limits: &Limits) -> Result<Swarm, BuildE
                 .with_max_established_per_peer(Some(limits.max_established_per_peer))
                 .with_max_established(Some(limits.max_established_total)),
         ),
-        memory_limit: libp2p_memory_connection_limits::Behaviour::with_max_bytes(
-            limits.max_process_memory_bytes,
-        ),
+        memory_limit: memory_limit(limits),
         sync: sync::Behaviour::new(limits.max_inbound_sync_streams),
     };
     let config = libp2p_swarm::Config::with_tokio_executor()
@@ -277,5 +328,35 @@ mod tests {
         assert_eq!(config.max_concurrent_stream_limit, 7);
         assert_eq!(config.max_connection_data, 3 << 20);
         assert_eq!(config.max_stream_data, 1 << 20);
+    }
+
+    /// TM-22's residual (d) on `build`'s own path, from any OS: a node asked
+    /// for iOS is refused, for want of a memory limit, before anything is
+    /// built. `build` passes `std::env::consts::OS` to `build_on`; on Linux,
+    /// macOS and Windows every other test of this crate builds its nodes
+    /// through it.
+    #[test]
+    fn a_node_on_ios_is_refused_for_want_of_a_memory_limit() {
+        // A public test seed, never a real key (TM-6).
+        let seed = DeviceSeed::from_bytes([0xa1; 32]);
+        let identity = Libp2pIdentity::from_device_seed(&seed);
+        let refused = build_on("ios", &identity, &Limits::default()).err();
+        assert!(matches!(
+            refused,
+            Some(BuildError::NoMemoryLimitOnThisPlatform)
+        ));
+        assert_ne!(BuildError::NoMemoryLimitOnThisPlatform.to_string(), "");
+    }
+
+    /// The iOS build fix keeps the memory limit everywhere else, its bound
+    /// taken from `limits` (`tests/transport.rs` checks that it refuses).
+    #[cfg(not(target_os = "ios"))]
+    #[test]
+    fn memory_limit_off_ios_takes_its_bound_from_limits() {
+        let limits = Limits {
+            max_process_memory_bytes: 123_456_789,
+            ..Limits::default()
+        };
+        assert_eq!(memory_limit(&limits).max_allowed_bytes(), 123_456_789);
     }
 }

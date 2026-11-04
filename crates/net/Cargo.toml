@@ -20,7 +20,6 @@ libp2p-quic = { version = "0.14.0", features = ["tokio"] }
 libp2p-tls = "0.7.0"
 libp2p-yamux = "0.48.0"
 libp2p-connection-limits = "0.7.0"
-libp2p-memory-connection-limits = "0.6.0"
 rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs", "prefer-post-quantum", "std"] }
 futures = "0.3.34"
 # Not called: it holds idna (beneath url, beneath multiaddr) on idna_adapter's
@@ -30,6 +29,15 @@ futures = "0.3.34"
 # appears."). `~1.0` takes any 1.0.* release as usual; deny.toml bans the
 # ICU4X back end that 1.1 and later bring, and dependabot.yml skips them.
 idna_adapter = "~1.0"
+
+# The process-memory limit, on every target but iOS: sysinfo 0.38, which
+# 0.6.0 requires, does not build for iOS on libc 0.2.190 and later, which keep
+# four of the items it uses (`RTM_IFINFO2`, `proc_pidinfo`, `PROC_PIDLISTFDS`,
+# `proc_fdinfo`) for macOS only. Without it there is no process-memory limit,
+# so `node::build` refuses to build a node on iOS until phase 4 brings one
+# (TM-22's residual (d), required before 1.0; `src/limits.rs`).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+libp2p-memory-connection-limits = "0.6.0"
 
 [dev-dependencies]
 tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt-multi-thread", "time", "net"] }

@@ -7,8 +7,8 @@
 //! that each one exists, is set explicitly rather than left at a library's
 //! default, and is checked before a swarm is built.
 //!
-//! What these bound, and what they do not (TM-22 states the three residuals
-//! and their phase 1 items, each required before 1.0):
+//! What these bound, and what they do not (TM-22 states the four residuals
+//! and their phase 1 and phase 4 items, each required before 1.0):
 //!
 //! - At most [`Limits::max_established_total`] connections, each holding at
 //!   most [`Limits::connection_receive_window`] bytes a peer sent and this
@@ -21,7 +21,19 @@
 //!   every inbound peer out for the handshake timeout, renewably.
 //! - No new connection while the process's resident memory is above
 //!   [`Limits::max_process_memory_bytes`] (`libp2p-memory-connection-limits`,
-//!   read at most every 100 ms).
+//!   read at most every 100 ms). A node is built only on an operating system
+//!   where that limit exists, [`has_memory_limit`]: Linux, Android, macOS and
+//!   Windows. Elsewhere [`crate::node::build`] refuses with
+//!   [`BuildError::NoMemoryLimitOnThisPlatform`](crate::node::BuildError::NoMemoryLimitOnThisPlatform),
+//!   so that no node there takes a connection without it.
+//! - On iOS, therefore, no node at all (TM-22's residual (d)).
+//!   `libp2p-memory-connection-limits` 0.6 does not build for iOS (its
+//!   sysinfo 0.38 uses libc items that libc 0.2.190 and later keep for
+//!   macOS), so `net` is built there without it and refuses to start. The
+//!   owner's answer of 2026-11-03 on this gap: required before 1.0, fixed in
+//!   phase 4 (an iOS memory check of `net`'s own, or an upstream release on a
+//!   sysinfo that builds for iOS), and `net` refuses to start on iOS until
+//!   then.
 //! - Not bounded by any of these: QUIC Initials. `libp2p-quic` 0.14 accepts
 //!   every Initial quinn hands it before the swarm's limits are asked, so
 //!   each costs a QUIC connection and a TLS server handshake until it is
@@ -44,6 +56,23 @@ use core::time::Duration;
 /// not let the window be raised, so this is the most streams it accepts.
 pub const YAMUX_MAX_STREAMS: u32 = 4096;
 
+/// Whether `net` has its process-memory limit on the operating system `os`,
+/// named as [`std::env::consts::OS`] names it. [`crate::node::build`] asks
+/// this of the OS it runs on and builds no node where the answer is no.
+///
+/// Yes on Linux, Android, macOS and Windows, the systems besides iOS that the
+/// project builds `net` for, where `libp2p-memory-connection-limits` is
+/// compiled in and reads the process's resident memory through
+/// `memory-stats`. No on iOS, where it is not compiled in (TM-22's residual
+/// (d); the owner's answer of 2026-11-03: `net` refuses to start there until
+/// the limit exists). No on every other OS too: the project neither builds
+/// `net` for nor tests any of them, and on most `memory-stats` reads nothing,
+/// so the limit would refuse nothing.
+#[must_use]
+pub fn has_memory_limit(os: &str) -> bool {
+    matches!(os, "linux" | "android" | "macos" | "windows")
+}
+
 /// The bounds of one node. Build one with [`Limits::default`] and change what
 /// a test or a phase needs; [`Limits::check`] runs before a swarm is built.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,7 +91,8 @@ pub struct Limits {
     /// Established connections in all.
     pub max_established_total: u32,
     /// No connection is accepted or dialed while the process's resident
-    /// memory is above this many bytes.
+    /// memory is above this many bytes. No node is built where this cannot be
+    /// enforced, iOS among them ([`has_memory_limit`]; TM-22's residual (d)).
     pub max_process_memory_bytes: usize,
     /// A connection's handshake ends with an error after this long (TCP:
     /// the whole upgrade; QUIC: its handshake, at most the idle timeout).
@@ -181,6 +211,31 @@ impl Limits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TM-22's residual (d): no node on iOS until it has a memory limit.
+    #[test]
+    fn ios_has_no_memory_limit_so_no_node_is_built_there() {
+        assert!(!has_memory_limit("ios"));
+    }
+
+    #[test]
+    fn linux_android_macos_and_windows_have_the_memory_limit() {
+        for os in ["linux", "android", "macos", "windows"] {
+            assert!(has_memory_limit(os), "{os}");
+        }
+    }
+
+    /// An OS the project neither builds nor tests is refused, as are the
+    /// other Apple systems (whose memory `memory-stats` does not read) and
+    /// names not spelled as `std::env::consts::OS` spells them.
+    #[test]
+    fn every_other_os_has_no_memory_limit() {
+        for os in [
+            "freebsd", "openbsd", "netbsd", "tvos", "watchos", "visionos", "", "IOS", "Linux",
+        ] {
+            assert!(!has_memory_limit(os), "{os}");
+        }
+    }
 
     #[test]
     fn defaults_pass_their_own_check() {

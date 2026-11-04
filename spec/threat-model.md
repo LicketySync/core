@@ -430,14 +430,16 @@ QUIC, whose three-to-one anti-amplification limit stays at its default (TM-22), 
 impossible: every decoder is fuzzed, `unwrap`, `expect` and `panic` are denied, and indexing on
 untrusted data warns and the gate treats warnings as errors (TM-3, TM-23, rust-libp2p 2026 QUIC
 panic). What it can still do to the transport as phase 0 builds it, each a phase 1 item required
-before 1.0 (TM-22's three residuals; owner, 2026-11-03): cost the device a QUIC connection and a TLS
-server handshake per Initial it sends, whatever the limits, at its own send rate, so that memory and
-CPU follow that rate and connections are refused while they last; hold every pending slot with
-connections that never finish their handshake, locking every inbound peer out for the handshake
-timeout (10 s) at a time; and, as one TCP peer that delays its yamux pings, grow its connection's
-receive window toward yamux's 1 GiB ceiling. Denial of service by sheer traffic volume is out of
-scope (3.12); a write holder's flood is
-section 3.6's.
+before 1.0 (TM-22's residuals (a) to (c); owner, 2026-11-03): cost the device a QUIC connection and
+a TLS server handshake per Initial it sends, whatever the limits, at its own send rate, so that
+memory and CPU follow that rate and connections are refused while they last; hold every pending
+slot with connections that never finish their handshake, locking every inbound peer out for the
+handshake timeout (10 s) at a time; and, as one TCP peer that delays its yamux pings, grow its
+connection's receive window toward yamux's 1 GiB ceiling. On iOS it can do nothing to the
+transport, because there is none yet: `net` has no memory limit there and refuses to start until it
+has one (TM-22's residual (d); the owner's answer of 2026-11-03 on the iOS gap: required before 1.0,
+fixed in phase 4). Denial of service by sheer traffic volume is out of scope (3.12); a write
+holder's flood is section 3.6's.
 
 ### 3.11 Supply-chain and update attackers
 
@@ -781,12 +783,14 @@ one prefix, and the one table that outlives a connection, per-peer state, holds 
 connection limits are set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is
 residual (a) below); QUIC's three-to-one anti-amplification limit stays at its default; and the
 advisory feed in CI (cargo-audit, daily) catches the next such
-advisory in a dependency. Three residuals of the transport as phase 0 builds it (`net` on
-`libp2p-quic` 0.14 and `libp2p-yamux` 0.48; the security review of 2026-11-03), each a phase 1 item
-that the owner requires before 1.0 ("I want safety limits in version 1.0, no matter what. It is fine
-to pass until phase 1, but it must not get lost.", 2026-11-03): (a) **QUIC Initials cost per
-Initial, not per limit.** `libp2p-quic` accepts every Initial quinn hands it before the swarm's
-limits are asked, so each one, from an attacker who never answers, costs a QUIC connection and a TLS
+advisory in a dependency. Four residuals of the transport as phase 0 builds it (`net` on
+`libp2p-quic` 0.14, `libp2p-yamux` 0.48 and `libp2p-memory-connection-limits` 0.6), each required
+before 1.0: (a) to (c), from the security review of 2026-11-03, each a phase 1 item ("I want safety
+limits in version 1.0, no matter what. It is fine to pass until phase 1, but it must not get
+lost.", owner, 2026-11-03), and (d), from the iOS build of the same day, a phase 4 item by the
+owner's separate answer on it, below: (a) **QUIC Initials cost per Initial, not per limit.**
+`libp2p-quic` accepts every Initial quinn hands it before the swarm's limits are asked, so each
+one, from an attacker who never answers, costs a QUIC connection and a TLS
 server handshake (the X25519MLKEM768 encapsulation and the certificate's signature) whatever
 `max_pending_incoming` is, until it is refused and drained or times out; the review measured 10 000
 Initials at about 412 MB of memory (about 41 KB each) and seconds of CPU, and connections refused
@@ -805,8 +809,19 @@ auto-tunes from the round trip yamux measures with its pings and the rate this s
 remote that delays its ping answers inflates the estimate and can grow one connection's window, and
 what it may send unread, toward that ceiling. **Required before 1.0 (owner, 2026-11-03)**; phase 1
 item "yamux window": yamux configured by `net` with `max_connection_receive_window`, or an upstream
-setter. QUIC's windows are set (`net`'s limits, 4 MiB a connection). Stops resource exhaustion
-through unbounded streams, connections and
+setter. (d) **No process-memory limit on iOS, so no node on iOS.**
+`libp2p-memory-connection-limits` 0.6 requires sysinfo 0.38, which does not build for iOS on libc
+0.2.190 and later (libc keeps four of the items it uses for macOS only), so on iOS `net` builds
+without it, and `net`'s `node::build` refuses to build a node there
+(`BuildError::NoMemoryLimitOnThisPlatform`, before it does anything else; `limits::has_memory_limit`
+allows only Linux, Android, macOS and Windows): no iOS device runs the transport, so none takes a
+connection without the memory limit. **Required before 1.0, fixed in phase 4, and
+`net` refuses to start on iOS until then** (the owner's answer of 2026-11-03 on the iOS gap,
+recorded under the same 1.0 safety-limits rule); phase 4 item "iOS memory limit": an iOS memory
+check of `net`'s own, or an upstream release of `libp2p-memory-connection-limits` on a sysinfo that
+builds for iOS, with the iOS refusal lifted and the memory-limit test compiled for iOS again.
+QUIC's windows are set (`net`'s limits, 4 MiB a connection). Stops resource exhaustion through
+unbounded streams, connections and
 registrations, and amplification through QUIC (go-libp2p and rust-libp2p 2022; rendezvous 2026). The
 stated costs: any Hello that passes its checks costs one Ed25519 signature (the DeviceProof sent in
 answer) and one verification; a FolderProof from a peer with no key to the folder costs a lookup in
