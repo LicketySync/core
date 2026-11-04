@@ -67,6 +67,8 @@ jobs:
           toolchain: 1.99.1
           components: rustfmt
       - run: cargo fmt --all --check
+      # browser-tests/webtransport (spike B), a workspace of its own.
+      - run: cargo fmt --manifest-path browser-tests/webtransport/Cargo.toml --check
 
   clippy:
     name: clippy (pedantic, -D warnings)
@@ -77,8 +79,11 @@ jobs:
         with:
           toolchain: 1.99.1
           components: clippy
+          # browser-tests/webtransport (spike B) builds for wasm32 only.
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo clippy --manifest-path browser-tests/webtransport/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings -W clippy::pedantic
 
   test:
     name: tests (nextest) on ${{ matrix.os }}
@@ -312,6 +317,19 @@ jobs:
         run: cargo vet --locked
       # fuzz/Cargo.lock, which nightly.yml's fuzz jobs build from, is current.
       - run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
+      # browser-tests/webtransport (spike B), a workspace of its own, as gate.sh
+      # checks it: its lockfile current, audited, deny-checked against
+      # deny.toml and vetted against its own supply-chain/, and its vendored
+      # crate the copy vendor/SHA256SUMS lists.
+      - run: cargo fetch --locked --manifest-path browser-tests/webtransport/Cargo.toml
+      - run: cargo audit --file browser-tests/webtransport/Cargo.lock
+      - run: cargo deny --manifest-path browser-tests/webtransport/Cargo.toml --config deny.toml check
+      - run: cargo vet --locked --manifest-path browser-tests/webtransport/Cargo.toml
+      - run: ci/check-vendored.sh
+      # The test crate's wasm-bindgen is WASM_BINDGEN_CLI, the CLI the nightly
+      # webtransport-chrome job installs, so no push can turn the nightly red
+      # with a mismatch.
+      - run: ci/check-wasm-bindgen.sh
 
   udeps:
     name: cargo-udeps (nightly)
@@ -437,7 +455,8 @@ jobs:
       - run: ci/pinned-actions.sh
 
   # The scripts the scheduled workflows run (ci/mutants.sh in mutants.yml,
-  # ci/fuzz-targets.sh in nightly.yml), tested on stand-ins for the tools on
+  # ci/fuzz-targets.sh and ci/check-netlog.py in nightly.yml), tested on
+  # stand-ins for the tools or made-up net logs on
   # every push, so that a change that breaks one fails here rather than at the
   # next scheduled run; the line-ending attributes of the test vectors and
   # fuzz seeds, checked on Linux with Windows' core.autocrlf=true (the Windows
@@ -451,6 +470,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: ci/test-mutants.sh
       - run: ci/test-fuzz-targets.sh
+      - run: ci/test-check-netlog.sh
+      - run: ci/test-check-wasm-bindgen.sh
+      - run: ci/test-check-vendored.sh
       - run: ci/test-vector-line-endings.sh
       - run: ci/test-toolchains.sh
       - run: ci/toolchains.sh

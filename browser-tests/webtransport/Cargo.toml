@@ -1,0 +1,51 @@
+# Spike B: the browser half of the WebTransport check. A
+# workspace of its own, outside core's: libp2p-swarm 0.48.0 (in core's tree)
+# pins wasm-bindgen-futures =0.4.58 and so wasm-bindgen =0.2.108 in core's
+# Cargo.lock, while this crate needs the pinned wasm-bindgen-cli's 0.2.129.
+# Every dependency is wasm32-only, so a host build compiles nothing.
+# Run through ../../ci/webtransport-chrome.sh, never on its own. Its own
+# supply-chain/ store for cargo-vet; deny.toml is core's (gate.sh, ci.yml).
+[workspace]
+# The vendored crate below is a dependency, not a member, so that fmt and
+# clippy leave it as published.
+exclude = ["vendor"]
+
+[package]
+name = "licketysync-webtransport-browser-tests"
+version = "0.0.1"
+edition = "2021"
+license = "MPL-2.0"
+rust-version = "1.88"
+publish = false
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+libp2p-webtransport-websys = "=0.6.0"
+libp2p-identity = { version = "=0.3.1", features = ["ed25519", "peerid"] }
+libp2p-core = "=0.44.0"
+libp2p-noise = "=0.47.0"
+multistream-select = "=0.14.0"
+futures = "=0.3.34"
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "=0.4.79"
+wasm-bindgen-test = "=0.3.79"
+# Not called: holds idna (beneath url, beneath multiaddr) on idna_adapter's
+# ASCII-only 1.0 line, as crates/net/Cargo.toml does (the owner's exception of
+# 2026-11-03).
+idna_adapter = "~1.0"
+# Only to turn on the browser's crypto.getRandomValues backend beneath
+# libp2p-noise, snow and rand.
+getrandom_03 = { package = "getrandom", version = "=0.3.4", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "=0.4.3", features = ["wasm_js"] }
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# libp2p-webtransport-websys 0.6.0 requires wasm-bindgen-futures =0.4.58 from
+# rust-libp2p's workspace (to dodge a gloo-timers 0.2.6 break that futures-timer
+# 3.0.4 no longer has; upstream PRs #6446 and #6671 relax it). This is the
+# published 0.6.0 source (MIT) with only that requirement relaxed to 0.4.79.
+# The owner, 2026-11-04: "Yes, keep the patched version until upstream releases
+# the fix." It goes once such a release has been out 7 days (vendor/README.md;
+# ci/check-vendored.sh holds the copy to vendor/SHA256SUMS).
+[patch.crates-io]
+libp2p-webtransport-websys = { path = "vendor/libp2p-webtransport-websys-0.6.0" }

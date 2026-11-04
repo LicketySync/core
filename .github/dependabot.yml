@@ -3,7 +3,8 @@
 # been out for at least 7 days, against supply-chain attacks, or at once when it
 # fixes a critical or high vulnerability); cooldown does not apply to security
 # updates, which come at once (GitHub's Dependabot options reference,
-# "cooldown"). fuzz/ is a workspace of its own, with its own Cargo.lock. GitHub
+# "cooldown"). fuzz/ and browser-tests/webtransport are workspaces of their own,
+# each with its own Cargo.lock. GitHub
 # Actions are pinned by commit with the release tag in a comment, which
 # Dependabot rewrites when it moves the pin (.github/workflows/ci.yml's header).
 version: 2
@@ -31,6 +32,30 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  # browser-tests/webtransport (spike B) is a third workspace, with its own
+  # Cargo.lock. Its wasm-bindgen crates are left to the weekly refresh, which
+  # moves them together with WASM_BINDGEN_CLI in ci/pins.env (the CLI the
+  # nightly webtransport-chrome job runs must be their version; CONTRIBUTING.md),
+  # so that no Dependabot pull request can turn the nightly red. The vendored
+  # libp2p-webtransport-websys is a path crate, which Dependabot does not move
+  # (vendor/README.md says when it goes).
+  - package-ecosystem: cargo
+    directory: "/browser-tests/webtransport"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: "idna_adapter"
+        versions: [">= 1.1"]
+      - dependency-name: "wasm-bindgen"
+      - dependency-name: "wasm-bindgen-*"
+      - dependency-name: "js-sys"
+      - dependency-name: "web-sys"
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]

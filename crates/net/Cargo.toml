@@ -30,6 +30,16 @@ futures = "0.3.34"
 # ICU4X back end that 1.1 and later bring, and dependabot.yml skips them.
 idna_adapter = "~1.0"
 
+# Spike B (feature `webtransport`, off by default): a device-side
+# WebTransport listener a browser dials with an address and a certificate
+# hash. wtransport on aws-lc-rs (its ring feature off; `quinn` only exposes
+# quinn's transport configuration, for net's windows and stream limit), Noise
+# inside it (libp2p-noise), multistream-select for the one protocol.
+wtransport = { version = "0.7.2", default-features = false, features = ["aws-lc-rs", "self-signed", "quinn"], optional = true }
+libp2p-noise = { version = "0.47.0", optional = true }
+multistream-select = { version = "0.14.0", optional = true }
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "time"], optional = true }
+
 # The process-memory limit, on every target but iOS: sysinfo 0.38, which
 # 0.6.0 requires, does not build for iOS on libc 0.2.190 and later, which keep
 # four of the items it uses (`RTM_IFINFO2`, `proc_pidinfo`, `PROC_PIDLISTFDS`,
@@ -39,8 +49,12 @@ idna_adapter = "~1.0"
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 libp2p-memory-connection-limits = "0.6.0"
 
+[features]
+default = []
+webtransport = ["dep:wtransport", "dep:libp2p-noise", "dep:multistream-select", "dep:tokio"]
+
 [dev-dependencies]
-tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt-multi-thread", "time", "net"] }
+tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt-multi-thread", "time", "net", "sync"] }
 multistream-select = "0.14.0"
 memory-stats = "1.2.0"
 serde_json = "1"
@@ -50,6 +64,16 @@ hex = "0.4"
 [[example]]
 name = "spike"
 test = true
+
+# Spike B: its native tests, built only with the feature.
+[[test]]
+name = "webtransport"
+required-features = ["webtransport"]
+
+# Spike B: the listeners the headless-Chrome test dials (ci/webtransport-chrome.sh).
+[[example]]
+name = "webtransport_listen"
+required-features = ["webtransport"]
 
 [lints]
 workspace = true

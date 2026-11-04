@@ -26,6 +26,9 @@
 //! - [`pieces`]: reading such a stream as the engine's runtime contract asks:
 //!   bytes in order, at most [`pieces::MAX_PIECE`] at a time, and the end
 //!   reported.
+//! - `webtransport` (feature `webtransport`, off by default; spike B):
+//!   a device-side WebTransport listener that a browser dials with only an
+//!   address and a certificate hash, Noise inside it.
 //!
 //! The engine is not wired to the network and no daemon runs: that is
 //! phase 1. Nothing here logs; libp2p's own crates log through `tracing`,
@@ -34,7 +37,9 @@
 // The dev-dependencies the integration tests and the example use, which the
 // unit tests do not.
 #[cfg(test)]
-use {hex as _, memory_stats as _, multistream_select as _, serde_json as _, tokio as _};
+use {hex as _, memory_stats as _, serde_json as _};
+#[cfg(all(test, not(feature = "webtransport")))]
+use {multistream_select as _, tokio as _};
 
 // idna_adapter is a dependency only to hold idna on its ASCII-only back end
 // (the owner's exception of 2026-11-03; Cargo.toml says why).
@@ -46,6 +51,8 @@ pub mod node;
 pub mod pieces;
 pub mod provider;
 pub mod sync;
+#[cfg(feature = "webtransport")]
+pub mod webtransport;
 
 /// The one protocol a stream carries: `/licketysync/sync/1`, the protocol
 /// crate's identifier (imported, not defined here).

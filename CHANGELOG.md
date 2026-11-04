@@ -6,6 +6,145 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Add the WebTransport native-side spike to `net`, off by default (spike B of the phase 0 spikes;
+  pass conditions B1 to B3 of the spike brief). Every finding of the reviews is fixed; the review
+  record is the last item.
+  - **What it does.** `licketysync-net`'s feature `webtransport` (off by default) adds
+    `webtransport`: a listener on `wtransport` 0.7.2 with a rustls configuration of `net`'s own
+    (`builder_with_provider` on `aws_lc_rs::default_provider()` with its groups and suites replaced,
+    TLS 1.3 only, 0-RTT off), `net`'s QUIC windows and stream limit (16 streams each way, 4 MiB a
+    stream and a connection; datagrams advertised, 64 KiB of them buffered), and a fresh self-signed
+    ECDSA P-256 certificate valid from 1 to 14 days (`bind` refuses 0 and more); the session only at
+    `/.well-known/libp2p-webtransport?type=noise` (another path gets a 404 bounded by the step, and
+    `WrongPath`); Noise XX (`libp2p-noise`) on the first stream, reporting the served certificate's
+    hash, and the dialer's peer ID checked; then one stream per protocol, multistream-select
+    offering only `/licketysync/sync/1`. It records, as evidence, the outer group rustls chose and
+    the groups the dialer offered (`HandshakeFacts`).
+  - **B1, the answer** (`spec/suites.md` 2.6, proposed): Chrome 156, given only the multiaddr
+    (address, certhash, peer ID), connects. **The dialer's preference decides the key exchange**:
+    rustls's server takes, among the groups it offers, the one the dialer lists first.
+    `KxPolicy::PreferPq` permits X25519MLKEM768 and X25519, so an X25519-first dialer gets X25519;
+    `KxPolicy::PqOnly` enforces the hybrid by refusing a dialer without it. Chrome 156 lists
+    X25519MLKEM768, X25519, secp256r1, secp384r1, so it gets X25519MLKEM768 (rustls on our side,
+    the ServerHello in Chrome's net log), with `TLS13_CHACHA20_POLY1305_SHA256`, where the
+    listener's suite order does win. Limits: at most 14 days of validity, P-256, a UDP port of the
+    listener's own, `not_before` not back-dated, Chrome's local-network prompt not covered by a
+    loopback test.
+  - **B2, the tests.** `crates/net/tests/webtransport.rs` (18, `--features webtransport`, so in
+    `--all-features` on every push): the 1 MiB echo with each side seeing the expected peer ID and
+    X25519MLKEM768 recorded; under `PreferPq` an X25519-first dialer gets X25519, under `PqOnly`
+    it gets X25519MLKEM768 and an X25519-only dialer is refused; a classical-only listener records
+    X25519; a wrong certificate hash refused by the outer TLS; certhashes that do not match in Noise
+    refused both ways; a wrong peer ID refused both ways; another path refused; validity 1 and 14
+    bound, 0 and 15 refused; an echo past its limit stopped; the certhash's form; and the three
+    TM-23 tests below. They take a lock, one session at a time, since the recorded group is
+    process-wide (TM-22's residual (g)) and `cargo test` runs them side by side. The headless-Chrome
+    test, `browser-tests/webtransport` (a workspace of its own, since `libp2p-swarm` 0.48.0 pins
+    wasm-bindgen 0.2.108 into core's lock; every dependency wasm32-only), run by
+    `ci/webtransport-chrome.sh` against `crates/net/examples/webtransport_listen.rs`: 9 tests in
+    Chrome; then the listener's reports (the echo on X25519MLKEM768, the classical-only listener on
+    X25519, the unexpected browser refused, and Chrome's CERTIFICATE_VERIFY_FAILED for the wrong
+    certhash and the 15-day certificate), and `ci/check-netlog.py --expect-pq` on Chrome's net log
+    (a session on X25519MLKEM768 with `TLS13_CHACHA20_POLY1305_SHA256`, and no packet off loopback,
+    unconnected UDP sends included). The script builds the browser test crate before it starts the
+    listener (a cold build took over 4 minutes against the listener's old 280 s deadline, now
+    600 s as a backstop). Nightly, as `nightly.yml`'s `webtransport-chrome` job, on Chrome for
+    Testing 156.0.8078.80 and its chromedriver (`ci/chrome-install.sh`, each zip against its
+    SHA-256 in `ci/pins.env`; Google publishes none, so the values were taken after the download's
+    MD5 matched Google's `x-goog-hash`), and wasm-bindgen-cli 0.2.129 from crates.io; `gate.sh`
+    checks that install line and that the test crate's `wasm-bindgen` is the same version.
+    `ci/test-check-netlog.sh` (16 cases on made-up net logs), `ci/test-check-wasm-bindgen.sh` (5)
+    and `ci/test-check-vendored.sh` (6) run in `gate.sh` and CI's `ci-scripts` job; the browser crate's `cargo fmt --check` and clippy pedantic on wasm32 run in
+    `gate.sh` and CI's `fmt` and `clippy` jobs.
+  - **TM-23, contained.** `wtransport` 0.7.2's `Endpoint::accept` holds `expect("Endpoint cannot be
+    closed")`, which panics once quinn's `accept` returns `None` (after `Endpoint::close`, or once
+    quinn's driver has ended on a socket error other than `ConnectionReset`; quinn 0.11.12,
+    `src/endpoint.rs` lines 401-410, 647-675 and 843-850); and when `wtransport`'s per-connection
+    worker panics, whoever awaits that connection next panics too (`Driver::result`, its
+    `src/driver/mod.rs` lines 230-234). `Listener::accept`, `Listener::handshake` (the session
+    request through Noise) and `Session::accept_stream` each run in a task of their own with
+    abort-on-drop, returning `EndpointClosed` or the new `Panicked`; the Noise configuration is
+    built before the handshake's task, so the task holds the identity's public half and signature,
+    not another copy of its secret key. Tests:
+    `accept_on_a_closed_endpoint_is_an_error_not_a_panic`, `a_dropped_accept_loses_no_connection`,
+    and `a_panicking_session_request_is_contained`, a raw QUIC client that sends the QPACK input
+    below as its CONNECT request's HEADERS: the worker panics, the handshake returns `Panicked`,
+    and the listener serves the next dialer. The recording key-exchange groups are statics, which
+    delegate every call (`usable_for_version` and `ffdhe_group` too), so a listener leaks nothing.
+  - **Found, not fixed** (TM-23's residual (a), required before 1.0, phase 6): `wtransport-proto`
+    0.7.2's QPACK integer decoder overflows a shift (`src/qpack.rs`, line 173) on the CONNECT
+    request's HEADERS, before authentication: a panic where overflow checks are on (debug and test
+    builds); in a release build the shift wraps, decoding fails on the recorded input, and in
+    general it yields a wrong value, harmless because every decoded value is checked before use.
+    The fuzz target and the 18-byte input are in
+    `fuzz/known-crashes/`, outside the nightly fuzz list, with how to reproduce; a vendored fix is
+    not made now (feature off, in no shipped build; the owner decides whether to report it
+    upstream).
+  - **Required before 1.0, phase 6 (browser client)**, TM-22's residuals: (e) sessions not counted
+    (each held to net's QUIC limits, at most about 4.06 MiB unread before authentication, but no count per
+    listener or address, outside the swarm's limits); (f) no certificate rotation; (g) the
+    handshake facts are per process, not per connection, and not shared with spike A's QUIC and
+    TCP. Also phase 6: a test that the wrong-path 404 is bounded against a dialer that withholds
+    flow-control credit (a raw client with a stream receive window of 0 never gets its session
+    request past wtransport, whose driver must first write its own SETTINGS: the session request
+    timed out; a client that withholds acknowledgements instead needs a QUIC test harness), a
+    native assertion of the negotiated cipher suite (asserted from Chrome's
+    net log now; quinn does not expose the rustls session to a native test), and the spike's public
+    test knobs (`allow_long_validity`, `noise_hashes_override`, `KxPolicy::ClassicalOnly`) behind
+    a test-only interface. TM-6 and `suites.md` 4.1 record a second zeroization deviation: the
+    listener's certificate key is copied through `wtransport` and rustls types not wiped on drop.
+  - **Supply chain** (proposed): `deny.toml` and `deny-production.toml` wrappers for the
+    feature's crates, and closing entries for each crate they admit (`wtransport` beneath
+    `licketysync-net`, `wtransport-proto` beneath `wtransport`, `libp2p-noise` beneath `net`, the
+    browser crate and the vendored websys, `snow` and `x25519-dalek` beneath `libp2p-noise`,
+    `aes-gcm` and `blake2` beneath `snow`, `aes`, `ctr` and `ghash` beneath `aes-gcm`, `polyval`
+    beneath `ghash`): a first-party crate depending on `aes-gcm` or on `x25519-dalek` now fails
+    `cargo deny check bans` (probed in a scratch copy, adding each to `crates/engine`); the der,
+    pkcs8, spki, sha1 and md5 bans hold. 41 cargo-vet exemptions for core's new crates;
+    `browser-tests/webtransport` has its own `supply-chain/` store (150 exemptions, each with its
+    role in that graph: what it sits beneath, at build time or on which targets), so `cargo vet
+    prune` in one store cannot drop the other's, and
+    vets the vendored `libp2p-webtransport-websys` as its crates.io release
+    (`audit-as-crates-io`); since that keys on the version and would not see an edit (probed),
+    `ci/check-vendored.sh` holds the copy to `vendor/SHA256SUMS` and refuses any entry that is not
+    a regular file (its tests: an edit, an extra file, a missing file and a symbolic link fail it). The vendored copy changes one line of the published 0.6.0 (`wasm-bindgen-futures`
+    `=0.4.58` to `0.4.79`), with rust-libp2p's MIT `LICENSE` and `vendor/README.md`; the owner,
+    2026-11-04: "Yes, keep the patched version until upstream releases the fix." It goes once
+    such a release has been out 7 days. Dependabot has a cargo entry for the browser workspace
+    (7-day cooldown) that skips `wasm-bindgen`, `wasm-bindgen-*`, `js-sys` and `web-sys`: the
+    weekly refresh moves them in one change with `WASM_BINDGEN_CLI` (CONTRIBUTING), and
+    `ci/check-wasm-bindgen.sh` (gate.sh and CI's `deps` job, every push) fails a change that moves
+    the test crate's wasm-bindgen without the CLI the nightly installs, so no pull request can turn
+    the nightly red that way. CONTRIBUTING's weekly refresh lists the browser workspace and the
+    Chrome for Testing pins. `spec/suites.md` 3.1
+    has rows for `wtransport` (naming the delegating key-exchange group and the recording
+    resolver as first-party code it admits, and `quinn-proto`'s `ring` role beneath it) and
+    `libp2p-webtransport-websys` (Noise's Diffie-Hellman on `x25519-dalek` 3 beneath
+    `libp2p-noise`, `snow`'s other primitives wasm32-only and unselected).
+  - **Unsafe code under the feature.** `ci/geiger-baseline.txt` counts each crate with default
+    features, so it is unchanged. Measured by hand with the feature on (cargo-geiger 0.14.0), net
+    would be `277 21323 375 32 583` against its baseline `261 20643 336 22 574`; within that,
+    `wtransport` 5 expressions, `wtransport-proto` 11 expressions and 2 methods.
+  - **Default builds.** With default features, `cargo tree --workspace -e normal,build` on this
+    branch differs from cfb8230 by one edge on each of x86_64-unknown-linux-gnu,
+    aarch64-linux-android, aarch64-apple-ios, x86_64-pc-windows-msvc, aarch64-apple-darwin and
+    x86_64-apple-darwin: `data-encoding-macro-internal` 0.1.19 (a proc macro beneath multiaddr)
+    now builds on `syn` 3.0.9 instead of 2.0.119, both already in the tree and vetted, which
+    cargo's resolution chose when the feature's crates entered `Cargo.lock`. Nothing else in a
+    default build changes. CI's test job runs `--all-features` on Windows and macOS, so the feature
+    and its tests build and run there, which this machine cannot check.
+  - Reviewed 2026-11-04 by a0853f1b760cf7422 (correctness: blocked by 1, the post-quantum claim,
+    now fixed; confirm clean, its SHOULD FIX on the Dependabot `wasm-bindgen` pin fixed in the final
+    round), a76f6f2af06334a1d (second: blocked by 6, the deny wrappers among them, now fixed;
+    confirm clean) and aff627ebe87ddd091 (security, the security-reviewer pass: blocked by 1, the
+    QPACK panic reaching the handshake, now fixed by containment, TM-23; confirm clean). The final
+    round (R1 to R7, ruled from the three confirms) was confirmed by a3735501c4c400d71. The owner's
+    decisions: the browser route is "own WebTransport" (2026-11-03), and the vendored
+    `libp2p-webtransport-websys` patch is kept until upstream releases the fix (2026-11-04).
+    TM-22's residuals (e) to (g) and TM-23's QPACK residual are required before 1.0, phase 6 (the
+    coordinator's ruling, for the owner's review). Author ab821d0944d7e4dc1; the merge agent wrote
+    this line.
+
 - Fix the red `main` left by b550c02: `licketysync-net` builds for `aarch64-apple-ios` again (CI
   run 41744692314, job "net builds for aarch64-apple-ios"; every other job was green), without its
   memory limit, and so refuses to start there until phase 4 brings one. Cause:

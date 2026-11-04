@@ -558,7 +558,10 @@ the Tahoe-LAFS and BitTorrent Sync analyses found capability strings in the clea
 (2026-11-03, to raise upstream): beneath `net`, `libp2p-identity` 0.3.1 keeps the libp2p identity's
 secret key in types that are not wiped on drop and are cloned into the TLS and QUIC configurations
 (`suites.md` 4.1); `net` refuses to build a node while `SSLKEYLOGFILE` is set, since `libp2p-tls`
-gives every TLS configuration rustls's key-log writer.
+gives every TLS configuration rustls's key-log writer. A second (spike B, feature `webtransport`;
+proposed, for review): the WebTransport listener's certificate key is copied through `wtransport`
+and rustls types that are not wiped on drop (`suites.md` 4.1); its rustls configuration keeps
+rustls's default key log, which writes nothing.
 
 **TM-7. No `unsafe` outside the platform-FFI crates.** The workspace lint `unsafe_code = "forbid"`
 applies everywhere; a platform-FFI crate opts out explicitly and is covered by Miri nightly;
@@ -783,12 +786,13 @@ one prefix, and the one table that outlives a connection, per-peer state, holds 
 connection limits are set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is
 residual (a) below); QUIC's three-to-one anti-amplification limit stays at its default; and the
 advisory feed in CI (cargo-audit, daily) catches the next such
-advisory in a dependency. Four residuals of the transport as phase 0 builds it (`net` on
+advisory in a dependency. Seven residuals of the transport as phase 0 builds it (`net` on
 `libp2p-quic` 0.14, `libp2p-yamux` 0.48 and `libp2p-memory-connection-limits` 0.6), each required
 before 1.0: (a) to (c), from the security review of 2026-11-03, each a phase 1 item ("I want safety
 limits in version 1.0, no matter what. It is fine to pass until phase 1, but it must not get
 lost.", owner, 2026-11-03), and (d), from the iOS build of the same day, a phase 4 item by the
-owner's separate answer on it, below: (a) **QUIC Initials cost per Initial, not per limit.**
+owner's separate answer on it, below, and (e) to (g), of spike B's WebTransport listener, each a
+phase 6 item: (a) **QUIC Initials cost per Initial, not per limit.**
 `libp2p-quic` accepts every Initial quinn hands it before the swarm's limits are asked, so each
 one, from an attacker who never answers, costs a QUIC connection and a TLS
 server handshake (the X25519MLKEM768 encapsulation and the certificate's signature) whatever
@@ -820,7 +824,32 @@ connection without the memory limit. **Required before 1.0, fixed in phase 4, an
 recorded under the same 1.0 safety-limits rule); phase 4 item "iOS memory limit": an iOS memory
 check of `net`'s own, or an upstream release of `libp2p-memory-connection-limits` on a sysinfo that
 builds for iOS, with the iOS refusal lifted and the memory-limit test compiled for iOS again.
-QUIC's windows are set (`net`'s limits, 4 MiB a connection). Stops resource exhaustion through
+Three more, of the WebTransport listener spike B adds to `net` (feature `webtransport`, off by
+default, so in no build that ships; proposed, for review), each **required before 1.0, phase 6
+(browser client)**: (e) **WebTransport sessions are not counted.** Each connection is held to
+`net`'s QUIC limits, as QUIC's own are: at most 16 bidirectional and 16 unidirectional streams
+open at once, 4 MiB unread a stream and a connection, and 64 KiB of unread datagrams (quinn's
+default is about 1.25 MB), so before authentication a connection holds at most about 4.06 MiB of
+the dialer's unread data besides its TLS and QUIC state, and each step of
+the handshake (the session request, the session, Noise, a stream's protocol) has a deadline, with
+a 20 s idle timeout. But the listener takes every connection quinn hands it, with no count of
+sessions per listener or per address and outside the swarm's connection and memory limits, so the
+total grows with the number of dialers at their own rate, and an Initial costs what residual (a)
+says. Phase 6 item "WebTransport limits": sessions counted with the swarm's limits (or a transport
+the swarm's limits govern), per-address limits, the memory limit, and quinn's Retry
+(`IncomingSession::retry`) under load. (f) **No
+certificate rotation.** The listener's certificate is made when it binds and is valid for at most
+14 days, the longest a browser accepts for a hash; once it expires no browser can dial until the
+listener binds again with a new certificate whose hash is handed out again, and an invite carrying
+the old hash (`keys.md`'s `c`) goes stale. Phase 6 item "WebTransport certificate rotation": a new
+certificate before expiry, Noise reporting the current and the next hash, the certificate swapped
+in without dropping sessions, and `not_before` back-dated for clock skew. (g) **The handshake facts
+are per process, and spike A's transports keep none.** The outer key-exchange group a WebTransport
+handshake chose is recorded process-wide, the last handshake's, so with handshakes at the same
+time it can name another session's; QUIC and TCP record no such facts. Phase 6 item "handshake
+facts": per-connection facts shared by the three transports, as TM-33's evidence.
+QUIC's windows are set (`net`'s limits, 4 MiB a connection, for the swarm's QUIC and for the
+WebTransport listener alike). Stops resource exhaustion through
 unbounded streams, connections and
 registrations, and amplification through QUIC (go-libp2p and rust-libp2p 2022; rendezvous 2026). The
 stated costs: any Hello that passes its checks costs one Ed25519 signature (the DeviceProof sent in
@@ -902,7 +931,32 @@ held, the same cost class. Enforced by `net`, `protocol` and `index`; the flood 
 `clippy::unwrap_used`, `expect_used` and `panic` are denied workspace-wide, `indexing_slicing` warns
 and is fixed, and `.semgrep/project.yml` forbids `expect` on decoded data in `protocol` and `net`.
 Stops a remote panic (rust-libp2p 2026 QUIC handshake). Enforced by `core/Cargo.toml` lints and
-Semgrep.
+Semgrep. In a dependency, the rule is met by containment where the dependency panics: `wtransport`
+0.7.2's `Endpoint::accept` (beneath `net`'s WebTransport listener, feature `webtransport`, spike B;
+proposed, for review) holds an `expect` that panics once quinn's endpoint is closed or its driver
+has ended on a socket error, which is not provably unreachable from the network on every platform,
+so `net` runs it in a task of its own and returns an error instead (`Listener::accept`, tested);
+and `wtransport`'s per-connection worker, when it panics, makes whoever awaits that connection next
+panic too (`Driver::result`, its `src/driver/mod.rs` lines 230-234), so `net` runs each step that
+awaits a connection (the handshake, from the session request through Noise, and each stream's
+protocol) in a task of its own, which returns `WebTransportError::Panicked` instead (tested with
+residual (a)'s input).
+One residual, **required before 1.0, phase 6 (browser client)**: (a) **`wtransport-proto` 0.7.2's
+QPACK integer decoder overflows a shift on peer bytes.** A two-minute fuzz run of its parsers
+(2026-11-04) found that `Decoder::decode_integer` (`src/qpack.rs`, line 173) shifts by a count that
+grows 7 bits a continuation byte without bound, which panics where overflow checks are on (debug
+and test builds, fuzzing). In a release build (overflow checks off) the shift wraps; on the
+recorded input decoding then fails; in general it yields a wrong value, harmless because every
+decoded value is checked before use (discarded, looked up in the static table, or checked as a
+length against the bytes left). The input is the CONNECT request's HEADERS frame, from any client
+before authentication, decoded inside the worker task `wtransport` spawns per connection; the
+worker's panic then panics `net`'s handshake, which awaits that connection, and is contained there
+(above): the handshake returns `WebTransportError::Panicked`, the process and the listener go on,
+and `a_panicking_session_request_is_contained` sends the 18-byte input (`fuzz/known-crashes/`) to
+show it. Phase 6 item "QPACK integer overflow": a fix upstream (or in a vendored copy) that stops
+with `IntegerOverflow` once the shift reaches the integer's width, and the fuzz target for
+`wtransport-proto`'s parsers (kept in `fuzz/known-crashes/`, outside the nightly list, since until
+then it would fail the nightly fuzz job at once) moved into `fuzz_targets/`.
 
 **TM-24. The DHT uses a daily-rotating discovery hash and runs in client mode by default.** The
 announcement hash is derived from the folder ID and the current day; the node is a client unless the

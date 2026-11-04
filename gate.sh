@@ -154,6 +154,11 @@ need_tool typos-cli "$TYPOS" "typos@$TYPOS" $wf/ci.yml
 need_tool cargo-mutants "$CARGO_MUTANTS" "cargo-mutants@$CARGO_MUTANTS" $wf/mutants.yml
 need_tool cargo-fuzz "$CARGO_FUZZ" "cargo install cargo-fuzz --version $CARGO_FUZZ --locked" $wf/nightly.yml
 need_tool cargo-careful "$CARGO_CAREFUL" "cargo-careful@$CARGO_CAREFUL" $wf/nightly.yml
+# nightly.yml's webtransport-chrome job (the gate does not run it): its
+# wasm-bindgen-cli, which must be the version the browser test crate's
+# wasm-bindgen pins (ci/check-wasm-bindgen.sh, below and in CI, checks that).
+need_installs wasm-bindgen-cli "$WASM_BINDGEN_CLI" \
+  "cargo install wasm-bindgen-cli --version $WASM_BINDGEN_CLI --locked" $wf/nightly.yml
 # release.yml's tools, which the gate does not run.
 need_installs cargo-auditable "$CARGO_AUDITABLE" "cargo-auditable@$CARGO_AUDITABLE" $wf/release.yml
 need_installs cargo-cyclonedx "$CARGO_CYCLONEDX" "cargo-cyclonedx@$CARGO_CYCLONEDX" $wf/release.yml
@@ -205,6 +210,20 @@ step cargo audit
 step cargo audit --file fuzz/Cargo.lock
 step cargo machete
 step cargo vet --locked
+# browser-tests/webtransport (spike B) is a workspace of its own: its
+# lockfile is current, audited, deny-checked against deny.toml and vetted
+# against its own supply-chain/; its code is formatted and passes clippy
+# pedantic on wasm32, the only target it builds for; and its vendored
+# libp2p-webtransport-websys is the copy vendor/SHA256SUMS lists.
+step cargo fetch --locked --manifest-path browser-tests/webtransport/Cargo.toml
+step cargo audit --file browser-tests/webtransport/Cargo.lock
+step cargo deny --manifest-path browser-tests/webtransport/Cargo.toml --config deny.toml check
+step cargo vet --locked --manifest-path browser-tests/webtransport/Cargo.toml
+step cargo fmt --manifest-path browser-tests/webtransport/Cargo.toml --check
+step cargo clippy --manifest-path browser-tests/webtransport/Cargo.toml \
+  --target wasm32-unknown-unknown --all-targets -- -D warnings -W clippy::pedantic
+step ci/check-vendored.sh
+step ci/check-wasm-bindgen.sh
 step cargo "+$RUST_NIGHTLY" udeps --workspace --all-targets
 # fuzz/Cargo.lock, which nightly.yml's fuzz jobs build from, is current (fuzz/ is
 # a workspace of its own).
@@ -236,6 +255,10 @@ step ci/test-vector-line-endings.sh
 # The scripts mutants.yml and nightly.yml's fuzz jobs run, on stand-ins for the tools.
 step ci/test-mutants.sh
 step ci/test-fuzz-targets.sh
+# The net-log checker the nightly webtransport-chrome job runs, on made-up logs.
+step ci/test-check-netlog.sh
+step ci/test-check-wasm-bindgen.sh
+step ci/test-check-vendored.sh
 # 90% line coverage on each of the crates the plan names, and on the index
 # crate, which TM-17, TM-40 and TM-41 name as their enforcer (review ruling of
 # 2026-10-22), measured per crate: only that crate's own files count, so a

@@ -65,7 +65,11 @@ deny = [
   { crate = "constant_time_eq", wrappers = ["blake3"], reason = "BLAKE3's hash comparison, inside blake3 only" },
   # The record layer's AEAD: chunks, sealed metadata and the sealed
   # FolderProof's primitive, all in keys.
-  { crate = "chacha20poly1305", wrappers = ["licketysync-keys"], reason = "the AEAD of suite 1, used through licketysync-keys only" },
+  # Spike B (feature `webtransport`, proposed; for review): chacha20poly1305
+  # 0.10 beneath snow's RustCrypto resolver, which compiles on wasm32 only
+  # (the browser test crate) and there carries Noise's ChaChaPoly; on native
+  # targets snow takes its cipher and hash from ring (below).
+  { crate = "chacha20poly1305", wrappers = ["licketysync-keys", "snow"], reason = "the AEAD of suite 1, used through licketysync-keys only; Noise's ChaChaPoly inside snow on wasm32 (webtransport feature)" },
   # The approved primitives themselves only in the keys crate (security
   # review SF 6): nothing else signs or encodes the write key's words. A
   # denylist cannot block an unnamed cryptography crate; review and cargo-vet
@@ -73,14 +77,22 @@ deny = [
   # and 3.1): its Ed25519 is ed25519-dalek's.
   { crate = "ed25519-dalek", wrappers = ["licketysync-keys", "libp2p-identity"], reason = "Ed25519 signing and verification live in licketysync-keys, and in libp2p-identity for the libp2p identity key only" },
   { crate = "bip39", wrappers = ["licketysync-keys"], reason = "the write key's words live in licketysync-keys" },
-  { crate = "curve25519-dalek", wrappers = ["ed25519-dalek"], reason = "reached only through ed25519-dalek" },
+  # Spike B (feature `webtransport`, proposed; for review): x25519-dalek 3.0.0
+  # (curve25519-dalek 5.0.0) beneath libp2p-noise 0.47, whose own Noise
+  # keypair does all of Noise's Diffie-Hellman, ephemeral and static, on
+  # native and wasm32; snow's curve25519-dalek 4.1.3 compiles on wasm32 only
+  # and is never selected.
+  { crate = "curve25519-dalek", wrappers = ["ed25519-dalek", "snow", "x25519-dalek"], reason = "reached only through ed25519-dalek; Noise's X25519 through x25519-dalek beneath libp2p-noise, and snow's unselected one on wasm32 (webtransport feature)" },
   # curve25519-dalek's formally verified field arithmetic on some targets.
   { crate = "fiat-crypto", wrappers = ["curve25519-dalek"], reason = "reached only through curve25519-dalek" },
   { crate = "ed25519", wrappers = ["ed25519-dalek"], reason = "reached only through ed25519-dalek" },
   { crate = "signature", wrappers = ["ed25519"], reason = "reached only through ed25519-dalek" },
   # libp2p-identity's SHA-256: the peer ID's multihash of a key too long to
   # inline (never ours, an Ed25519 key is inlined) and HKDF's hash below.
-  { crate = "sha2", wrappers = ["ed25519-dalek", "libp2p-identity"], reason = "Ed25519's SHA-512 through ed25519-dalek; SHA-256 inside libp2p-identity" },
+  # Spike B (feature `webtransport`, proposed; for review): Noise's SHA-256 in
+  # snow on wasm32 (its RustCrypto resolver; ring on native), and
+  # wtransport's certificate hash (the WebTransport certhash).
+  { crate = "sha2", wrappers = ["ed25519-dalek", "libp2p-identity", "snow", "wtransport"], reason = "Ed25519's SHA-512 through ed25519-dalek; SHA-256 inside libp2p-identity, snow (Noise) and wtransport (the certificate hash)" },
   # libp2p-identity's `Keypair::derive_secret`, HKDF-SHA256 over the
   # identity's secret key, which libp2p-quic calls once for QUIC's stateless
   # reset key (suites.md 2.6, the transport change of 2026-11-03).
@@ -92,15 +104,21 @@ deny = [
   # (suites.md 3.1, the rand entry below).
   { crate = "chacha20", wrappers = ["chacha20poly1305", "proptest", "rand"], reason = "never without the MAC, except as rand's generator" },
   { crate = "poly1305", wrappers = ["chacha20poly1305"], reason = "never without the cipher" },
-  { crate = "universal-hash", wrappers = ["poly1305"], reason = "reached only through chacha20poly1305" },
+  # Spike B (feature `webtransport`, proposed; for review): polyval, beneath
+  # ghash and aes-gcm in snow's RustCrypto resolver, on wasm32 only (a Noise
+  # cipher libp2p never selects).
+  { crate = "universal-hash", wrappers = ["poly1305", "polyval"], reason = "reached only through chacha20poly1305; polyval beneath snow's aes-gcm (webtransport feature)" },
   # universal-hash's constant-time tag comparison and the conditional moves
   # beneath it, and digest's for MACs (its `mac` feature, which hmac turns on
   # beneath hkdf in libp2p-identity). First-party code compares secrets with
   # subtle (suites.md 4.2).
   { crate = "ctutils", wrappers = ["universal-hash", "digest"], reason = "constant-time tag comparison inside chacha20poly1305's and hmac's crates only" },
   { crate = "cmov", wrappers = ["ctutils"], reason = "reached only through chacha20poly1305" },
-  { crate = "cipher", wrappers = ["chacha20", "chacha20poly1305"], reason = "reached only through chacha20poly1305" },
-  { crate = "aead", wrappers = ["chacha20poly1305"], reason = "reached only through chacha20poly1305" },
+  # Spike B (feature `webtransport`, proposed; for review): aes, ctr and
+  # aes-gcm beneath snow's RustCrypto resolver, compiled on wasm32 only and
+  # never selected by libp2p-noise (Noise_XX_25519_ChaChaPoly_SHA256 only).
+  { crate = "cipher", wrappers = ["chacha20", "chacha20poly1305", "aes", "aes-gcm", "ctr"], reason = "reached only through chacha20poly1305; snow's unused AES-GCM (webtransport feature)" },
+  { crate = "aead", wrappers = ["chacha20poly1305", "aes-gcm"], reason = "reached only through chacha20poly1305; snow's unused AES-GCM (webtransport feature)" },
   { crate = "bitcoin_hashes", wrappers = ["bip39"], reason = "the words' checksum SHA-256, inside bip39 only" },
   # proptest's random-input generators, a dev-dependency only. suites.md
   # section 3 counts a random source as cryptography, and section 3.2 says no
@@ -109,7 +127,7 @@ deny = [
   # rand is the libp2p crates' and quinn-proto's own (suites.md 3.1), as
   # `cargo tree -e no-dev -i rand` shows it on 2026-11-03; deny-production.toml
   # gives it the same wrappers without proptest.
-  { crate = "rand", wrappers = ["proptest", "libp2p-core", "libp2p-quic", "libp2p-swarm", "quinn-proto"], reason = "a test tool's generator, and the libp2p crates' and quinn's; first-party randomness is getrandom (suites.md 4.3)" },
+  { crate = "rand", wrappers = ["proptest", "libp2p-core", "libp2p-quic", "libp2p-swarm", "quinn-proto", "libp2p-noise"], reason = "a test tool's generator, and the libp2p crates' and quinn's; first-party randomness is getrandom (suites.md 4.3)" },
   # quinn-proto's statistical generator (packet-number skipping, its
   # internal choices), never a key.
   { crate = "rand_pcg", wrappers = ["quinn-proto"], reason = "quinn-proto's own generator" },
@@ -132,21 +150,46 @@ deny = [
   # the Retry integrity tag (AES-128-GCM); and in libp2p-quic itself building
   # that HMAC key from the identity's derived reset secret. QUIC's packet
   # protection is rustls's, on aws-lc-rs; rustls-webpki reaches aws-lc-rs, not
-  # ring. snow and libp2p-websocket, the other two of the six roles, are not
-  # in the graph.
-  { crate = "ring", wrappers = ["libp2p-tls", "rcgen", "quinn-proto", "libp2p-quic"], reason = "the libp2p TLS certificate and quinn-proto's own reset, token and Retry crypto, inside the transport crates only" },
+  # ring. snow is in the graph only under net's webtransport feature (below);
+  # libp2p-websocket, the sixth role, is not.
+  # Spike B (feature `webtransport`, proposed; for review): snow's ring resolver, the
+  # Noise role suites.md 2.6 names (cipher and hash from ring on native).
+  { crate = "ring", wrappers = ["libp2p-tls", "rcgen", "quinn-proto", "libp2p-quic", "snow"], reason = "the libp2p TLS certificate and quinn-proto's own reset, token and Retry crypto, inside the transport crates only; Noise's cipher and hash in snow (webtransport feature)" },
   # The TLS stack and its provider (suites.md 2.6 and 3.1): rustls on
   # aws-lc-rs, used by the transport crates; licketysync-net only installs
   # the provider as the process default and checks it.
-  { crate = "rustls", wrappers = ["libp2p-tls", "futures-rustls", "quinn", "quinn-proto", "licketysync-net"], reason = "TLS 1.3 for QUIC and TCP through libp2p-tls and libp2p-quic; net installs the provider" },
+  # Spike B (feature `webtransport`, proposed; for review): wtransport's TLS; net builds
+  # the listener's ServerConfig itself with builder_with_provider.
+  { crate = "rustls", wrappers = ["libp2p-tls", "futures-rustls", "quinn", "quinn-proto", "licketysync-net", "wtransport"], reason = "TLS 1.3 for QUIC and TCP through libp2p-tls and libp2p-quic; net installs the provider; the WebTransport listener's TLS (webtransport feature)" },
   # quinn-proto links aws-lc-rs through its rustls-aws-lc-rs feature but,
   # with ring on as well, calls ring for all of its own crypto (above).
-  { crate = "aws-lc-rs", wrappers = ["rustls", "rustls-webpki", "quinn-proto"], reason = "rustls's crypto provider and rustls-webpki's verification; linked, not called, beneath quinn-proto; never called directly" },
+  # Spike B (feature `webtransport`, proposed; for review): rcgen 0.14's aws_lc_rs
+  # feature generates the WebTransport certificate's P-256 key.
+  { crate = "aws-lc-rs", wrappers = ["rustls", "rustls-webpki", "quinn-proto", "rcgen"], reason = "rustls's crypto provider and rustls-webpki's verification; linked, not called, beneath quinn-proto; never called directly" },
   { crate = "aws-lc-sys", wrappers = ["aws-lc-rs"], reason = "reached only through aws-lc-rs" },
   { crate = "rustls-webpki", wrappers = ["rustls", "libp2p-tls"], reason = "certificate parsing beneath rustls and libp2p-tls" },
-  { crate = "rcgen", wrappers = ["libp2p-tls"], reason = "the libp2p TLS certificate, generated inside libp2p-tls only" },
+  # Spike B (feature `webtransport`, proposed; for review): rcgen 0.14 beneath
+  # wtransport's self-signed builder (the listener's certificate).
+  { crate = "rcgen", wrappers = ["libp2p-tls", "wtransport"], reason = "the libp2p TLS certificate, generated inside libp2p-tls only; the WebTransport certificate inside wtransport (webtransport feature)" },
   { crate = "libp2p-tls", wrappers = ["licketysync-net", "libp2p-quic"], reason = "the transport's TLS, used by net and libp2p-quic only" },
-  { crate = "quinn", wrappers = ["libp2p-quic"], reason = "QUIC beneath libp2p-quic only" },
+  # Spike B (feature `webtransport`, proposed; for review): the crates the
+  # entries above admit as wrappers, closed in turn, so that no other crate
+  # (a first-party one above all) can depend on them directly, and so on the
+  # primitives beneath them. libp2p-noise also by the browser test crate and
+  # the vendored libp2p-webtransport-websys (browser-tests/webtransport,
+  # checked against this file).
+  { crate = "wtransport", wrappers = ["licketysync-net"], reason = "the WebTransport listener, inside licketysync-net's webtransport feature only" },
+  { crate = "wtransport-proto", wrappers = ["wtransport"], reason = "HTTP/3 and WebTransport framing beneath wtransport only" },
+  { crate = "libp2p-noise", wrappers = ["licketysync-net", "libp2p-webtransport-websys", "licketysync-webtransport-browser-tests"], reason = "Noise inside WebTransport only (suites.md 2.6)" },
+  { crate = "snow", wrappers = ["libp2p-noise"], reason = "the Noise framework beneath libp2p-noise only" },
+  { crate = "x25519-dalek", wrappers = ["libp2p-noise"], reason = "Noise's Diffie-Hellman inside libp2p-noise only" },
+  { crate = "aes-gcm", wrappers = ["snow"], reason = "snow's unselected AES-GCM, on wasm32 only" },
+  { crate = "aes", wrappers = ["aes-gcm"], reason = "beneath snow's unselected AES-GCM only" },
+  { crate = "ctr", wrappers = ["aes-gcm"], reason = "beneath snow's unselected AES-GCM only" },
+  { crate = "ghash", wrappers = ["aes-gcm"], reason = "beneath snow's unselected AES-GCM only" },
+  { crate = "polyval", wrappers = ["ghash"], reason = "beneath snow's unselected AES-GCM only" },
+  { crate = "blake2", wrappers = ["snow"], reason = "snow's BLAKE2, compiled but never selected (SHA-256 only)" },
+  { crate = "quinn", wrappers = ["libp2p-quic", "wtransport"], reason = "QUIC beneath libp2p-quic, and beneath wtransport (webtransport feature)" },
   { crate = "quinn-proto", wrappers = ["quinn", "libp2p-quic"], reason = "QUIC beneath libp2p-quic only" },
   # idna (url, beneath multiaddr) on its ASCII-only back end, idna_adapter's
   # 1.0 line, which licketysync-net requires as `~1.0`: an exception to the

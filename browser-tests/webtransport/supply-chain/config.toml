@@ -1,0 +1,773 @@
+
+# cargo-vet config file
+
+[cargo-vet]
+version = "0.10"
+
+[imports.bytecode-alliance]
+url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
+
+[imports.google]
+url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
+
+[imports.isrg]
+url = "https://raw.githubusercontent.com/divviup/libprio-rs/main/supply-chain/audits.toml"
+
+[imports.mozilla]
+url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
+
+[imports.zcash]
+url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
+
+[policy.libp2p-webtransport-websys]
+audit-as-crates-io = true
+
+[[exemptions.aead]]
+version = "0.5.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aes-gcm, chacha20poly1305; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.aes]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aes-gcm; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.aes-gcm]]
+version = "0.10.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath snow; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.anyhow]]
+version = "1.0.104"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath prost-derive; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.async-trait]]
+version = "0.1.92"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): proc macro beneath wasm-bindgen-test (the headless-Chrome test harness, wasm32 test code only, never shipped); dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.asynchronous-codec]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-noise; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.autocfg]]
+version = "1.5.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph build-time only, beneath num-traits; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.base-x]]
+version = "0.2.11"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath multibase; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.base256emoji]]
+version = "1.0.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath multibase; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.base45]]
+version = "3.2.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath multibase; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.bitflags]]
+version = "2.13.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath redox_syscall; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.blake2]]
+version = "0.10.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath snow; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.block-buffer]]
+version = "0.10.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath digest; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.block-buffer]]
+version = "0.12.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath digest; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.bs58]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph bs58 0.5.1 beneath libp2p-identity. Not covered by the imported audits at this version."
+
+[[exemptions.bytes]]
+version = "1.12.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath asynchronous-codec, libp2p-noise, multiaddr, multistream-select, prost; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.cast]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): numeric casts beneath wasm-bindgen-test's timing (the headless-Chrome test harness, wasm32 test code only, never shipped). Not covered by the imported audits at this version."
+
+[[exemptions.cc]]
+version = "1.10.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph build-time only, beneath minicov, ring; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.cfg-if]]
+version = "1.0.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aes, chacha20, curve25519-dalek, getrandom, js-sys, parking_lot_core, polyval, ring, sha2, wasm-bindgen; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.chacha20]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath chacha20poly1305; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.chacha20poly1305]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath snow; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.cipher]]
+version = "0.4.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aes, aes-gcm, chacha20, chacha20poly1305, ctr; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.cmov]]
+version = "0.5.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath ctutils; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.const-oid]]
+version = "0.10.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath digest; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.const-str]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath base256emoji; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.cpufeatures]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aes (on some targets only), chacha20 (on some targets only), curve25519-dalek (on some targets only), poly1305 (on some targets only), polyval (on some targets only), sha2 (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.crypto-common]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aead, cipher, digest, universal-hash; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.crypto-common]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath digest; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.ctr]]
+version = "0.9.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aes-gcm; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.ctutils]]
+version = "0.4.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath digest; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.curve25519-dalek]]
+version = "4.1.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath snow; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.curve25519-dalek]]
+version = "5.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath ed25519-dalek, x25519-dalek; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.curve25519-dalek-derive]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath curve25519-dalek (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.data-encoding]]
+version = "2.11.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath data-encoding-macro, data-encoding-macro-internal, multiaddr, multibase; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.data-encoding-macro]]
+version = "0.1.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath multibase; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.data-encoding-macro-internal]]
+version = "0.1.19"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath data-encoding-macro; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.digest]]
+version = "0.10.7"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath blake2, sha2; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.digest]]
+version = "0.11.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath curve25519-dalek, hmac, sha2; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.ed25519]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath ed25519-dalek; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.ed25519-dalek]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-identity; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.either]]
+version = "1.19.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath itertools, libp2p-core; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.find-msvc-tools]]
+version = "0.1.15"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath cc; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.futures]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, libp2p-noise, libp2p-webtransport-websys, licketysync-webtransport-browser-tests (on some targets only), multistream-select, rw-stream-sink; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.futures-channel]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath futures, futures-util; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.futures-executor]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath futures; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.futures-io]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath futures, futures-util; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.futures-macro]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath futures-util; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.futures-sink]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath asynchronous-codec, futures, futures-channel, futures-util; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.futures-task]]
+version = "0.3.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph futures-task 0.3.34 beneath futures, futures-executor, futures-util. Not covered by the imported audits at this version."
+
+[[exemptions.futures-timer]]
+version = "3.0.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.futures-util]]
+version = "0.3.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph futures-util 0.3.34 beneath asynchronous-codec, futures, futures-executor, js-sys. Not covered by the imported audits at this version."
+
+[[exemptions.generic-array]]
+version = "0.14.7"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aead, block-buffer, crypto-common, inout; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.getrandom]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph getrandom 0.2.17 beneath ring; getrandom 0.3.4 beneath libp2p-noise (on some targets only), licketysync-webtransport-browser-tests (on some targets only), snow; getrandom 0.4.3 beneath licketysync-webtransport-browser-tests (on some targets only), rand. Not covered by the imported audits at this version."
+
+[[exemptions.ghash]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath aes-gcm; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.hkdf]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-identity; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.hmac]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath hkdf; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.hybrid-array]]
+version = "0.4.15"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath block-buffer, crypto-common; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.idna]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph idna 1.1.0 beneath url. Not covered by the imported audits at this version."
+
+[[exemptions.idna_adapter]]
+version = "1.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath idna, licketysync-webtransport-browser-tests (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.inout]]
+version = "0.1.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath cipher; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.itertools]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath prost-derive; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.itoa]]
+version = "1.0.18"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): integer formatting beneath serde_json, beneath wasm-bindgen-test (the headless-Chrome test harness, wasm32 test code only, never shipped); dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.js-sys]]
+version = "0.3.106"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): JavaScript bindings beneath libp2p-webtransport-websys and wasm-bindgen-futures in the browser test crate; wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.libc]]
+version = "0.2.191"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath cpufeatures (on some targets only), getrandom (on some targets only), parking_lot_core (on some targets only), ring (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.libm]]
+version = "0.2.16"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath num-traits, wasm-bindgen-test; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-core]]
+version = "0.44.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-noise, libp2p-webtransport-websys, licketysync-webtransport-browser-tests (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-identity]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, libp2p-noise, libp2p-webtransport-websys, licketysync-webtransport-browser-tests (on some targets only), multiaddr; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-noise]]
+version = "0.47.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-webtransport-websys, licketysync-webtransport-browser-tests (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-webtransport-websys]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the browser's WebTransport and Noise as initiator for the headless-Chrome test, vendored from the crates.io release with one line of its Cargo.toml changed (wasm-bindgen-futures =0.4.58 relaxed to 0.4.79; vendor/README.md, whose SHA256SUMS the gate checks); rust-libp2p. Not covered by the imported audits at this version."
+
+[[exemptions.lock_api]]
+version = "0.4.14"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath parking_lot; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.match-lookup]]
+version = "0.1.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath base256emoji; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.memchr]]
+version = "2.8.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath asynchronous-codec, futures-util, serde_json; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.minicov]]
+version = "0.3.8"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): coverage hooks beneath wasm-bindgen-test (the headless-Chrome test harness, wasm32 test code only, never shipped). Not covered by the imported audits at this version."
+
+[[exemptions.multiaddr]]
+version = "0.19.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, libp2p-noise, libp2p-webtransport-websys; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.multibase]]
+version = "0.9.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath multiaddr; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.multihash]]
+version = "0.19.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, libp2p-identity, libp2p-noise, libp2p-webtransport-websys, multiaddr; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.multistream-select]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, licketysync-webtransport-browser-tests (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.nu-ansi-term]]
+version = "0.50.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): terminal colours beneath wasm-bindgen-test (the headless-Chrome test harness, wasm32 test code only, never shipped). Not covered by the imported audits at this version."
+
+[[exemptions.once_cell]]
+version = "1.12.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph once_cell 1.21.4 beneath tracing-core, wasm-bindgen. Not covered by the imported audits at this version."
+
+[[exemptions.oorandom]]
+version = "11.1.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): wasm-bindgen-test's test-order generator, never a key (the headless-Chrome test harness, wasm32 test code only, never shipped). Not covered by the imported audits at this version."
+
+[[exemptions.opaque-debug]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath ghash, poly1305, polyval; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.parking_lot]]
+version = "0.12.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.parking_lot_core]]
+version = "0.9.12"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath parking_lot; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.pin-project]]
+version = "1.1.13"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, multistream-select, rw-stream-sink; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.pin-project-internal]]
+version = "1.1.13"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath pin-project; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.pin-project-lite]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath asynchronous-codec, futures-util, tokio, tracing; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.poly1305]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath chacha20poly1305; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.polyval]]
+version = "0.6.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath ghash; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.proc-macro2]]
+version = "1.0.107"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath async-trait, curve25519-dalek-derive, futures-macro, match-lookup, pin-project-internal, prost-derive, quote, serde_derive, syn, thiserror-impl, tracing-attributes, wasm-bindgen-macro-support, wasm-bindgen-test-macro; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.prost]]
+version = "0.14.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, libp2p-identity, libp2p-noise; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.prost-derive]]
+version = "0.14.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath prost; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.r-efi]]
+version = "5.3.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath getrandom (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.r-efi]]
+version = "6.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath getrandom (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.redox_syscall]]
+version = "0.5.18"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath parking_lot_core (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.ring]]
+version = "0.17.11"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph ring 0.17.14 beneath snow. Not covered by the imported audits at this version."
+
+[[exemptions.rustversion]]
+version = "1.0.23"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph build-time only, beneath wasm-bindgen; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.rw-stream-sink]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.same-file]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): beneath walkdir, beneath minicov (the headless-Chrome test harness, wasm32 test code only, never shipped); BurntSushi. Not covered by the imported audits at this version."
+
+[[exemptions.scopeguard]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph scopeguard 1.2.0 beneath lock_api. Not covered by the imported audits at this version."
+
+[[exemptions.send_wrapper]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): libp2p-webtransport-websys's Send wrapper for single-threaded wasm (browser test crate). Not covered by the imported audits at this version."
+
+[[exemptions.serde]]
+version = "1.0.229"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath multiaddr, serde_json (on some targets only), wasm-bindgen-test; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.serde_core]]
+version = "1.0.229"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath serde, serde_json; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.serde_derive]]
+version = "1.0.229"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath serde, serde_core (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.serde_json]]
+version = "1.0.154"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): beneath wasm-bindgen-test (the headless-Chrome test harness, wasm32 test code only, never shipped); dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.sha2]]
+version = "0.10.9"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath snow; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.sha2]]
+version = "0.11.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath ed25519-dalek, libp2p-identity; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.signature]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath ed25519; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.slab]]
+version = "0.4.12"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath futures-util; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.smallvec]]
+version = "1.16.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath idna, multistream-select, parking_lot_core; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.snow]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-noise (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.syn]]
+version = "2.0.119"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath curve25519-dalek-derive, match-lookup, pin-project-internal, prost-derive, tracing-attributes; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.syn]]
+version = "3.0.9"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath async-trait, data-encoding-macro-internal, futures-macro, serde_derive, thiserror-impl, wasm-bindgen-macro-support, wasm-bindgen-test-macro; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.thiserror]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, libp2p-identity, libp2p-noise, libp2p-webtransport-websys; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.thiserror-impl]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath thiserror; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.tokio]]
+version = "1.54.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath wasm-bindgen-futures (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.tracing]]
+version = "0.1.44"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, libp2p-identity, libp2p-noise, libp2p-webtransport-websys, multistream-select; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.tracing-attributes]]
+version = "0.1.31"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath tracing; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.typenum]]
+version = "1.20.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath crypto-common, generic-array, hybrid-array; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.unicode-ident]]
+version = "1.0.27"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath proc-macro2, syn, wasm-bindgen-shared; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.universal-hash]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath poly1305, polyval; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.unsigned-varint]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, multiaddr, multihash, multistream-select; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.url]]
+version = "2.5.8"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath multiaddr; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.version_check]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph build-time only, beneath generic-array; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.walkdir]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): beneath minicov (the headless-Chrome test harness, wasm32 test code only, never shipped); BurntSushi. Not covered by the imported audits at this version."
+
+[[exemptions.wasi]]
+version = "0.11.0+wasi-snapshot-preview1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the base version the imported audits' deltas start from; in the browser test crate's graph wasi 0.11.1+wasi-snapshot-preview1 beneath getrandom (on some targets only). Not covered by the imported audits at this version."
+
+[[exemptions.wasip2]]
+version = "1.0.4+wasi-0.2.12"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath getrandom (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen]]
+version = "0.2.129"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): Rust/JavaScript bindings for the browser test crate, pinned to the wasm-bindgen-cli 0.2.129 that runs it; wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-futures]]
+version = "0.4.79"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): Promise/Future bridge beneath libp2p-webtransport-websys (relaxed from =0.4.58 in the vendored copy) and wasm-bindgen-test; wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-macro]]
+version = "0.2.129"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): proc macro of wasm-bindgen (browser test crate); wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-macro-support]]
+version = "0.2.129"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): beneath wasm-bindgen-macro (browser test crate); wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-shared]]
+version = "0.2.129"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): shared schema of wasm-bindgen and its CLI (browser test crate); wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-test]]
+version = "0.3.79"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): the wasm test framework (the headless-Chrome test harness, wasm32 test code only, never shipped); wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-test-macro]]
+version = "0.3.79"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): proc macro of wasm-bindgen-test (the headless-Chrome test harness, wasm32 test code only, never shipped); wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.wasm-bindgen-test-shared]]
+version = "0.2.129"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): shared code of wasm-bindgen-test and its runner (the headless-Chrome test harness, wasm32 test code only, never shipped); wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.web-sys]]
+version = "0.3.106"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): Web API bindings (WebTransport, streams) beneath libp2p-webtransport-websys in the browser test crate; wasm-bindgen project. Not covered by the imported audits at this version."
+
+[[exemptions.winapi-util]]
+version = "0.1.11"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): Windows helpers beneath walkdir and same-file, Windows only (the headless-Chrome test harness, wasm32 test code only, never shipped); BurntSushi. Not covered by the imported audits at this version."
+
+[[exemptions.windows-sys]]
+version = "0.52.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath ring (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows-sys]]
+version = "0.61.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath nu-ansi-term (on some targets only), winapi-util (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows-targets]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-sys; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-targets (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-targets (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows_i686_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-targets (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows_i686_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-targets (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows_i686_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-targets (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-targets (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-targets (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath windows-targets (on some targets only); the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.wit-bindgen]]
+version = "0.57.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath wasip2; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.x25519-dalek]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-noise; the version core's store exempts too. Not covered by the imported audits at this version."
+
+[[exemptions.zmij]]
+version = "1.0.23"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): float formatting beneath serde_json, beneath wasm-bindgen-test (the headless-Chrome test harness, wasm32 test code only, never shipped); dtolnay. Not covered by the imported audits at this version."

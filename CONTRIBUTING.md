@@ -190,22 +190,36 @@ change:
 
 - every key in `ci/pins.env`: the Rust stable and dated nightly, the cargo
   tools, typos, semgrep and its image digest, gitleaks and its SHA-256, the
-  Codecov CLI, and `net-cross`'s Android NDK and Xcode;
+  Codecov CLI, `net-cross`'s Android NDK and Xcode, and the nightly
+  `webtransport-chrome` job's Chrome for Testing with the SHA-256 of its two
+  zips (`ci/chrome-install.sh` says how to take them) and its
+  wasm-bindgen-cli, which moves in the same change as
+  `browser-tests/webtransport`'s `wasm-bindgen`, `wasm-bindgen-futures`,
+  `wasm-bindgen-test`, `js-sys` and `web-sys`: Dependabot skips those crates
+  there (`dependabot.yml`), since `wasm-bindgen-test-runner` refuses a module
+  built against another wasm-bindgen, and `ci/check-wasm-bindgen.sh` (gate.sh
+  and CI's `deps` job) fails any change that moves one without the other;
 - cargo-geiger, which moves only with the baseline's counts;
 - site's zola, in its `pages.yml` (site has no `pins.env`);
 - the commit pins of `dtolnay/rust-toolchain` and `google/clusterfuzzlite`:
   each has a single tag, `v1`, and no version releases, so Dependabot has no
   newer release to move to; a bump pins the commit `v1` names that day;
-- transitive crates, which Dependabot skips: `cargo update` here and in
+- transitive crates, which Dependabot skips: `cargo update` here, in
   `fuzz/` (whose `Cargo.lock` the fuzz jobs build from with `--locked`
-  checked), taking back with `cargo update --precise` any version younger than
-  7 days, then `cargo deny`, `cargo audit` (and `cargo audit --file
-  fuzz/Cargo.lock`), `cargo vet` and the geiger baseline as for any
-  dependency change. One exception, which the owner approved on 2026-11-03:
-  `idna_adapter`, idna's back end chosen by its version, stays on its 1.0
-  line, the ASCII-only one (`crates/net/Cargo.toml` requires `~1.0`,
-  `deny.toml` bans the ICU4X back end of later lines, and `dependabot.yml`
-  skips them); a 1.0.* release is taken as usual. One hold-back that is no
+  checked) and in `browser-tests/webtransport` (spike B's browser test crate,
+  with its own `supply-chain/` store), taking back with `cargo update
+  --precise` any version younger than 7 days, then `cargo deny`, `cargo audit`
+  (and `cargo audit --file` on the other two lockfiles), `cargo vet` in both
+  stores and the geiger baseline as for any dependency change. `cargo vet
+  prune` runs in one store at a time: an exemption that only the other
+  workspace's graph uses looks unused to it, so prune neither store from the
+  other's workspace (the browser workspace's exemptions live in its own
+  store, `browser-tests/webtransport/supply-chain/`, for that reason). One
+  exception, which the owner approved on 2026-11-03: `idna_adapter`, idna's
+  back end chosen by its version, stays on its 1.0 line, the ASCII-only one
+  (`crates/net/Cargo.toml` requires `~1.0`, `deny.toml` bans the ICU4X back
+  end of later lines, and `dependabot.yml` skips them); a 1.0.* release is
+  taken as usual. One hold-back that is no
   one's choice: `libp2p-swarm` 0.48.0 requires `wasm-bindgen-futures`
   `=0.4.58` on wasm targets only, which holds `wasm-bindgen` and its macro
   and shared crates at 0.2.108 and `js-sys` and `web-sys` at 0.3.85 in

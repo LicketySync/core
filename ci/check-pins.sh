@@ -4,8 +4,9 @@
 # letters, digits and `._:+-` only. So sourcing it can set no other variable
 # (not PATH, HOME, IFS, LC_ALL or any CARGO_ or RUSTUP_ setting that a tool
 # reads) and run nothing. A new pin adds its key here and in pins.env, in one
-# reviewed change. gate.sh, ci/toolchains.sh, ci/gitleaks-install.sh and the
-# parent directory's bootstrap.sh run it; tested by ci/test-check-pins.sh.
+# reviewed change. gate.sh, ci/toolchains.sh, ci/gitleaks-install.sh,
+# ci/chrome-install.sh and the parent directory's bootstrap.sh run it; tested
+# by ci/test-check-pins.sh.
 # Usage: ci/check-pins.sh [pins file] (defaults to this directory's pins.env).
 # Exit 1, printing the lines at fault, when the file breaks a rule or is missing.
 set -euo pipefail
@@ -15,7 +16,8 @@ CARGO_NEXTEST CARGO_LLVM_COV CARGO_UDEPS CARGO_DENY CARGO_AUDIT CARGO_MACHETE
 CARGO_VET CARGO_MUTANTS CARGO_FUZZ CARGO_CAREFUL CARGO_GEIGER CARGO_AUDITABLE
 CARGO_CYCLONEDX CARGO_SEMVER_CHECKS
 TYPOS SEMGREP SEMGREP_IMAGE_DIGEST GITLEAKS GITLEAKS_LINUX_X64_SHA256 CODECOV_CLI
-ANDROID_NDK XCODE'
+ANDROID_NDK XCODE
+CHROME_FOR_TESTING CHROME_LINUX64_SHA256 CHROMEDRIVER_LINUX64_SHA256 WASM_BINDGEN_CLI'
 if [ ! -f "$pins" ]; then
   echo "$pins is missing" >&2
   exit 1

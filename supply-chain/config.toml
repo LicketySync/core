@@ -20,9 +20,24 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
 [[exemptions.aead]]
+version = "0.5.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): AEAD traits beneath snow's chacha20poly1305 0.10 and aes-gcm (deny.toml wrappers); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.aead]]
 version = "0.6.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): AEAD traits beneath chacha20poly1305 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.aes]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): AES beneath aes-gcm in snow's RustCrypto resolver, compiled on wasm32 only and never selected by libp2p-noise (deny.toml-wrapped to aes-gcm); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.aes-gcm]]
+version = "0.10.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): AES-GCM in snow's RustCrypto resolver, compiled on wasm32 only and never selected by libp2p-noise (ChaChaPoly only; deny.toml-wrapped to snow); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.anyhow]]
 version = "1.0.104"
@@ -53,6 +68,11 @@ notes = "Phase 0 exemption (licketysync-net, spike A): build-time proc macros of
 version = "2.6.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): async I/O beneath if-watch; smol-rs. Not covered by the imported audits at this version."
+
+[[exemptions.asynchronous-codec]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): framing of Noise messages inside libp2p-noise; used across rust-libp2p. Not covered by the imported audits at this version."
 
 [[exemptions.autocfg]]
 version = "1.5.1"
@@ -99,6 +119,11 @@ version = "3.0.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): the approved encoding of the write key's words (suites.md 3.2), English only, zeroize feature, no seed function; rust-bitcoin; the Trezor vectors pass here. Not covered by the imported audits at this version."
 
+[[exemptions.bit-vec]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): bit vectors beneath yasna, rcgen 0.14's ASN.1 writer (the WebTransport certificate); widely used. Not covered by the imported audits at this version."
+
 [[exemptions.bitcoin_hashes]]
 version = "0.14.101"
 criteria = "safe-to-deploy"
@@ -109,10 +134,20 @@ version = "2.13.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): flags types beneath rustix, nix, the netlink crates and system-configuration (licketysync-net), and proptest; KodrAus. Not covered by the imported audits at this version."
 
+[[exemptions.blake2]]
+version = "0.10.6"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): BLAKE2 in snow's RustCrypto resolver, compiled but never selected by libp2p-noise (SHA-256 only; deny.toml-wrapped to snow); RustCrypto. Not covered by the imported audits at this version."
+
 [[exemptions.blake3]]
 version = "1.8.7"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): the approved hash (suites.md 3.1), called only from licketysync-keys' labels module; the BLAKE3 team's reference implementation; the official vectors pass here. Not covered by the imported audits at this version."
+
+[[exemptions.block-buffer]]
+version = "0.10.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): hash buffering beneath digest 0.10 (snow's sha2 0.10 and blake2); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.block-buffer]]
 version = "0.12.1"
@@ -144,10 +179,25 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): build-time cfg aliases beneath nix; katharostech. Not covered by the imported audits at this version."
 
+[[exemptions.chacha20]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): ChaCha20 beneath snow's chacha20poly1305 0.10 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.chacha20poly1305]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): Noise's ChaChaPoly in snow's RustCrypto resolver (the wasm32 path; native uses ring), deny.toml-wrapped to licketysync-keys and snow; RustCrypto. Not covered by the imported audits at this version."
+
 [[exemptions.chacha20poly1305]]
 version = "0.11.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): the approved XChaCha20-Poly1305 (suites.md 3.1), alloc feature only; RustCrypto, NCC Group audit 2020; the XChaCha draft vector passes here. Not covered by the imported audits at this version."
+
+[[exemptions.cipher]]
+version = "0.4.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): cipher traits beneath chacha20 0.9, aes and ctr (deny.toml wrappers); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.cipher]]
 version = "0.5.2"
@@ -184,20 +234,45 @@ version = "0.4.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): constant-time comparison beneath blake3; cesarb. Not covered by the imported audits at this version."
 
+[[exemptions.core-foundation]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): macOS bindings beneath security-framework, beneath rustls-native-certs (wtransport; the listener never loads native roots); servo. Not covered by the imported audits at this version."
+
+[[exemptions.cpufeatures]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): CPU feature detection beneath the RustCrypto 0.10-generation crates under snow; RustCrypto. Not covered by the imported audits at this version."
+
 [[exemptions.crossbeam-utils]]
 version = "0.8.23"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): concurrency utilities beneath concurrent-queue; crossbeam-rs. Not covered by the imported audits at this version."
 
 [[exemptions.crypto-common]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): common traits beneath digest 0.10 and cipher 0.4 under snow; RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.crypto-common]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): common traits beneath the RustCrypto crates; RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.ctr]]
+version = "0.9.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): CTR mode beneath aes-gcm in snow's unused AES-GCM, on wasm32 only (deny.toml-wrapped to aes-gcm); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.ctutils]]
 version = "0.4.6"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): constant-time helpers beneath the RustCrypto crates; RustCrypto; 0.4.4 reviewed in the RUSTSEC-2026-0385 fix of 2026-10-23, and 0.4.6 in the weekly refresh of 2026-11-02 (its diff from 0.4.4: the comparison macros move, with the same formulas, into a new public primitives module, which adds borrowing-subtraction, zero-count and carry helpers; optimization barriers on Thumb-1 alone; tests; still forbids unsafe code). Not covered by the imported audits at this version."
+
+[[exemptions.curve25519-dalek]]
+version = "4.1.3"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): snow's X25519 in its RustCrypto resolver, compiled on wasm32 only and never selected: libp2p-noise does all of Noise's Diffie-Hellman with x25519-dalek 3.0.0 on curve25519-dalek 5.0.0 (deny.toml wrapper); dalek-cryptography. Not covered by the imported audits at this version."
 
 [[exemptions.curve25519-dalek]]
 version = "5.0.0"
@@ -233,6 +308,11 @@ notes = "Phase 0 exemption (licketysync-net, spike A): DER parsing beneath x509-
 version = "0.5.9"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): ranged integers beneath time; jhpratt. Not covered by the imported audits at this version."
+
+[[exemptions.digest]]
+version = "0.10.7"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): hash traits beneath sha2 0.10 and blake2 under snow; RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.digest]]
 version = "0.11.3"
@@ -329,10 +409,20 @@ version = "0.3.21"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): part of futures (rust-lang/futures-rs); taiki-e. Not covered by the imported audits at this version."
 
+[[exemptions.generic-array]]
+version = "0.14.7"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): fixed arrays beneath the RustCrypto 0.10-generation crates under snow; widely used. Not covered by the imported audits at this version."
+
 [[exemptions.getrandom]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): the system generator beneath ring 0.17 (getrandom 0.2); rust-random. Not covered by the imported audits at this version."
+
+[[exemptions.ghash]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): GHASH beneath aes-gcm in snow's unused AES-GCM, on wasm32 only (deny.toml-wrapped to aes-gcm); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.hashbrown]]
 version = "0.14.2"
@@ -364,6 +454,11 @@ version = "0.13.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): HMAC beneath hkdf only (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
 
+[[exemptions.httlib-huffman]]
+version = "0.3.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): HPACK/QPACK Huffman coding beneath wtransport-proto (WebTransport's HTTP/3 headers, parsing peer bytes: TM-3). Not covered by the imported audits at this version."
+
 [[exemptions.hybrid-array]]
 version = "0.4.15"
 criteria = "safe-to-deploy"
@@ -388,6 +483,11 @@ notes = "Phase 0 exemption (licketysync-net, spike A): interface addresses benea
 version = "3.2.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): interface address watching beneath libp2p-tcp and libp2p-quic (listening on loopback only in phase 0); libp2p. Not covered by the imported audits at this version."
+
+[[exemptions.inout]]
+version = "0.1.4"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): in-out buffers beneath cipher 0.4 under snow; RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.inout]]
 version = "0.2.5"
@@ -453,6 +553,11 @@ notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p identity key w
 version = "0.6.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
+
+[[exemptions.libp2p-noise]]
+version = "0.47.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): Noise XX inside WebTransport (suites.md 2.6 and 3.1, already approved), with the certhash extension; rust-libp2p. Not covered by the imported audits at this version."
 
 [[exemptions.libp2p-quic]]
 version = "0.14.0"
@@ -594,6 +699,11 @@ version = "0.3.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): macOS IOKit bindings beneath sysinfo (macOS only); madsmtm. Not covered by the imported audits at this version."
 
+[[exemptions.octets]]
+version = "0.3.7"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): byte-buffer parsing beneath wtransport-proto (Cloudflare quiche's octets; parses peer bytes: TM-3). Not covered by the imported audits at this version."
+
 [[exemptions.oid-registry]]
 version = "0.8.1"
 criteria = "safe-to-deploy"
@@ -603,6 +713,16 @@ notes = "Phase 0 exemption (licketysync-net, spike A): OID names beneath x509-pa
 version = "1.12.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): lazy statics beneath the TLS and libp2p crates; matklad. Not covered by the imported audits at this version."
+
+[[exemptions.opaque-debug]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): Debug impls beneath polyval and ghash under snow; RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.openssl-probe]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): finds the system certificate directory for rustls-native-certs on Linux (wtransport; the listener never loads native roots); no OpenSSL linked. Not covered by the imported audits at this version."
 
 [[exemptions.parking_lot]]
 version = "0.12.5"
@@ -645,9 +765,19 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): epoll/kqueue/IOCP beneath async-io; smol-rs. Not covered by the imported audits at this version."
 
 [[exemptions.poly1305]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): Poly1305 beneath snow's chacha20poly1305 0.10 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.poly1305]]
 version = "0.9.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): Poly1305 beneath chacha20poly1305 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.polyval]]
+version = "0.6.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): POLYVAL beneath ghash in snow's unused AES-GCM, on wasm32 only (deny.toml-wrapped to ghash); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.portable-atomic]]
 version = "1.15.0"
@@ -690,6 +820,11 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): the QUIC state machine beneath quinn and libp2p-quic (deny.toml wrapper; its anti-amplification limit at its default, TM-22); quinn-rs. Not covered by the imported audits at this version."
 
 [[exemptions.r-efi]]
+version = "5.3.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): UEFI bindings beneath getrandom 0.3 on UEFI targets only; never built for the project's targets. Not covered by the imported audits at this version."
+
+[[exemptions.r-efi]]
 version = "6.0.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): UEFI bindings beneath getrandom (UEFI targets only; never built here). Not covered by the imported audits at this version."
@@ -703,6 +838,11 @@ notes = "Phase 0 exemption (licketysync-keys): dev-only via proptest; rust-rando
 version = "0.13.2"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p TLS certificate (a fresh P-256 key, self-signed, with the libp2p extension) inside libp2p-tls only (deny.toml wrapper); rustls/rcgen. Not covered by the imported audits at this version."
+
+[[exemptions.rcgen]]
+version = "0.14.10"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): the WebTransport listener's self-signed P-256 certificate, through wtransport's builder on aws-lc-rs (deny.toml-wrapped to libp2p-tls and wtransport); rustls project. Not covered by the imported audits at this version."
 
 [[exemptions.redox_syscall]]
 version = "0.5.18"
@@ -744,6 +884,11 @@ version = "0.23.37"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): TLS 1.3 only (no tls12 feature), aws-lc-rs provider with prefer-post-quantum (suites.md 2.6 and 3.1; deny.toml wrappers); rustls, djc, whom the Mozilla set trusts. Not covered by the imported audits at this version."
 
+[[exemptions.rustls-native-certs]]
+version = "0.8.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): platform root store loader that wtransport depends on; the listener never calls it (a pinned-hash server, no client roots); rustls project. Not covered by the imported audits at this version."
+
 [[exemptions.rustls-pki-types]]
 version = "1.15.1"
 criteria = "safe-to-deploy"
@@ -764,10 +909,25 @@ version = "0.5.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
 
+[[exemptions.schannel]]
+version = "0.1.30"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): Windows certificate store bindings beneath rustls-native-certs (wtransport; not called); steffengy. Not covered by the imported audits at this version."
+
 [[exemptions.scopeguard]]
 version = "1.1.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): scope guards beneath lock_api; bluss. Not covered by the imported audits at this version."
+
+[[exemptions.security-framework]]
+version = "3.7.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): macOS/iOS Security framework bindings beneath rustls-native-certs (wtransport; not called); kornelski. Not covered by the imported audits at this version."
+
+[[exemptions.security-framework-sys]]
+version = "2.17.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): raw Security framework bindings beneath security-framework (not called); kornelski. Not covered by the imported audits at this version."
 
 [[exemptions.serde]]
 version = "1.0.229"
@@ -788,6 +948,11 @@ notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it
 version = "1.0.154"
 criteria = "safe-to-run"
 notes = "Phase 0 exemption (licketysync-keys): dev-only: reading and writing the committed test vectors; dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.sha2]]
+version = "0.10.9"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): SHA-256 in snow's RustCrypto resolver (the wasm32 Noise hash; deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.sha2]]
 version = "0.11.1"
@@ -813,6 +978,11 @@ notes = "Phase 0 exemption (licketysync-net, spike A): slab storage beneath quin
 version = "1.16.4"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): small vectors beneath libp2p-swarm, multistream-select, idna and parking_lot_core; servo. Not covered by the imported audits at this version."
+
+[[exemptions.snow]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): the Noise protocol framework beneath libp2p-noise (suites.md 2.6 names it: ring on native, RustCrypto on wasm32); deny.toml-wrapped. Not covered by the imported audits at this version."
 
 [[exemptions.socket2]]
 version = "0.6.5"
@@ -905,6 +1075,11 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): build-time only, beneath proc-macro2 and syn; dtolnay. Not covered by the imported audits at this version."
 
 [[exemptions.universal-hash]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): universal-hash traits beneath poly1305 0.8 and polyval under snow (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
+
+[[exemptions.universal-hash]]
 version = "0.6.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): universal hash traits beneath poly1305 (deny.toml wrapper); RustCrypto. Not covered by the imported audits at this version."
@@ -919,10 +1094,20 @@ version = "2.5.8"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): URL parsing beneath multiaddr (its /http and /dns parts; no DNS resolution is built); servo. Not covered by the imported audits at this version."
 
+[[exemptions.version_check]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): build-time only: rustc version detection in generic-array's build script; SergioBenitez. Not covered by the imported audits at this version."
+
 [[exemptions.wasi]]
 version = "0.11.0+wasi-snapshot-preview1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): WASI bindings beneath getrandom 0.2 (wasm32-wasi only; never built here). Not covered by the imported audits at this version."
+
+[[exemptions.wasip2]]
+version = "1.0.4+wasi-0.2.12"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): WASI 0.2 bindings beneath getrandom on wasm32-wasip2 only; never built for the project's targets; Bytecode Alliance. Not covered by the imported audits at this version."
 
 [[exemptions.wasm-bindgen]]
 version = "0.2.108"
@@ -1073,6 +1258,26 @@ notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microso
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): Windows bindings (microsoft/windows-rs) beneath ring and the dev-only memory-stats (Windows only); kennykerr, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+
+[[exemptions.wit-bindgen]]
+version = "0.57.1"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): bindings generator beneath wasip2, on wasm32-wasip2 only; never built for the project's targets; Bytecode Alliance. Not covered by the imported audits at this version."
+
+[[exemptions.wtransport]]
+version = "0.7.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): the device-side WebTransport listener on quinn and rustls with aws-lc-rs (suites.md 3.1 row proposed); a small project (TM-8 upstream activity to watch). Not covered by the imported audits at this version."
+
+[[exemptions.wtransport-proto]]
+version = "0.7.2"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): WebTransport and HTTP/3 framing beneath wtransport (deny.toml-wrapped to it); it parses peer bytes (TM-3), and a fuzz run found a shift overflow in its QPACK integer decoder (src/qpack.rs line 173) that panics where overflow checks are on (TM-23's residual (a); fuzz/known-crashes/). Not covered by the imported audits at this version."
+
+[[exemptions.x25519-dalek]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): all of Noise's Diffie-Hellman, ephemeral and static, inside libp2p-noise 0.47's own keypair, on native and wasm32 (deny.toml-wrapped to libp2p-noise; on curve25519-dalek 5.0.0); dalek-cryptography. Not covered by the imported audits at this version."
 
 [[exemptions.x509-parser]]
 version = "0.18.1"

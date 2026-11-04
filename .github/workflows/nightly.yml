@@ -1,5 +1,6 @@
 # The slow checks the plan's checks table runs nightly: fuzzing, Miri,
-# cargo-careful, the long simulator runs, and the daily advisory feed
+# cargo-careful, the long simulator runs, spike B's WebTransport check in
+# headless Chrome, and the daily advisory feed
 # (cargo-audit against the lockfile, TM-8 and TM-22: a vulnerability published
 # after a crate was added is caught without a code change). Nightly on main;
 # also on demand. The weekly ones are mutants.yml and scorecard.yml.
@@ -36,8 +37,10 @@ jobs:
           tool: cargo-audit@0.22.2
           fallback: none
       - run: cargo audit
-      # fuzz/ is a workspace of its own, with its own lockfile.
+      # fuzz/ and browser-tests/webtransport are workspaces of their own, with
+      # their own lockfiles.
       - run: cargo audit --file fuzz/Cargo.lock
+      - run: cargo audit --file browser-tests/webtransport/Cargo.lock
 
   # One job per fuzz target, so that 30 minutes each fits GitHub's 6 h job
   # limit however many decoders there are. cargo-fuzz from crates.io:
@@ -189,3 +192,47 @@ jobs:
               *) target/release/licketysync-sim "$s" 0 20000 ;;
             esac
           done
+
+  # Spike B's check (pass condition B2), nightly because Chrome and the pins
+  # move (owner decision 2 of the spike brief): net's WebTransport listeners
+  # (feature webtransport) on 127.0.0.1, dialed from headless Chrome by
+  # browser-tests/webtransport with only an address and a certificate hash;
+  # then ci/check-netlog.py reads Chrome's net log for the outer key exchange
+  # (X25519MLKEM768, TM-33) and for any packet that left loopback. Chrome for
+  # Testing and its chromedriver at CHROME_FOR_TESTING, each zip checked
+  # against its SHA-256 in ci/pins.env by ci/chrome-install.sh, not the
+  # runner's Chrome, which moves with the image; wasm-bindgen-cli at
+  # WASM_BINDGEN_CLI from crates.io, the version the test crate's
+  # wasm-bindgen pins (gate.sh checks both copies).
+  webtransport-chrome:
+    name: WebTransport from headless Chrome (spike B)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - run: ci/chrome-install.sh "$RUNNER_TEMP/chrome"
+      - name: The WebTransport tests in headless Chrome, and the net-log check
+        env:
+          CHROME: ${{ runner.temp }}/chrome/chrome-linux64/chrome
+          CHROMEDRIVER: ${{ runner.temp }}/chrome/chromedriver-linux64/chromedriver
+          OUT: ${{ runner.temp }}/webtransport-chrome
+        run: ci/webtransport-chrome.sh
+      # The listener's and the browser's logs and Chrome's net log, to read a
+      # failure, or the negotiated group, by hand.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: webtransport-chrome
+          path: |
+            ${{ runner.temp }}/webtransport-chrome/*.log
+            ${{ runner.temp }}/webtransport-chrome/netlog.json
+          if-no-files-found: ignore
+          retention-days: 14

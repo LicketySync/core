@@ -436,6 +436,36 @@ unless every crate that depends on rustls disables default features; the change 
   in the change that adds them. The HTTPS listener's certificate is the user's own or Let's Encrypt
   through `rustls-acme` when turned on. `aws-lc-rs` does not build for wasm32-unknown-unknown, which
   is harmless because the browser build uses no rustls at all.
+- **WebTransport, the native end (spike B; proposed; for review).** Checked 2026-11-03 and
+  2026-11-04 with headless Chrome 156.0.8078.79 and Chrome for Testing 156.0.8078.80 on 127.0.0.1
+  (`ci/webtransport-chrome.sh`, nightly in CI). It works: a page given only the multiaddr
+  `/ip4/…/udp/…/quic-v1/webtransport/certhash/…/p2p/…` (what an invite's `a` and `c` carry,
+  `keys.md`) opens WebTransport to `net`'s listener (feature `webtransport`, off by default:
+  `wtransport` 0.7.2 on `aws-lc-rs`), runs `libp2p-noise` XX on the first stream with the
+  certificate hashes bound (the listener, as responder, reports the hash of the certificate it
+  serves; the browser refuses a listener whose reported set lacks a hash it dialed), each side
+  checks the other's peer ID, and a stream chosen by multistream-select carries
+  `/licketysync/sync/1`. **The dialer's preference decides the outer key exchange.** Among the
+  groups the listener offers, rustls's server takes the one the dialer lists first
+  (`ignore_client_order` orders cipher suites only). `KxPolicy::PreferPq`, the listener's
+  setting, permits X25519MLKEM768 and X25519, so a dialer that lists X25519 first gets X25519;
+  `KxPolicy::PqOnly` enforces the hybrid by refusing a dialer that does not offer it (one that
+  lists it second gets it after a HelloRetryRequest); `net`'s tests show all three. Chrome 156
+  offers X25519MLKEM768, X25519, secp256r1 and secp384r1, in that order, so it gets
+  **X25519MLKEM768** under either (recorded on the native side by rustls and in Chrome's net log,
+  whose ServerHello carries group 0x11EC; TM-33), with TLS 1.3 and
+  `TLS13_CHACHA20_POLY1305_SHA256`: there the listener's order does decide, since it puts
+  `libp2p-tls`'s suite order ahead of Chrome's (Chrome lists AES-128-GCM first;
+  `TLS13_AES_128_GCM_SHA256` stays in the list, last, because QUIC's Initial packets need it). A
+  native end that offered only X25519 would get X25519. Limits found: the certificate must be
+  valid for at most 14 days (a 15-day one is refused; `net` binds from 1 to 14) and is ECDSA
+  P-256 (other key types not tested); the listener has a UDP port of its own (sharing
+  libp2p-quic's port is not tried); the certificate's `not_before` is the moment it is made, with
+  no allowance for clock skew; a page on a public origin dialing a private address meets Chrome's
+  local-network permission prompt, which a loopback test cannot show; headless Chrome's own
+  background requests are kept off the network by the test's flags and checked from its net log.
+  Inside the outer layer, Noise is classical as for every browser path (above). `wtransport` and
+  the browser-only crates are in section 3.1 (proposed).
 - **Tor** (phase 7) through Arti: onion-service cryptography is Tor's.
 
 **The libp2p identity key (decision).** The transport authenticates each side's libp2p identity, an
@@ -500,8 +530,10 @@ unaudited post-quantum crates required goes with them.
 | `subtle` | `2` | 2.6.1, 2024-06-24 | none named; small, widely reviewed | Constant-time comparison of secrets and tags: `ConstantTimeEq`, `Choice`, `CtOption` | — |
 | `rustls` | `0.23` | 0.23.46, 2026-10-14 | Cure53 2020 | TLS 1.3 for QUIC and TCP as section 2.6, through `libp2p-tls` and `libp2p-quic`: `aws-lc-rs` provider, `prefer-post-quantum`; first-party configurations only through `builder_with_provider` with `aws_lc_rs::default_provider()`; `net` installs that provider as the process default at startup; the `ring` provider only as `libp2p-websocket` ships it | TLS 1.2; the default builders in first-party code; the `ring` provider in first-party code or as the installed default; its HPKE module |
 | `aws-lc-rs` | `1` (1.18.2 in `Cargo.lock`) | 1.18.2, 2026-10-12 | AWS-LC's FIPS build is FIPS 140-3 validated | rustls's crypto provider, so the TLS 1.3 handshake on both transports and QUIC's packet protection, Initial keys included, which `quinn-proto` takes from rustls's QUIC API on the configuration's provider; beneath it, `rustls-webpki`'s signature verification. `quinn-proto` links it too, through the `rustls-aws-lc-rs` feature `libp2p-quic` turns on, but calls none of it: `libp2p-quic` also turns on `quinn-proto`'s `ring` feature, which takes precedence, so `quinn-proto`'s own primitives run on `ring` (read 2026-11-03 in `quinn-proto` 0.11.19; the link is why `deny.toml` lists `quinn-proto` as a wrapper). On Windows, AWS-LC's assembly comes as the prebuilt NASM objects that `aws-lc-sys` ships (rustls's `aws_lc_rs` feature turns on `prebuilt-nasm`), assembled by AWS, not here (recorded 2026-11-03; an item before any Windows release: build them with a pinned NASM instead) | Direct calls to any primitive in first-party code |
-| `libp2p-tls`, `libp2p-quic`, `libp2p-noise` | `0.7`, `0.14`, `0.47` (`net` depends on `libp2p-tls` and `libp2p-quic` directly, not through the `libp2p` facade, whose weak `tokio` feature would put DNS, mDNS and UPnP crates in `Cargo.lock`; `libp2p-noise` not yet) | 0.7.0, 0.14.0, 0.47.0, 2026-09-11 | none named | The transports of section 2.6: `make_client_config` and `make_server_config` as `libp2p-tls` builds them (its `Config` on TCP, `libp2p-quic`'s `Config::new` on QUIC); `libp2p-quic` on quinn, with its stateless-reset HMAC key on `ring` from the identity's derived secret | Noise patterns other than XX; Noise on QUIC or TCP; TLS inside WebSocket, WebTransport or WebRTC; building a node while `SSLKEYLOGFILE` is set (both configurations carry rustls's `KeyLogFile`, which writes session secrets to that file; `net` refuses, TM-6) |
+| `libp2p-tls`, `libp2p-quic`, `libp2p-noise` | `0.7`, `0.14`, `0.47` (`net` depends on `libp2p-tls` and `libp2p-quic` directly, not through the `libp2p` facade, whose weak `tokio` feature would put DNS, mDNS and UPnP crates in `Cargo.lock`; `libp2p-noise` directly only under the `webtransport` feature, proposed; for review) | 0.7.0, 0.14.0, 0.47.0, 2026-09-11 | none named | The transports of section 2.6: `make_client_config` and `make_server_config` as `libp2p-tls` builds them (its `Config` on TCP, `libp2p-quic`'s `Config::new` on QUIC); `libp2p-quic` on quinn, with its stateless-reset HMAC key on `ring` from the identity's derived secret | Noise patterns other than XX; Noise on QUIC or TCP; TLS inside WebSocket, WebTransport or WebRTC; building a node while `SSLKEYLOGFILE` is set (both configurations carry rustls's `KeyLogFile`, which writes session secrets to that file; `net` refuses, TM-6) |
 | `libp2p-websocket` | with `libp2p` `0.57` | 0.46.0, read 2026-10-17 | none named | The WebSocket transport of section 2.6, its outer TLS classical as shipped (rustls on `ring`) | Any claim that its outer TLS is post-quantum until the phase 2 change lands; the linked-device channel |
+| `wtransport` (proposed; for review) | `0.7` (`default-features = false`, features `aws-lc-rs`, `self-signed` and `quinn`, the last only exposing quinn's transport configuration; optional, `net`'s feature `webtransport`, off by default) | 0.7.2, 2026-08-11 | none named; a small project, so TM-8's active-upstream check applies | The device-side WebTransport listener of section 2.6 (spike B): its server endpoint on quinn with `net`'s QUIC windows and stream limit and a rustls `ServerConfig` that `net` builds itself through `builder_with_provider` on `aws_lc_rs::default_provider()` with its groups and suites replaced (TLS 1.3 only, X25519MLKEM768 and X25519 permitted, the dialer's order choosing between them, `libp2p-tls`'s suite order winning, 0-RTT off). In that configuration two pieces of first-party code: a key-exchange group that delegates every call to `aws-lc-rs`'s X25519MLKEM768 or X25519 and records which one rustls chose, computing nothing itself, and a resolver that serves the one certificate and records the groups the `ClientHello` offered. Its `self-signed` builder, `rcgen` 0.14 on `aws-lc-rs`, for the ECDSA P-256 certificate valid at most 14 days; `Certificate::hash`, SHA-256 of the DER through `sha2`, for the certhash; its client and `ServerHashVerification` in tests only. Beneath it `quinn-proto` runs its stateless-reset, token and Retry cryptography on `ring`, `ring`'s role (3) below, since `libp2p-quic`'s `ring` feature unifies with it | Its `ring` and `dangerous-configuration` features; its default TLS configurations (`with_identity` and the client's defaults, which use its own provider choice); `with_no_cert_validation`; `with_native_certs` and its DNS resolver; a certificate valid more than 14 days; first-party key-exchange code that computes anything |
+| `libp2p-webtransport-websys` (browser only; proposed; for review) | `0.6` (wasm32 only, in `browser-tests/webtransport`, a workspace of its own; the published 0.6.0 source vendored with only `wasm-bindgen-futures = "=0.4.58"` relaxed to `0.4.79`, by the owner's decision of 2026-11-04, "Yes, keep the patched version until upstream releases the fix.", until a release without the pin has been out 7 days; `ci/check-vendored.sh` holds the copy to its `SHA256SUMS`) | 0.6.0, 2026-09-11 | none named | The browser half of spike B's test, and phase 6's browser client: the browser's own WebTransport with `serverCertificateHashes` (Chrome's TLS, which this file does not govern) and `libp2p-noise` as initiator with the dialed certhashes. `libp2p-noise` 0.47 does all of Noise's Diffie-Hellman, ephemeral and static, with its own keypair on `x25519-dalek` 3.0.0 (`curve25519-dalek` 5.0.0), there and on native targets; on wasm32 `snow`'s RustCrypto resolver supplies ChaChaPoly (`chacha20poly1305` 0.10) and SHA-256 (`sha2` 0.10), and its `curve25519-dalek` 4.1.3, `aes`, `ctr` and `aes-gcm` compile there only and are never selected; all `deny.toml`-wrapped. `wasm-bindgen` 0.2.129, `js-sys` and `web-sys` 0.3.106 beneath it | Native builds; changes to the vendored source beyond that one requirement |
 
 Transitive dependencies these crates pull in, among them `curve25519-dalek`, `sha2`, `p256`, `snow`,
 `ring`, `rcgen`, `webpki`, `quinn`, `chacha20`, `poly1305`, `aead`, and `rand` beneath the `libp2p-*`
@@ -526,8 +558,9 @@ signature; (2) in `rcgen`, generating the certificate's P-256 key and its self-s
 cryptography: the stateless-reset HMAC-SHA256, the address-validation token keys (HKDF-SHA256, then
 AES-256-GCM) and the AES-128-GCM integrity tag of Retry packets (QUIC's packet protection is
 rustls's, on `aws-lc-rs`); (4) in `libp2p-quic` itself, building that HMAC key from the identity's
-HKDF-derived secret (section 2.6); and, not in the graph yet, (5) in `snow` via `libp2p-noise`, the
-Noise cipher and hash on native targets, and (6) in `libp2p-websocket`, the whole outer TLS
+HKDF-derived secret (section 2.6); (5) in `snow` via `libp2p-noise`, the Noise cipher and hash on
+native targets, in the graph only under `net`'s `webtransport` feature (proposed; for review; `snow`
+added to `ring`'s wrappers); and, not in the graph yet, (6) in `libp2p-websocket`, the whole outer TLS
 (rustls's `ring` provider, which also turns on `webpki`'s `ring` feature). `ring`'s `deny.toml`
 wrappers
 are what `cargo tree -e no-dev -i ring` showed when `net` was added (2026-11-03): `libp2p-tls`,
@@ -536,7 +569,10 @@ are what `cargo tree -e no-dev -i ring` showed when `net` was added (2026-11-03)
 `net` use, and the primitives beneath them, to listed wrappers, and confines `rand` beneath the
 libp2p crates and `quinn-proto` and, with `rand_xorshift`, beneath `proptest`; `deny-production.toml`
 gives `rand` the same wrappers without `proptest` and bans `rand_xorshift` outright; it has no
-entries for `hpke`, `ml-dsa`, `x-wing`, `ml-kem` or `x25519-dalek`, which no crate depends on)**. Expect `multiple-versions` warnings, which `deny.toml` sets to `warn`, wherever
+entries for `hpke`, `ml-dsa`, `x-wing` or `ml-kem`, which no crate depends on; under `net`'s
+`webtransport` feature, proposed, it confines `x25519-dalek` beneath `libp2p-noise`, and each crate
+it admits as a wrapper there, from `wtransport` and `libp2p-noise` down to `aes-gcm`, `polyval` and
+`blake2`, beneath the one crate that needs it)**. Expect `multiple-versions` warnings, which `deny.toml` sets to `warn`, wherever
 two listed crates require different lines of a shared dependency; each is read when it appears.
 
 ### 3.2 Encodings and non-cryptographic helpers
@@ -602,6 +638,18 @@ memory after use. The key authenticates the transport only (no folder key or dev
 through these crates), so what a memory read could take is the device's transport identity. Raising
 it upstream (an issue or a change to `libp2p-identity`) needs the owner's approval to post; until
 then it is recorded here, in the threat model's TM-6, and in the changelog.
+
+**Deviation: the WebTransport certificate's key (spike B, feature `webtransport`; proposed, for
+review).** The listener's self-signed P-256 key is made by `wtransport`'s builder (`rcgen` on
+`aws-lc-rs`) and copied, as PKCS#8 DER, into `wtransport`'s `PrivateKey`, into a plain `Vec` and
+into rustls's `PrivateKeyDer`, which `CertifiedKey::from_der` consumes; none of these is wiped on
+drop (`rustls-pki-types` implements `Zeroize` for the key but not on drop, and the rustls call
+takes it by value), so copies of a listener's key may stay in memory. The key authenticates only
+the outer TLS of one listener for at most 14 days, the browser binds the session to it by hash and
+the libp2p identity is proved inside Noise, so what a memory read could take is the ability to
+impersonate that listener's outer layer, not its identity. Wiping it needs a change in
+`wtransport` or rustls's key-loading interface; until then it is recorded here, in TM-6 and in the
+changelog.
 
 ### 4.2 Constant-time comparison
 
