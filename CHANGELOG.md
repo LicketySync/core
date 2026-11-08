@@ -6,6 +6,114 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Fix the weekly Mutants workflow, red every week since it was added: in runs 40112234775
+  (2026-10-24), 41225873013 (10-31) and 42399213062 (11-07, on b9f72b8) 3 to 5 of the 16 shards
+  died 7 to 73 minutes in with "The runner has received a shutdown signal" (or "lost communication
+  with the server"), in the middle of a mutant's tests, and uploaded nothing. Missed and timed-out
+  mutants do not fail a shard (the 2026-10-22 rule, unchanged), so the dead runners were the only
+  red.
+  - **The cause, confirmed in every dead shard traced: mutants whose tests allocate without end**
+    until the 16 GiB runner dies, a minute or three in, before the 300 s test limit can stop them.
+    Each dead shard of 11-07 was named from its order (`cargo mutants --list` with the same
+    selection) and the time since its last printed outcome: shard 2
+    `crates/protocol/src/connection/mod.rs:934:13: replace < with == in Connection::has_room`, shard
+    3 the same with `>`, shard 5 `crates/protocol/src/connection/index.rs:1079:12: delete ! in
+    Connection::serve_frame`, shards 9 and 10 `crates/index/src/trie.rs:322:36: replace || with &&
+    in build` and `322:14: replace <= with > in build` (every small or empty subtree built 16
+    children wide down to the trie's full depth). Run locally under the caps below, each reached 6
+    GiB in 56 to 70 s and was caught. On 10-31 shards 2 and 3 died on the same two `has_room`
+    mutants; the other dead shards of 10-31 and 10-24 were not traced (two of 10-24's logs are
+    gone).
+  - **The caps.** `ci/mutants.sh` sets cargo's runner for the host's target
+    (`CARGO_TARGET_<TRIPLE>_RUNNER`, the triple from `rustc -vV`) on any Linux host to `prlimit
+    --data=6442450944 --fsize=1073741824 --core=0 --`, so cargo starts every test binary and
+    doc-test (`--test-runtool`) under them, and no rustc or build script. Data 6 GiB (heap and other
+    private writable memory): the unmutated tests of the four crates peak at 1.85 GiB, in engine's
+    converge test, measured 2026-11-08 with 4, 8 and all 20 of its tests at once (1.65, 1.73 and
+    1.85 GiB; index 0.28, protocol 0.18, keys 0.10), so three times that, leaving 10 GiB of the
+    runner's 16. Not the address space: converge reserves 2.8 GiB of it with 4 test threads, 4.3
+    with 8 and 5.3 with 20 (malloc's per-thread arenas), so it grows with the core count. File size
+    1 GiB: the tests write only the test vectors (under 200 kB, when told to regenerate), and a test
+    process's output goes straight into its mutant's log, which the cap so bounds. No core dump of a
+    capped process. A test process past a cap dies (Rust aborts on a refused allocation; SIGXFSZ
+    past the file cap), cargo test fails, and cargo-mutants 27.1.0 counts the mutant caught (its
+    rule: a failed test phase is caught; checked in its source and with the five mutants above). The
+    baseline runs under the same caps, so tests that outgrow them fail it (exit 4) rather than have
+    every mutant counted caught, and the error then names the cap (below). prlimit is Linux only: on
+    another host the log says the tests run uncapped and nothing more of caps, and the script fails
+    if rustc cannot name the host.
+  - **Caught by a cap, counted.** After the counts, and in the job summary, the log says "N of the
+    caught were stopped by a cap (memory or file size)": the caught mutants whose log in
+    `mutants.out/log/` carries a cap's sign. For the data cap, Rust's "memory allocation of <n>
+    bytes failed"; for the file cap, SIGXFSZ, which cargo 1.99.1 gives by its number only for a
+    test binary ("process didn't exit successfully: `...` (signal: 25)"; it names SIGABRT but not
+    SIGXFSZ) and rustdoc 1.99.1 by its name as well for a doc-test ("Test executable failed
+    (signal: 25 (SIGXFSZ))."), as a toy crate of the workspace's edition (2021, each doc-test its
+    own process) showed under the caps on 2026-11-08. Only caught mutants count: not the logs of
+    the missed, timed-out or unviable ones, nor the baseline's. The count is approximate both ways:
+    Rust prints the same message for any refused allocation, cap or not, and a test process past a
+    cap that fails some other way (a thread refused its stack) leaves no sign. A rising count means
+    tests drifting toward a cap. On the logs of the local runs above it counts the five runaway
+    mutants and none of the 13 caught by their assertions.
+  - **The time limits.** cargo-mutants 27.1.0 gives an explicit `--timeout` to the unmutated tree's
+    tests as well as to each mutant's (`Timeouts::for_baseline`, `src/timeouts.rs`) and, when they
+    run past it, ends with exit 4 as if they had failed (shown on a toy crate: a 3 s test under
+    `--timeout 2`). The `--timeout 300` of the runs to 11-07, whose baselines tested for 143 to
+    295 s, was a slower runner or a few more tests from failing every shard. Now
+    `--timeout-multiplier 2 --minimum-test-timeout 300` and no `--timeout`: the unmutated tree's
+    tests have no limit but the budget, and each mutant's limit is twice their time, rounded up, at
+    least 300 s (logged as "Auto-set test timeout to <n>s"; 300 to 590 s for 11-07's baselines).
+    Twice: a mutant's tests are its own crate's, and the engine crate's, the slowest, took 89 to
+    98 % of each shard's baseline on 11-07 (its surviving mutants), so an engine mutant may run its
+    tests about twice as slowly as unmutated before it counts as timed out; the fixed 300 s gave
+    them 1.13 times on the slowest runner (265 s in a baseline of 295). A mutant that hangs costs
+    twice the baseline's test time (about 30 did on 11-07, across the 16 shards). At least 300 s: no
+    mutant times out sooner than before. A shard whose budget runs out before any mutant is tested
+    says that the unmutated tree's build and tests took it, or all but what the first mutant used
+    (its build has no limit either); at worst, unmutated tests that hang cost every shard its whole
+    180 minutes. Exit 4 can no longer mean that the unmutated tree timed out, and its error names a
+    cap when the baseline's log carries the cap's sign ("...; a test process of the unmutated tree
+    went past the data cap (6 GiB), set in ci/mutants.sh", or the file-size cap, or both).
+  - **Diagnosable next time.** Every outcome is printed as it ends (`--caught --unviable` beside
+    the missed and timed-out ones printed already), and before the run the log lists the shard's
+    mutants, numbered in the order they are tested (folded on GitHub; the script fails if the
+    listing does). The mutant a dead runner was testing is the one after the last outcome.
+  - **Tests.** `ci/test-mutants.sh` (run by `gate.sh`, `ci.yml` and `mutants.yml`), 26 cases and 10
+    checks after them now. A stand-in rustc names each case's host. The stand-in cargo records the
+    runner variables it is given and, where a case asks, either runs the unmutated tree's test
+    processes and then each mutant's through its host's runner and logs them as cargo-mutants, cargo
+    (a test binary) and rustdoc (a doc-test) do, or reckons the unmutated tree's test time against
+    its arguments as cargo-mutants 27.1.0 does. A stand-in test process (`hog`, its Python run with
+    `-I`) that maps 64 MiB more than the data cap, or makes a sparse file one byte past the file
+    cap, fails as a Rust test binary would, and its mutant is caught by a cap; one 256 MiB under the
+    data cap, or exactly at the file cap, passes and is missed; one that fails an assertion is
+    caught, not by a cap; a doc-test past either cap is caught by a cap. A missed mutant whose log
+    carries the data cap's sign (a passing test that prints it) is not counted, nor is the
+    baseline's log. Unmutated tests past the data cap, the file cap, or (two doc-tests) both fail
+    the shard with an error that names them; one that fails an assertion, with the error as before.
+    Unmutated tests of 400 s pass, with each mutant's limit 800 s; of 143 s, they give 300 s. Also
+    the counts and lists as before, the listing (numbered, folded), a failed listing (exit 1, no
+    run), the exact runner on x86_64 and aarch64 Linux, none on macOS, rustc failing, the budget
+    running out in the unmutated tree, a module planted where the tests run (ignored under `-I`),
+    and the arguments of both calls. `hog` names `MAP_NORESERVE` by its Linux value where Python
+    lacks the name (3.12 does): without that the test failed on Python 3.12, as on Ubuntu 24.04. On
+    the old script (b9f72b8) 16 of the 26 cases and 7 of the 10 checks fail; without the second
+    review's fixes, 5 cases (the caps named, rustdoc's SIGXFSZ counted, the new wording); without
+    the filter on caught mutants, 2.
+  - **Baseline, 11-07** (the 11 shards that finished, 2,247 of 3,269 mutants): 1,176 caught, 98
+    missed, 26 timed out, 947 unviable. The 5 dead shards printed 41 missed and 4 timed out before
+    they died, and left 418 mutants untested. The missed and timed-out mutants printed by all 16
+    shards, by crate: engine 45 missed and 6 timed out, index 63 and 0, keys 3 and 0, protocol 28
+    and 24; 139 and 30 in all.
+  - `mutants.yml`'s and `CONTRIBUTING.md`'s text say so; the shard sizes in `mutants.yml` are
+    11-07's (about 204 mutants, 40 to 65 minutes).
+  - Reviewed 2026-11-08 by a87479f2772495526 (first review, on 53bd222: approve once F1 is fixed;
+    F1 to F4 and O1 fixed) and aa1c9cc96911eda05 (second review, on 077f376: approve; N1 to N6
+    fixed, N7 informational); final confirm a9af5e987b177bbe1 on 55131c6: clean. Author
+    a9d70161613f58de3, from `brief-mutants-runner.md`; the fixes of the first review's findings by
+    a54ad0563a42d0acf, from `rulings-mutants-runner.md`; those of the second review's by
+    aed807711963e8416, from `rulings-mutants-runner-r2.md`.
+
 - Add the WebTransport native-side spike to `net`, off by default (spike B of the phase 0 spikes;
   pass conditions B1 to B3 of the spike brief). Every finding of the reviews is fixed; the review
   record is the last item.

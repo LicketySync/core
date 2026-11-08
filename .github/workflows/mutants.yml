@@ -30,15 +30,33 @@ jobs:
   # makes one job per shard; its length is the number of shards, and the shard
   # each job runs is its index (strategy.job-index of strategy.job-total), so
   # only the count matters. Mutants are dealt round-robin, which spreads the
-  # slow ones; each shard has about 104 mutants today, some 90 minutes. The
-  # shard stops after 180 minutes (ci/mutants.sh, which then fails and says
-  # so) and the job after 210, well inside the 6 h limit; when a shard nears
-  # its budget, add shards.
+  # slow ones; each shard had about 204 mutants on 2026-11-07 (3,269 in all,
+  # with the engine crate), 40 to 65 minutes. The shard stops after 180
+  # minutes (ci/mutants.sh, which then fails and says so) and the job after
+  # 210, well inside the 6 h limit; when a shard nears its budget, add shards.
+  #
+  # Each mutant's tests may run for twice the time the unmutated tree's took
+  # in that shard, and at least 300 s (ci/mutants.sh says why); the unmutated
+  # tree's have no limit but the budget: at worst, if they hang, every shard
+  # spends its whole 180 minutes and then fails. Until 2026-11-08 both had
+  # 300 s, and the unmutated tree's took up to 295 s on 2026-11-07.
+  #
+  # Each test process runs under caps on its memory (6 GiB of heap and other
+  # private data) and on the size of each file it writes (1 GiB), which
+  # ci/mutants.sh sets and explains. 3 to 5 shards died in each run from
+  # 2026-10-24 to 2026-11-07 ("The runner has received a shutdown signal"),
+  # and a dead runner uploads nothing; each one traced (the five of
+  # 2026-11-07, two of 2026-10-31) was testing a mutant whose tests allocate
+  # without end, which took the runner down. Under the caps such a mutant is
+  # caught, and the counts say about how many were caught so. Each shard's log
+  # lists its mutants in the order they are tested and every outcome as it
+  # ends, so the mutant a dead runner was testing is the one after the last
+  # outcome in its log.
   #
   # Decision 2026-10-22 (phase 0): surviving mutants and mutants whose tests
-  # hang past 300 s are reported (each shard prints them, in the log and the
-  # job summary, and uploads its mutants.out), not failing, until the end of
-  # phase 0, while the keys crate is reworked to the shared-key model; then
+  # hang past their limit are reported (each shard prints them, in the log and
+  # the job summary, and uploads its mutants.out), not failing, until the end
+  # of phase 0, while the keys crate is reworked to the shared-key model; then
   # revisited. A shard fails when the unmutated tree does not build or its
   # tests fail, when it runs past its budget, or on any cargo-mutants error.
   mutants:
@@ -48,7 +66,7 @@ jobs:
     strategy:
       fail-fast: false
       # 12 shards at a time, so that a run leaves runners for CI and the
-      # nightly; the other 4 start as the first finish (about 160 minutes in all).
+      # nightly; the other 4 start as the first finish (about two hours in all).
       max-parallel: 12
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]

@@ -133,7 +133,10 @@ semgrep (`pipx install semgrep==<SEMGREP>`). cargo-mutants (the weekly
 `mutants.yml`), cargo-fuzz and cargo-careful (`nightly.yml`) are not run by
 the gate but are pinned the same way, so that a surviving mutant, a fuzz crash
 or a careful finding reproduces locally with the same tool (`ci/mutants.sh
-<k>/<n> <budget>` runs one shard of the mutants as the weekly job does).
+<k>/<n> <budget>` runs one shard of the mutants as the weekly job does: each
+mutant's tests limited to twice the unmutated tree's test time, at least
+300 s, and on Linux each test process under the job's caps on memory and file
+size). `ci/test-mutants.sh` also needs python3 and prlimit (util-linux).
 gitleaks is optional (`ci/gitleaks-install.sh ~/.local/bin` installs the
 release CI pins). CI adds the full-history gitleaks scan, the other operating
 systems, CodeQL and, once configured, ClusterFuzzLite.
