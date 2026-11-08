@@ -6,6 +6,77 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Spike B's follow-ups, from its final confirm review (2026-11-04) and the reviews of this change: a
+  test that holds `ci/check-wasm-bindgen.sh`'s lock branch; TM-22's residual (e) with its
+  pre-authentication byte figure, which is not a memory bound, and the memory a connection can keep
+  alive, with what that adds to phase 6 and, proposed, to phase 1; the browser crate's build output
+  ignored; and the reviews' wording nits.
+  - **The lock branch, tested.** No case of `ci/test-check-wasm-bindgen.sh` failed on the lock
+    alone, so the branch that compares `browser-tests/webtransport/Cargo.lock` with
+    `WASM_BINDGEN_CLI` could be deleted with every case passing. The new case, "the lock moved
+    alone", keeps the pin and the exact requirement at 0.2.129 and moves the lock to 0.2.130. With
+    the lock branch deleted from a scratch copy of the script, it fails and the other five pass.
+    6 cases now, as spike B's entry says.
+  - **TM-22 (e), the byte figure.** Before authentication a connection can hold one datagram more
+    than quinn's 64 KiB buffer: `wtransport` 0.7.2 moves each into a channel for the connection, a
+    `tokio` `mpsc` of capacity 1 (`src/driver/mod.rs`, line 54, and `accept_datagram`, lines
+    531-558, which reserves the slot before it reads), and `net` never reads it. The residual says
+    so, and that its "about 4.06 MiB" holds while that datagram is a packet within the 1 472 bytes
+    quinn advertises, and "under 4.125 MiB" whatever its size: quinn-proto 0.11.19 refuses a
+    DATAGRAM frame larger than its 64 KiB buffer (32 bytes of overhead counted with each,
+    `src/connection/datagrams.rs` lines 138-141) but not a packet larger than it advertises, and
+    quinn 0.11.12 reads each UDP datagram into 64 times that room where the system offers GRO, as
+    Linux does (`src/endpoint.rs` lines 754-758). That is the byte figure, not a memory bound.
+  - **TM-22 (e), the memory** (the security review's blocker). The residual now says that the figure
+    bounds bytes, not memory, and why, by reading, not measured. quinn 0.11.12 copies each UDP read
+    into one `BytesMut` and splits it into packets without copying (`src/endpoint.rs` lines
+    798-800), and quinn-proto 0.11.19 keeps each frame's data as a `bytes` slice of it
+    (`src/frame.rs`'s `take_len` and `take_remaining`), so one frame keeps the whole read alive: up
+    to 94 208 bytes, quinn's buffer for a read (1 472 bytes times 64, the segment count quinn-udp
+    0.5.16 gives on Linux, Android and Windows, `src/unix.rs` line 1026 and `src/windows.rs` line
+    292; 1 472 bytes on macOS and iOS). Datagrams: up to 2 048 buffered, since an empty one that
+    ends its packet is counted as 32 bytes and still holds its slice (`bytes` 1.12.1's `split_to`
+    and `advance` leave an empty `Bytes` its reference), and the one in the channel: up to about
+    184 MiB a connection. Streams: the over-allocation check counts each frame's packet payload
+    (`src/connection/mod.rs` line 2755, `src/connection/streams/recv.rs` line 82), not the read it
+    shares, and compacts otherwise only above 2 048 chunks (`src/connection/assembler.rs` lines
+    204-216): up to about 184 MiB a stream, about 5.75 GiB across the listener's 32. The security
+    review's figures (about 124 MiB, 4 GiB and, for the swarm's QUIC below, 2 GiB) took one-byte
+    datagrams and reads of 64 KiB; these take quinn's own bounds. Phase 6's "WebTransport limits"
+    adds the memory a connection keeps alive (datagrams read and dropped or copied, or their buffer
+    made small; shared stream buffers counted or copied, upstream or in `net`; a memory test with
+    one-byte frames in large UDP datagrams and in GRO batches) and, from the same review, the QUIC
+    connection closed explicitly on every failure path and counted in place of sessions: a step that
+    fails before Noise (`net`'s `webtransport::Listener::handshake`) drops the session without
+    closing the connection, and the tasks `wtransport` spawns for the dialer's streams hold streams
+    that keep it open (quinn's `ConnectionRef`).
+  - **The swarm's QUIC, a proposed phase 1 item.** The same stream effect applies to spike A's QUIC
+    (`libp2p-quic` 0.14: datagrams off, 16 bidirectional streams): by reading, up to about 2.9 GiB
+    kept alive a connection against the 1 GiB process limit, which only refuses new connections.
+    TM-22 says so where it says QUIC's windows are set, after residual (g), and records a phase 1
+    item, "QUIC stream memory", beside residuals (a) to (c): confirm it with a raw quinn client that
+    sends GSO batches, then bound it. The coordinator's routing, pending the owner's word.
+  - **Ignored.** `.gitignore` has `/browser-tests/webtransport/target`, where `gate.sh`'s clippy on
+    the browser crate, and cargo run by hand on that manifest, build (`ci/webtransport-chrome.sh`
+    builds into the root `target/`), as it has `/fuzz/target` for the other workspace of its own;
+    that directory showed as untracked after a gate run.
+  - **Wording.** `CONTRIBUTING.md` says what `ci/check-wasm-bindgen.sh` checks: that the test
+    crate's `Cargo.toml` requires exactly the CLI's version of `wasm-bindgen` and its `Cargo.lock`
+    holds it (it said the check fails a change "that moves one without the other"). The comment on
+    `ci.yml`'s `ci-scripts` job names every test the job runs, now with those of
+    `ci/check-wasm-bindgen.sh`, `ci/check-vendored.sh` and `ci/check-pins.sh`, and the job's name
+    is now "tests of the CI scripts and .gitattributes; the toolchain check" (safe: no check is
+    required); `gate.sh` names the first two in its comment on the same steps and gives
+    `ci/test-check-pins.sh` a comment of its own. TM-22 from residual (e) to the sentence after (g)
+    is rewrapped to 100 columns, (f) and (g) in whitespace only. Spike B's entry has its three
+    lines over 100 columns and five short ones (one in the "Found, not fixed" bullet) rewrapped,
+    whitespace only: `git diff --word-diff` shows no word changed in it but the count above.
+  - Reviewed 2026-11-08 by abc56f7cac6eb239a (first review, on 60f640a: approve once F1 is fixed;
+    F1 and N2 to N4 fixed) and a949dd505aea3709c (security review, on 60f640a: blocked by S1, the
+    figure bounds bytes, not memory; S1, S2, N1 and O1 fixed); final confirm with the security pass
+    a6f8511513813ca67 on 5beecf9: clean. Author a7a54b360044f091c, from `brief-spikeB-followups.md`;
+    fixes by aa03ae809aabe2946, from `rulings-spikeB-followups.md`.
+
 - Fix the weekly Mutants workflow, red every week since it was added: in runs 40112234775
   (2026-10-24), 41225873013 (10-31) and 42399213062 (11-07, on b9f72b8) 3 to 5 of the 16 shards
   died 7 to 73 minutes in with "The runner has received a shutdown signal" (or "lost communication
@@ -161,9 +232,10 @@ paths or the API also names the security-reviewer pass.
     SHA-256 in `ci/pins.env`; Google publishes none, so the values were taken after the download's
     MD5 matched Google's `x-goog-hash`), and wasm-bindgen-cli 0.2.129 from crates.io; `gate.sh`
     checks that install line and that the test crate's `wasm-bindgen` is the same version.
-    `ci/test-check-netlog.sh` (16 cases on made-up net logs), `ci/test-check-wasm-bindgen.sh` (5)
-    and `ci/test-check-vendored.sh` (6) run in `gate.sh` and CI's `ci-scripts` job; the browser crate's `cargo fmt --check` and clippy pedantic on wasm32 run in
-    `gate.sh` and CI's `fmt` and `clippy` jobs.
+    `ci/test-check-netlog.sh` (16 cases on made-up net logs), `ci/test-check-wasm-bindgen.sh` (6)
+    and `ci/test-check-vendored.sh` (6) run in `gate.sh` and CI's `ci-scripts` job; the browser
+    crate's `cargo fmt --check` and clippy pedantic on wasm32 run in `gate.sh` and CI's `fmt` and
+    `clippy` jobs.
   - **TM-23, contained.** `wtransport` 0.7.2's `Endpoint::accept` holds `expect("Endpoint cannot be
     closed")`, which panics once quinn's `accept` returns `None` (after `Endpoint::close`, or once
     quinn's driver has ended on a socket error other than `ConnectionReset`; quinn 0.11.12,
@@ -184,23 +256,22 @@ paths or the API also names the security-reviewer pass.
     request's HEADERS, before authentication: a panic where overflow checks are on (debug and test
     builds); in a release build the shift wraps, decoding fails on the recorded input, and in
     general it yields a wrong value, harmless because every decoded value is checked before use.
-    The fuzz target and the 18-byte input are in
-    `fuzz/known-crashes/`, outside the nightly fuzz list, with how to reproduce; a vendored fix is
-    not made now (feature off, in no shipped build; the owner decides whether to report it
-    upstream).
+    The fuzz target and the 18-byte input are in `fuzz/known-crashes/`, outside the nightly fuzz
+    list, with how to reproduce; a vendored fix is not made now (feature off, in no shipped build;
+    the owner decides whether to report it upstream).
   - **Required before 1.0, phase 6 (browser client)**, TM-22's residuals: (e) sessions not counted
-    (each held to net's QUIC limits, at most about 4.06 MiB unread before authentication, but no count per
-    listener or address, outside the swarm's limits); (f) no certificate rotation; (g) the
+    (each held to net's QUIC limits, at most about 4.06 MiB unread before authentication, but no
+    count per listener or address, outside the swarm's limits); (f) no certificate rotation; (g) the
     handshake facts are per process, not per connection, and not shared with spike A's QUIC and
     TCP. Also phase 6: a test that the wrong-path 404 is bounded against a dialer that withholds
     flow-control credit (a raw client with a stream receive window of 0 never gets its session
     request past wtransport, whose driver must first write its own SETTINGS: the session request
     timed out; a client that withholds acknowledgements instead needs a QUIC test harness), a
-    native assertion of the negotiated cipher suite (asserted from Chrome's
-    net log now; quinn does not expose the rustls session to a native test), and the spike's public
-    test knobs (`allow_long_validity`, `noise_hashes_override`, `KxPolicy::ClassicalOnly`) behind
-    a test-only interface. TM-6 and `suites.md` 4.1 record a second zeroization deviation: the
-    listener's certificate key is copied through `wtransport` and rustls types not wiped on drop.
+    native assertion of the negotiated cipher suite (asserted from Chrome's net log now; quinn does
+    not expose the rustls session to a native test), and the spike's public test knobs
+    (`allow_long_validity`, `noise_hashes_override`, `KxPolicy::ClassicalOnly`) behind a test-only
+    interface. TM-6 and `suites.md` 4.1 record a second zeroization deviation: the listener's
+    certificate key is copied through `wtransport` and rustls types not wiped on drop.
   - **Supply chain** (proposed): `deny.toml` and `deny-production.toml` wrappers for the
     feature's crates, and closing entries for each crate they admit (`wtransport` beneath
     `licketysync-net`, `wtransport-proto` beneath `wtransport`, `libp2p-noise` beneath `net`, the
@@ -211,24 +282,24 @@ paths or the API also names the security-reviewer pass.
     pkcs8, spki, sha1 and md5 bans hold. 41 cargo-vet exemptions for core's new crates;
     `browser-tests/webtransport` has its own `supply-chain/` store (150 exemptions, each with its
     role in that graph: what it sits beneath, at build time or on which targets), so `cargo vet
-    prune` in one store cannot drop the other's, and
-    vets the vendored `libp2p-webtransport-websys` as its crates.io release
-    (`audit-as-crates-io`); since that keys on the version and would not see an edit (probed),
-    `ci/check-vendored.sh` holds the copy to `vendor/SHA256SUMS` and refuses any entry that is not
-    a regular file (its tests: an edit, an extra file, a missing file and a symbolic link fail it). The vendored copy changes one line of the published 0.6.0 (`wasm-bindgen-futures`
-    `=0.4.58` to `0.4.79`), with rust-libp2p's MIT `LICENSE` and `vendor/README.md`; the owner,
-    2026-11-04: "Yes, keep the patched version until upstream releases the fix." It goes once
-    such a release has been out 7 days. Dependabot has a cargo entry for the browser workspace
-    (7-day cooldown) that skips `wasm-bindgen`, `wasm-bindgen-*`, `js-sys` and `web-sys`: the
-    weekly refresh moves them in one change with `WASM_BINDGEN_CLI` (CONTRIBUTING), and
-    `ci/check-wasm-bindgen.sh` (gate.sh and CI's `deps` job, every push) fails a change that moves
-    the test crate's wasm-bindgen without the CLI the nightly installs, so no pull request can turn
-    the nightly red that way. CONTRIBUTING's weekly refresh lists the browser workspace and the
-    Chrome for Testing pins. `spec/suites.md` 3.1
-    has rows for `wtransport` (naming the delegating key-exchange group and the recording
-    resolver as first-party code it admits, and `quinn-proto`'s `ring` role beneath it) and
-    `libp2p-webtransport-websys` (Noise's Diffie-Hellman on `x25519-dalek` 3 beneath
-    `libp2p-noise`, `snow`'s other primitives wasm32-only and unselected).
+    prune` in one store cannot drop the other's, and vets the vendored `libp2p-webtransport-websys`
+    as its crates.io release (`audit-as-crates-io`); since that keys on the version and would not
+    see an edit (probed), `ci/check-vendored.sh` holds the copy to `vendor/SHA256SUMS` and refuses
+    any entry that is not a regular file (its tests: an edit, an extra file, a missing file and a
+    symbolic link fail it). The vendored copy changes one line of the published 0.6.0
+    (`wasm-bindgen-futures` `=0.4.58` to `0.4.79`), with rust-libp2p's MIT `LICENSE` and
+    `vendor/README.md`; the owner, 2026-11-04: "Yes, keep the patched version until upstream
+    releases the fix." It goes once such a release has been out 7 days. Dependabot has a cargo entry
+    for the browser workspace (7-day cooldown) that skips `wasm-bindgen`, `wasm-bindgen-*`, `js-sys`
+    and `web-sys`: the weekly refresh moves them in one change with `WASM_BINDGEN_CLI`
+    (CONTRIBUTING), and `ci/check-wasm-bindgen.sh` (gate.sh and CI's `deps` job, every push) fails a
+    change that moves the test crate's wasm-bindgen without the CLI the nightly installs, so no pull
+    request can turn the nightly red that way. CONTRIBUTING's weekly refresh lists the browser
+    workspace and the Chrome for Testing pins. `spec/suites.md` 3.1 has rows for `wtransport`
+    (naming the delegating key-exchange group and the recording resolver as first-party code it
+    admits, and `quinn-proto`'s `ring` role beneath it) and `libp2p-webtransport-websys` (Noise's
+    Diffie-Hellman on `x25519-dalek` 3 beneath `libp2p-noise`, `snow`'s other primitives wasm32-only
+    and unselected).
   - **Unsafe code under the feature.** `ci/geiger-baseline.txt` counts each crate with default
     features, so it is unchanged. Measured by hand with the feature on (cargo-geiger 0.14.0), net
     would be `277 21323 375 32 583` against its baseline `261 20643 336 22 574`; within that,

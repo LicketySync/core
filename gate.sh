@@ -249,13 +249,17 @@ step ci/no-hostnames.sh
 step ci/test-pinned-actions.sh
 step ci/pinned-actions.sh
 step ci/test-toolchains.sh
+# ci/check-pins.sh, which checked ci/pins.env before the gate sourced it, on
+# that file and made-up ones.
 step ci/test-check-pins.sh
 # The line-ending attributes of the test vectors and fuzz seeds (.gitattributes).
 step ci/test-vector-line-endings.sh
 # The scripts mutants.yml and nightly.yml's fuzz jobs run, on stand-ins for the tools.
 step ci/test-mutants.sh
 step ci/test-fuzz-targets.sh
-# The net-log checker the nightly webtransport-chrome job runs, on made-up logs.
+# The net-log checker the nightly webtransport-chrome job runs, on made-up logs,
+# and the two checks of the browser test crate above (ci/check-wasm-bindgen.sh
+# and ci/check-vendored.sh), on trees made for each case.
 step ci/test-check-netlog.sh
 step ci/test-check-wasm-bindgen.sh
 step ci/test-check-vendored.sh

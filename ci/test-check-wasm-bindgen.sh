@@ -34,6 +34,7 @@ case_ "a bumped requirement and lock"           1 0.2.129 "=0.2.130" 0.2.130
 case_ "a bumped lock under a caret requirement" 1 0.2.129 "0.2.129" 0.2.130
 case_ "a requirement that is not exact"         1 0.2.129 "0.2.129" 0.2.129
 case_ "the pin moved without the crate"         1 0.2.130 "=0.2.129" 0.2.129
+case_ "the lock moved alone"                    1 0.2.129 "=0.2.129" 0.2.130
 if [ "$fails" -ne 0 ]; then
   echo "$fails of $n cases failed"
   exit 1

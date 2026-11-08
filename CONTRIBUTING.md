@@ -201,7 +201,8 @@ change:
   `wasm-bindgen-test`, `js-sys` and `web-sys`: Dependabot skips those crates
   there (`dependabot.yml`), since `wasm-bindgen-test-runner` refuses a module
   built against another wasm-bindgen, and `ci/check-wasm-bindgen.sh` (gate.sh
-  and CI's `deps` job) fails any change that moves one without the other;
+  and CI's `deps` job) fails unless the test crate's `Cargo.toml` requires
+  exactly the CLI's version of `wasm-bindgen` and its `Cargo.lock` holds it;
 - cargo-geiger, which moves only with the baseline's counts;
 - site's zola, in its `pages.yml` (site has no `pins.env`);
 - the commit pins of `dtolnay/rust-toolchain` and `google/clusterfuzzlite`:

@@ -456,15 +456,18 @@ jobs:
 
   # The scripts the scheduled workflows run (ci/mutants.sh in mutants.yml,
   # ci/fuzz-targets.sh and ci/check-netlog.py in nightly.yml), tested on
-  # stand-ins for the tools or made-up net logs on
-  # every push, so that a change that breaks one fails here rather than at the
-  # next scheduled run; the line-ending attributes of the test vectors and
-  # fuzz seeds, checked on Linux with Windows' core.autocrlf=true (the Windows
-  # runner would check this script itself out with CRLF, which bash rejects);
-  # and the toolchain half of the pinning rule, ci/toolchains.sh with its
-  # tests. gate.sh runs the same.
+  # stand-ins for the tools or made-up net logs on every push, so that a
+  # change that breaks one fails here rather than at the next scheduled run;
+  # the deps job's two checks of the browser test crate
+  # (ci/check-wasm-bindgen.sh and ci/check-vendored.sh), tested on trees made
+  # for each case, and ci/check-pins.sh, the check of ci/pins.env itself, on
+  # that file and made-up ones; the line-ending attributes of the test
+  # vectors and fuzz seeds, checked on Linux with Windows' core.autocrlf=true
+  # (the Windows runner would check this script itself out with CRLF, which
+  # bash rejects); and the toolchain half of the pinning rule,
+  # ci/toolchains.sh with its tests. gate.sh runs the same.
   ci-scripts:
-    name: tests of the mutants and fuzz-target scripts and .gitattributes; the toolchain check
+    name: tests of the CI scripts and .gitattributes; the toolchain check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

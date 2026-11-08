@@ -827,30 +827,56 @@ builds for iOS, with the iOS refusal lifted and the memory-limit test compiled f
 Three more, of the WebTransport listener spike B adds to `net` (feature `webtransport`, off by
 default, so in no build that ships; proposed, for review), each **required before 1.0, phase 6
 (browser client)**: (e) **WebTransport sessions are not counted.** Each connection is held to
-`net`'s QUIC limits, as QUIC's own are: at most 16 bidirectional and 16 unidirectional streams
-open at once, 4 MiB unread a stream and a connection, and 64 KiB of unread datagrams (quinn's
-default is about 1.25 MB), so before authentication a connection holds at most about 4.06 MiB of
-the dialer's unread data besides its TLS and QUIC state, and each step of
-the handshake (the session request, the session, Noise, a stream's protocol) has a deadline, with
-a 20 s idle timeout. But the listener takes every connection quinn hands it, with no count of
-sessions per listener or per address and outside the swarm's connection and memory limits, so the
-total grows with the number of dialers at their own rate, and an Initial costs what residual (a)
-says. Phase 6 item "WebTransport limits": sessions counted with the swarm's limits (or a transport
-the swarm's limits govern), per-address limits, the memory limit, and quinn's Retry
-(`IncomingSession::retry`) under load. (f) **No
-certificate rotation.** The listener's certificate is made when it binds and is valid for at most
-14 days, the longest a browser accepts for a hash; once it expires no browser can dial until the
-listener binds again with a new certificate whose hash is handed out again, and an invite carrying
-the old hash (`keys.md`'s `c`) goes stale. Phase 6 item "WebTransport certificate rotation": a new
-certificate before expiry, Noise reporting the current and the next hash, the certificate swapped
-in without dropping sessions, and `not_before` back-dated for clock skew. (g) **The handshake facts
-are per process, and spike A's transports keep none.** The outer key-exchange group a WebTransport
-handshake chose is recorded process-wide, the last handshake's, so with handshakes at the same
-time it can name another session's; QUIC and TCP record no such facts. Phase 6 item "handshake
-facts": per-connection facts shared by the three transports, as TM-33's evidence.
-QUIC's windows are set (`net`'s limits, 4 MiB a connection, for the swarm's QUIC and for the
-WebTransport listener alike). Stops resource exhaustion through
-unbounded streams, connections and
+`net`'s QUIC limits, as QUIC's own are: at most 16 bidirectional and 16 unidirectional streams open
+at once, 4 MiB unread a stream and a connection, and 64 KiB of unread datagrams (quinn's default is
+about 1.25 MB) plus one more in `wtransport`'s channel for the connection (its `Driver::init`: a
+`tokio` `mpsc` of capacity 1), so before authentication a connection holds at most about 4.06 MiB of
+the dialer's unread data besides its TLS and QUIC state (with that one datagram a packet within the
+1 472 bytes quinn advertises; under 4.125 MiB if the dialer sends it as large as quinn takes, under
+64 KiB), and each step of the handshake (the session request, the session, Noise, a stream's
+protocol) has a deadline, with a 20 s idle timeout. That figure bounds bytes, not memory (by reading
+quinn 0.11.12, quinn-proto 0.11.19, quinn-udp 0.5.16 and `bytes` 1.12.1, not measured): quinn copies
+each UDP read into one buffer, keeps each frame's data as a slice of that buffer, and frees the
+buffer only when every slice is gone. A read is one UDP datagram (at most 65 527 bytes) or, on Linux
+and Android, a GRO batch of up to 64 datagrams; quinn's buffer for it is 94 208 bytes (64 times
+1 472) on Linux, Android and Windows and 1 472 bytes on macOS and iOS. So each datagram quinn
+buffers, up to 2 048 of them (it counts 32 bytes with each, and an empty one that ends its packet
+still holds a slice), and the one in `wtransport`'s channel can keep a whole read alive: up to about
+184 MiB a connection (about 2.9 MiB on macOS and iOS). And quinn's check of a stream's
+over-allocation takes each frame's allocation to be its packet's payload, not the read the packet
+shares, and otherwise compacts a stream only above 2 048 chunks, so each stream's data may keep up
+to about 184 MiB alive, about 5.75 GiB a connection across its 32 streams. But the listener takes
+every connection quinn hands it, with no count of sessions per listener or per address and outside
+the swarm's connection and memory limits, so the total grows with the number of dialers at their own
+rate, and an Initial costs what residual (a) says. Phase 6 item "WebTransport limits": sessions
+counted with the swarm's limits (or a transport the swarm's limits govern), per-address limits, the
+memory limit, and quinn's Retry (`IncomingSession::retry`) under load; the memory a connection keeps
+alive bounded, not only its unread bytes: datagrams, which `net` does not use, read and dropped or
+copied as they arrive, or their buffer made small, and stream receive buffers that share a read
+counted or copied, upstream in quinn or in `net`, with a test that measures a connection's memory
+against one-byte frames sent in large UDP datagrams and in GRO batches; and, since a step that fails
+before Noise (the session request's deadline, a wrong path, a failed accept) drops the session
+without closing its QUIC connection, which the tasks `wtransport` spawns for the dialer's streams
+then keep open while the dialer keeps it from idling, that connection closed explicitly on every
+failure path, and QUIC connections counted, not sessions. (f) **No certificate rotation.** The
+listener's certificate is made when it binds and is valid for at most 14 days, the longest a browser
+accepts for a hash; once it expires no browser can dial until the listener binds again with a new
+certificate whose hash is handed out again, and an invite carrying the old hash (`keys.md`'s `c`)
+goes stale. Phase 6 item "WebTransport certificate rotation": a new certificate before expiry, Noise
+reporting the current and the next hash, the certificate swapped in without dropping sessions, and
+`not_before` back-dated for clock skew. (g) **The handshake facts are per process, and spike A's
+transports keep none.** The outer key-exchange group a WebTransport handshake chose is recorded
+process-wide, the last handshake's, so with handshakes at the same time it can name another
+session's; QUIC and TCP record no such facts. Phase 6 item "handshake facts": per-connection facts
+shared by the three transports, as TM-33's evidence. QUIC's windows are set (`net`'s limits, 4 MiB a
+connection, for the swarm's QUIC and for the WebTransport listener alike), and they bound bytes, not
+memory: by reading quinn 0.11.12 and quinn-proto 0.11.19 (not measured), residual (e)'s stream
+effect applies to the swarm's QUIC too (`libp2p-quic` 0.14: datagrams off, 16 bidirectional
+streams), whose stream data, sent in GRO batches, may keep up to about 2.9 GiB alive a connection,
+against the 1 GiB process limit, which only refuses new connections. Phase 1 item "QUIC stream
+memory", beside residuals (a) to (c), proposed (the coordinator's routing of 2026-11-08, pending the
+owner's word; the owner set (a) to (c) on 2026-11-03): confirm it with a raw quinn client that sends
+GSO batches, then bound it. Stops resource exhaustion through unbounded streams, connections and
 registrations, and amplification through QUIC (go-libp2p and rust-libp2p 2022; rendezvous 2026). The
 stated costs: any Hello that passes its checks costs one Ed25519 signature (the DeviceProof sent in
 answer) and one verification; a FolderProof from a peer with no key to the folder costs a lookup in

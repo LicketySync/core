@@ -3,6 +3,7 @@
 /fuzz/target
 /fuzz/artifacts
 /fuzz/corpus
+/browser-tests/webtransport/target
 *.profraw
 *.profdata
 /coverage
