@@ -172,8 +172,10 @@ fn conflict() -> (Net, RecordHash, RecordHash) {
 fn a_version_still_arriving_stays_a_head_beside_a_local_write_and_the_old_file_stays() {
     // Item 6, Bases, and item 1: until V2's content is on node 1's disk, V1
     // stays the base at the path and the file there as it was; node 1's own
-    // edit is built from V1, so V2 and the edit are both heads, a conflict,
-    // never one written over the other (4.4, "Why it is safe" 9).
+    // edit is built from V1 and its twins, of which V2 is none, whatever its
+    // content: it covers V1, a later version (4.4, "Bases"). So V2 and the
+    // edit are both heads, a conflict, never one written over the other
+    // (4.4, "Why it is safe" 9).
     let (net, v2, mine) = conflict();
     let mut want = vec![v2, mine];
     want.sort_unstable();

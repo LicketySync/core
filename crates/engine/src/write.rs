@@ -25,11 +25,15 @@
 //!    a new file is a put at the path; a rename is a put at the new path with
 //!    the old path's base content, then a tombstone at the old path; deleting
 //!    a directory is one tree delete of it. The index builds every vector
-//!    from the path's bases, so a version still arriving (not yet a base)
-//!    stays a head beside the write: a conflict, never a silent loss. A write
-//!    over a conflict first writes each conflict copy on the disk as a
-//!    version at its own path (`Change::Promote`), in the same commit, so it
-//!    becomes an ordinary file (4.4, "What becomes of a conflict copy").
+//!    from the path's bases and their twins (the heads of a base's content
+//!    concurrent with it and, at the path, after it in display order, never
+//!    the first head), so a version still arriving (not yet a base, its
+//!    content not on the disk, or a later version of a base with its
+//!    content) stays a head beside the write: a conflict, never a silent
+//!    loss, while a twin is covered with its base. A write over a conflict
+//!    first writes each conflict copy on the disk as a version at its own
+//!    path (`Change::Promote`), in the same commit, so it becomes an
+//!    ordinary file (4.4, "What becomes of a conflict copy").
 //! 4. In phase B the index signs the records (`Txn::write`, counters from the
 //!    high-water mark and the wall clock), and each blob that is not stored
 //!    as it should be is staged then: a blob the book counts as stored is

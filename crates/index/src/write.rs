@@ -10,15 +10,22 @@
 //! the cleanups a write holder issues at the end of a round for the stale
 //! copies and forgotten records it noted.
 //!
-//! Every vector is built from the path's bases, the versions on this
-//! device's disk, never from records held whose content has not reached it
-//! ("Why it is safe" 9): `S` is the bases at the path (never a tree delete,
-//! at most `MAX_VECTOR_ENTRIES`, this device's own first, then display
-//! order), and the vector is the join of their dots and vectors, pruned to
-//! `MAX_VECTOR_ENTRIES` with the entries of `S`'s devices kept. The names are
-//! `S`'s fingerprints, then the shared writer faults held at the path that no
-//! held cleanup names, then the noted stale copies at the path that the new
-//! vector covers, up to `MAX_REPLACES`.
+//! Every vector is built from the content on this device's disk, never from
+//! records held whose content has not reached it ("Why it is safe" 9): `S`
+//! is the bases at the path and their twins, the live heads there of a
+//! base's content that are concurrent with it, are never the first head in
+//! display order at the path and, for the base at the path itself, come
+//! after it in display order (never a tree delete, at most
+//! `MAX_VECTOR_ENTRIES`: the bases first, then the twins, this device's own
+//! records first within each, then display order), and the vector is the
+//! join of their dots and vectors, pruned to `MAX_VECTOR_ENTRIES` with the
+//! entries of `S`'s devices kept. The names are `S`'s fingerprints, then the
+//! shared writer faults held at the path that no held cleanup names, then
+//! the noted stale copies at the path that the new vector covers, up to
+//! `MAX_REPLACES`. A tree delete's join takes the bases at or beneath its
+//! directory and their twins alike; it names the first 32 of those at its
+//! own path in `S`'s order, their devices mandatory in its prune, so that
+//! it names only what its vector covers.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,7 +44,7 @@ use licketysync_protocol::record::{
 use crate::index::{Accepted, Seq, Txn};
 use crate::state::{BaseRecord, Noted};
 use crate::store::Place;
-use crate::views::display_rank;
+use crate::views::{display_rank, same_content};
 
 /// A version or a tombstone at `path` (4.7 item 6, "The current version"):
 /// what the engine found on its disk.
@@ -190,6 +197,34 @@ struct Spent {
     by_peer: BTreeMap<DeviceId, u64>,
 }
 
+/// A base at a tag (4.4, "Bases"): the place it stands for (the path
+/// itself, or one of its conflict copies), its record and its metadata.
+type Base = (Place, RecordHash, Meta);
+
+/// Whether the record `h` (`m`) held at a base's tag is a **twin** of that
+/// base, `b` (`bm`) standing for `place` (4.4, "Bases"): it holds the base's
+/// content ([`same_content`]: two tombstones, two directories, or two files
+/// with the same plaintext hashes; never a tree delete); it is concurrent
+/// with the base, its vector not covering the base's dot, so a later
+/// version of the base, one that changed only its mode or time say, is
+/// never its twin (the R2 review's R2-1); and, for the base at the path
+/// itself, it comes after the base in display order (the security review's
+/// F1). Neither of the last two implies the other: a concurrent record with
+/// a later `mtime_ns` comes first, and a later version with the same or an
+/// earlier one can come after. A conflict copy's base is matched by the
+/// first two alone: its place is beside the path, whatever the display
+/// order. (Two records' display ranks are never equal, the record hash
+/// ending them, so "after" is a strict order.) [`Txn::twins_at`] adds the
+/// last condition, for every base: a twin is never the first head in
+/// display order at its path, so it is never the head the engine has yet to
+/// put at the path, its time and mode not on the disk (the confirm review's
+/// C1).
+fn twin_of(place: &Place, b: &RecordHash, bm: &Meta, h: &RecordHash, m: &Meta) -> bool {
+    same_content(bm, m)
+        && !m.vector.covers(&bm.dot)
+        && (*place != Place::Path || display_rank(b, bm).cmp(&display_rank(h, m)).is_lt())
+}
+
 /// The join of dots and vectors: for each device, the greatest counter any
 /// gives it.
 fn join<'a>(metas: impl IntoIterator<Item = &'a Meta>) -> BTreeMap<DeviceId, u64> {
@@ -247,26 +282,111 @@ pub(crate) fn prune(
 }
 
 impl Txn<'_> {
-    /// `S` at a tag: its bases, never a tree delete, at most the vector cap,
-    /// this device's own first, then display order.
+    /// `S` at a tag (4.4, "The vector and names of a new record"): its
+    /// bases, never a tree delete, and their twins ([`Self::twins_at`]), the
+    /// first `MAX_VECTOR_ENTRIES` in `S`'s order ([`Self::first_in_s_order`]).
+    /// A twin's content is a base's, so it is on the disk as much as that
+    /// base is ("Why it is safe" 9); past the cap, the twins last in that
+    /// order are left out and stay heads until the next write there.
     fn s_at(&self, tag: &PathTag) -> Vec<(RecordHash, Meta)> {
-        let own = self.ix.own;
-        let mut s: Vec<(RecordHash, Meta)> = self
+        let bases: Vec<Base> = self
             .ix
             .s
             .bases_at(tag)
             .into_iter()
-            .filter_map(|(_, h)| Some((h, self.ix.s.base_meta(&h)?.clone())))
-            .filter(|(_, m)| !m.tree)
+            .filter_map(|((_, place), h)| Some((place, h, self.ix.s.base_meta(&h)?.clone())))
+            .filter(|(_, _, m)| !m.tree)
             .collect();
-        s.sort_by_key(|(h, _)| *h);
-        s.dedup_by_key(|(h, _)| *h);
-        s.sort_by(|(ha, ma), (hb, mb)| {
-            (ma.dot.device != own, display_rank(ha, ma))
-                .cmp(&(mb.dot.device != own, display_rank(hb, mb)))
-        });
+        let twins = self.twins_at(tag, &bases);
+        self.first_in_s_order(bases, twins)
+    }
+
+    /// `bases` and `twins` (at one tag), each record once, in `S`'s order:
+    /// the bases first, then the twins, this device's own records first
+    /// within each, then display order; the first `MAX_VECTOR_ENTRIES` of
+    /// them. So a twin never takes a place a base would have had, and
+    /// records signed under this device's ID with a base's content (a
+    /// cloned image, or a write holder writing under it, "Why it is safe"
+    /// 8(b)) cannot push the base out (the security review's F5).
+    fn first_in_s_order(
+        &self,
+        bases: Vec<Base>,
+        twins: Vec<(RecordHash, Meta)>,
+    ) -> Vec<(RecordHash, Meta)> {
+        let own = self.ix.own;
+        let mut s: Vec<(bool, RecordHash, Meta)> = bases
+            .into_iter()
+            .map(|(_, h, m)| (false, h, m))
+            .chain(twins.into_iter().map(|(h, m)| (true, h, m)))
+            .collect();
+        s.sort_by_key(|(twin, h, m)| (*twin, m.dot.device != own, display_rank(h, m)));
+        // One record in two slots (the path and a copy) is one member.
+        s.dedup_by_key(|(_, h, _)| *h);
         s.truncate(self.ix.bounds.vector);
-        s
+        s.into_iter().map(|(_, h, m)| (h, m)).collect()
+    }
+
+    /// The **twins** at `tag` of `bases` (records at `tag`; 4.4, "Bases"):
+    /// every other applied record held there that is a twin of one of them
+    /// ([`twin_of`]) and is not the first head there in display order, in
+    /// ascending record hash. At a read or write holder every such record is
+    /// live, a head beside the base it matches, which the display order
+    /// shows as one file with no conflict copy. The first head (never a tree
+    /// delete) is the record the engine puts at the path, its time and mode
+    /// not on the disk until it is a base; it is no twin even where
+    /// [`twin_of`]'s display order does not keep it out: when the base at the
+    /// path is no longer the first head (a later version still arriving
+    /// replaced it), or when it matches a conflict copy's base (the confirm
+    /// review's C1).
+    fn twins_at(&self, tag: &PathTag, bases: &[Base]) -> Vec<(RecordHash, Meta)> {
+        let applied: Vec<(RecordHash, &Meta)> = self
+            .ix
+            .s
+            .at_tag
+            .get(tag)
+            .into_iter()
+            .flatten()
+            .filter_map(|h| Some((*h, self.ix.s.held.get(h)?.meta()?)))
+            .collect();
+        let first = applied
+            .iter()
+            .filter(|(_, m)| !m.tree)
+            .min_by_key(|(h, m)| display_rank(h, m))
+            .map(|(h, _)| *h);
+        applied
+            .into_iter()
+            .filter(|(h, _)| bases.iter().all(|(_, b, _)| b != h))
+            .filter(|(h, _)| Some(*h) != first)
+            .filter(|(h, m)| {
+                bases
+                    .iter()
+                    .any(|(place, b, bm)| twin_of(place, b, bm, h, m))
+            })
+            .map(|(h, m)| (h, m.clone()))
+            .collect()
+    }
+
+    /// The twins of the bases `beneath` a tree delete's directory, path by
+    /// path ([`Self::twins_at`]), each with its tag.
+    fn twins_beneath(
+        &self,
+        beneath: &[((PathTag, Place), RecordHash, Meta)],
+    ) -> Vec<(PathTag, RecordHash, Meta)> {
+        let mut by_tag: BTreeMap<PathTag, Vec<Base>> = BTreeMap::new();
+        for ((t, place), h, m) in beneath {
+            by_tag
+                .entry(*t)
+                .or_default()
+                .push((place.clone(), *h, m.clone()));
+        }
+        by_tag
+            .iter()
+            .flat_map(|(t, bases)| {
+                self.twins_at(t, bases)
+                    .into_iter()
+                    .map(move |(h, m)| (*t, h, m))
+            })
+            .collect()
     }
 
     /// The shared writer faults held at `tag` that no held cleanup names:
@@ -293,8 +413,9 @@ impl Txn<'_> {
     }
 
     /// The vector and names of a version or tombstone at `tag` (`S` the
-    /// bases there, or empty for a promoted copy), naming the noted copies
-    /// the vector covers while their peers are within their windows.
+    /// bases there and their twins, or empty for a promoted copy), naming
+    /// the noted copies the vector covers while their peers are within their
+    /// windows.
     fn plan_put(
         &self,
         order: Order,
@@ -355,15 +476,26 @@ impl Txn<'_> {
     }
 
     /// A tree delete of `dir`: its vector the join of every base at or
-    /// beneath it, pruned with no mandatory entry; its names the bases at its
-    /// own tag, then the shared faults there; the tombstones for bases
-    /// beneath it that the pruned vector misses; and its cleanup's names,
-    /// every record at or beneath it held or kept as a base that it covers.
-    /// With no base at or beneath `dir` its vector is empty: it covers
-    /// nothing, and is written as asked, a record of the directory's deletion
-    /// that any later version beneath it outlives (the R1 review's NIT: the
-    /// engine writes one for a directory gone from its disk, which had a
-    /// base; this one is documented rather than refused).
+    /// beneath it and of their twins, pruned with the devices of the records
+    /// it names at its own tag mandatory; those names the first
+    /// `MAX_VECTOR_ENTRIES` of the bases at its own tag and their twins, in
+    /// `S`'s order ([`Self::first_in_s_order`]), so that every record it
+    /// names its vector covers (4.4, "Names"; "Why it is safe" 10; the
+    /// security review's F2 and F4), then the shared faults there; the
+    /// tombstones for bases and twins beneath it that the pruned vector
+    /// misses; and its cleanup's names, every record at or beneath it held
+    /// or kept as a base that it covers. A record at its own tag past those
+    /// names goes if the vector covers it, and otherwise stays a head until
+    /// the next delete there (more than 32 device IDs at the directory
+    /// itself; a stated residual). The cap also keeps the names within
+    /// `MAX_REPLACES` however many conflict copies sit at the directory's
+    /// path (the R1 review's outside finding: 64 or more made the directory
+    /// undeletable from that device). With no base at or beneath `dir` its
+    /// vector is empty: it covers nothing, and is written as asked, a record
+    /// of the directory's deletion that any later version beneath it
+    /// outlives (the R1 review's NIT: the engine writes one for a directory
+    /// gone from its disk, which had a base; this one is documented rather
+    /// than refused).
     fn plan_tree_delete(
         &self,
         dir: String,
@@ -380,15 +512,33 @@ impl Txn<'_> {
             .filter_map(|(slot, h)| Some((slot.clone(), *h, self.ix.s.base_meta(h)?.clone())))
             .filter(|(_, _, m)| at_or_beneath(&m.path, &dir))
             .collect();
-        let joined = join(beneath.iter().map(|(_, _, m)| m));
-        let vector = prune(&joined, &BTreeSet::new(), self.ix.bounds.vector)?;
-        let mut replaces: Vec<RecordHash> = beneath
-            .iter()
-            .filter(|((t, _), _, _)| *t == tag)
-            .map(|(_, h, _)| *h)
-            .collect();
-        replaces.sort_unstable();
-        replaces.dedup();
+        // The twins of those bases, on the disk as much as they are (4.4,
+        // "The vector and names of a new record"; the identical-heads bug of
+        // 2026-11-08: two identical directories, one deleted, came back).
+        let twins = self.twins_beneath(&beneath);
+        let joined = join(
+            beneath
+                .iter()
+                .map(|(_, _, m)| m)
+                .chain(twins.iter().map(|(_, _, m)| m)),
+        );
+        // The records it names at its own tag, each in the join: their
+        // devices mandatory, the pruned vector covers every one.
+        let named = self.first_in_s_order(
+            beneath
+                .iter()
+                .filter(|((t, _), _, _)| *t == tag)
+                .map(|((_, place), h, m)| (place.clone(), *h, m.clone()))
+                .collect(),
+            twins
+                .iter()
+                .filter(|(t, _, _)| *t == tag)
+                .map(|(_, h, m)| (*h, m.clone()))
+                .collect(),
+        );
+        let mandatory: BTreeSet<DeviceId> = named.iter().map(|(_, m)| m.dot.device).collect();
+        let vector = prune(&joined, &mandatory, self.ix.bounds.vector)?;
+        let mut replaces: Vec<RecordHash> = named.into_iter().map(|(h, _)| h).collect();
         let mut overflow = Vec::new();
         for f in self.shared_faults(&tag) {
             if replaces.len() < MAX_REPLACES {
@@ -401,7 +551,9 @@ impl Txn<'_> {
         // one per path, whatever the bases there (the path itself and its
         // conflict copies, which may be of another kind), its kind the
         // `Place::Path` base's when it has one (the R1 review's IR-3: two
-        // tombstones at one path made the tree delete one path twice).
+        // tombstones at one path made the tree delete one path twice); and
+        // for the twins it misses, at a path with no such base, the kind of
+        // the twin. Each tombstone's `S` holds that path's bases and twins.
         let mut tomb_paths: BTreeMap<String, Kind> = BTreeMap::new();
         for ((_, place), _, m) in &beneath {
             if m.path != dir && !m.deleted && !vector.covers(&m.dot) {
@@ -409,6 +561,11 @@ impl Txn<'_> {
                 if *place == Place::Path {
                     *kind = m.kind;
                 }
+            }
+        }
+        for (_, _, m) in &twins {
+            if m.path != dir && !m.deleted && !vector.covers(&m.dot) {
+                tomb_paths.entry(m.path.clone()).or_insert(m.kind);
             }
         }
         // What it covers, held (through the index by path, 4.4 "Judging a
@@ -472,12 +629,12 @@ impl Txn<'_> {
     }
 
     /// Writes a batch of changes as one commit (4.7 item 6): plans every
-    /// record's vector and names from the bases, gives them consecutive
-    /// counters from one reading of `clock_us` in the order of the writer's
-    /// rule, seals and signs them (`rng` draws the seals' nonces), holds them,
-    /// writes the cleanups that go with them (a tree delete's, `because` it,
-    /// and one for shared writer faults that did not fit a record's names),
-    /// and makes each record the base of its path.
+    /// record's vector and names from the bases and their twins, gives them
+    /// consecutive counters from one reading of `clock_us` in the order of
+    /// the writer's rule, seals and signs them (`rng` draws the seals'
+    /// nonces), holds them, writes the cleanups that go with them (a tree
+    /// delete's, `because` it, and one for shared writer faults that did not
+    /// fit a record's names), and makes each record the base of its path.
     ///
     /// # Errors
     /// [`WriteError`]. The refusals of the batch itself (no write key, the

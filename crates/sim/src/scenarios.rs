@@ -223,6 +223,13 @@ engine_runs! {
     engine_tree_delete => "engine-tree-delete",
     engine_sealed_cleanup => "engine-sealed-cleanup",
     engine_expiry => "engine-expiry",
+    engine_identical_edit_0 => "engine-identical-edit-0",
+    engine_identical_edit_1 => "engine-identical-edit-1",
+    engine_identical_later_edits => "engine-identical-later-edits",
+    engine_identical_earlier_edits => "engine-identical-earlier-edits",
+    engine_identical_three => "engine-identical-three",
+    engine_identical_delete => "engine-identical-delete",
+    engine_identical_directories => "engine-identical-directories",
 }
 
 static ALL: [NamedScenario; 11] = [
@@ -284,7 +291,7 @@ static ALL: [NamedScenario; 11] = [
 ];
 
 /// The engine scenarios, run by name.
-static ENGINE: [NamedScenario; 18] = [
+static ENGINE: [NamedScenario; 25] = [
     NamedScenario {
         name: "engine-clean",
         about: "engines: five writers, the default workload, 1 MiB chunks",
@@ -376,6 +383,41 @@ static ENGINE: [NamedScenario; 18] = [
         about:
             "engines: a tombstone past the horizon in folder time is forgotten; the file returns",
         run: engine_expiry,
+    },
+    NamedScenario {
+        name: "engine-identical-edit-0",
+        about: "engines: two twins (one path, the same bytes, written apart); member 0 edits",
+        run: engine_identical_edit_0,
+    },
+    NamedScenario {
+        name: "engine-identical-edit-1",
+        about: "engines: two twins written in the same second; member 1 edits",
+        run: engine_identical_edit_1,
+    },
+    NamedScenario {
+        name: "engine-identical-later-edits",
+        about: "engines: two twins, the later at the path; its writer edits",
+        run: engine_identical_later_edits,
+    },
+    NamedScenario {
+        name: "engine-identical-earlier-edits",
+        about: "engines: two twins, the later at the path; the other writer edits",
+        run: engine_identical_earlier_edits,
+    },
+    NamedScenario {
+        name: "engine-identical-three",
+        about: "engines: three twins; one edit covers all three",
+        run: engine_identical_three,
+    },
+    NamedScenario {
+        name: "engine-identical-delete",
+        about: "engines: two twins; one delete covers both",
+        run: engine_identical_delete,
+    },
+    NamedScenario {
+        name: "engine-identical-directories",
+        about: "engines: one directory made on two members apart; one tree delete covers both",
+        run: engine_identical_directories,
     },
 ];
 

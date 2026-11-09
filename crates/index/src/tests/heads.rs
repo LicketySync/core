@@ -6,11 +6,12 @@
 //! arrival order, display order and "content differs", pruning, a restored
 //! device, the lost update (ruling S-1), conflict copies, the clock rule at
 //! open, a base that fails at open, renames, opaque records and shared
-//! writer faults, tree deletes, expiry by the folder's own time, and the
-//! spread of clocks; each case that shows a write holder's heads is checked
-//! on a read holder given the same records (`same_on_a_reader`), and the
-//! display-order pairs, built on a read holder, on a write holder too; the
-//! cases that only a read holder or only one tier can show say so.
+//! writer faults, tree deletes, expiry by the folder's own time, the spread
+//! of clocks, and twins under a write (`identical`'s vector); each case that
+//! shows a write holder's heads is checked on a read holder given the same
+//! records (`same_on_a_reader`), and the display-order pairs, built on a read
+//! holder, on a write holder too; the cases that only a read holder or only
+//! one tier can show say so.
 
 use std::collections::BTreeSet;
 
@@ -404,8 +405,9 @@ fn restored_device() -> Value {
     json!({ "heads": hashes(&both), "hw_past_r1": d.ix.hw() >= r1_counter })
 }
 
-/// The lost update (rulings R1 B2 and S-1): S is the bases, never the
-/// records held.
+/// The lost update (rulings R1 B2 and S-1): S is the bases and their twins,
+/// never a record held whose content is not on the disk; V2, a later
+/// version of V1, is no twin of it whatever its content (4.4, "Bases").
 pub(crate) fn lost_update_s1() -> Value {
     let mut a = Dev::writer(0xa0);
     let v1 = a.put("f", 1);
@@ -1278,7 +1280,7 @@ fn vector_heads() {
     check(
         "heads",
         &json!({
-            "description": "protocol.md 8 item 7 whole: latest only, coverage, display order, pruning, bases and the lost update, conflict copies, the clock rule at open, renames, opaque records and shared writer faults, tree deletes, expiry by the folder's own time and the spread of clocks; records of the keys crate's fixed folder written at the fixed clock T0, or forged with fixed nonces. Heads are listed by record hash in display order.",
+            "description": "protocol.md 8 item 7 whole: latest only, coverage, display order, pruning, bases and the lost update, conflict copies, the clock rule at open, renames, opaque records and shared writer faults, tree deletes, expiry by the folder's own time, the spread of clocks, and twins (heads of one content) under a write; records of the keys crate's fixed folder written at the fixed clock T0, or forged with fixed nonces. Heads are listed by record hash in display order.",
             "file_ids": file_ids(),
             "coverage": coverage(),
             "arrival_order": arrival_order(),
@@ -1296,6 +1298,7 @@ fn vector_heads() {
             "spread": the_spread(),
             "tree_deletes_by_the_index": tree_deletes_by_the_index(),
             "open_time_high_water_mark": the_open_time_high_water_mark(),
+            "twins": super::identical::twins_vector(),
         }),
     );
 }

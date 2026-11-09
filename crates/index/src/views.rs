@@ -195,6 +195,23 @@ fn differs(a: &Meta, b: &Meta) -> bool {
             .any(|(x, y)| !bool::from(x.ct_eq(y)))
 }
 
+/// Whether two records at one path hold the same content, the first
+/// condition of **twins** (4.4, "Bases"; the others are concurrency and the
+/// display order, `write::twin_of`): two tombstones, whatever their kinds,
+/// or two versions whose content does not differ (two directories, or two
+/// files with the same plaintext hashes, whatever their times or modes). A
+/// tree delete is no one's twin.
+pub(crate) fn same_content(a: &Meta, b: &Meta) -> bool {
+    if a.tree || b.tree {
+        return false;
+    }
+    match (a.deleted, b.deleted) {
+        (true, true) => true,
+        (false, false) => !differs(a, b),
+        _ => false,
+    }
+}
+
 impl Index {
     /// The heads and opaque records at a tag.
     fn view_at(&self, tag: &PathTag, path: &str) -> PathView {

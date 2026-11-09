@@ -3,30 +3,42 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! The property tests of `protocol.md` section 8 item 7, (a) to (l) ((m),
-//! the digests' property, is `structures`' and `digests`'), over
-//! random histories of writes, deletes, tree deletes and renames by several
+//! the digests' property, is `structures`' and `digests`'), over random
+//! histories of writes (some made while a version of the path is still
+//! arriving), directories made, deletes, tree deletes and renames by several
 //! devices at every tier, with deliveries in any order (replays of old
 //! records included), rounds of exchange with their notes and cleanups,
 //! clocks that move by days and by horizons, and restored stores. Signing is
 //! slow in a debug build, so histories are short and cases few; the vector
-//! cap is lowered to 2 and 3, and half the histories are lines of versions
-//! through more writers than that, so that pruning takes place; the tests
-//! at the real cap are item 7's vectors. Every device of a history moves its
-//! clock by the same days, so the holders (e) compares share one clock;
-//! clocks apart within the clock rule are (d)'s.
+//! cap is lowered to 2 and 3, and a third of the histories are lines of
+//! versions through more writers than that, so that pruning takes place; the
+//! tests at the real cap are item 7's vectors. Every device of a history
+//! moves its clock by the same days, so the holders (e) compares share one
+//! clock; clocks apart within the clock rule are (d)'s. Files take one of
+//! three contents, directories are made at `d` and `d/e`, and a third of the
+//! histories start with every writer writing one path apart, so that twins
+//! are common (4.4, "Bases"; the R1 review of the identical-heads fix,
+//! R1-5).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use licketysync_keys::{DeviceId, RecordHash};
 use licketysync_protocol::limits::{CLEANUP_HORIZON, CLOCK_RULE_LIMIT, TOMBSTONE_HORIZON};
-use licketysync_protocol::record::{Applied, Dot, Meta, Record};
+use licketysync_protocol::record::{Applied, Dot, Kind, Meta, Record};
 use proptest::prelude::*;
 
 use super::kit::{converge, round, take_unexplained, write_key, Dev, DAY, T0};
 use super::open::snapshot;
-use crate::Change;
+use crate::{Change, Place};
 
 const PATHS: [&str; 5] = ["a", "b", "d/x", "d/y", "d/e/z"];
+
+/// Where a history makes directories: the tree deletes' own directory and
+/// one beneath it, so that a tree delete meets twins at its own path.
+const DIRS: [&str; 2] = ["d", "d/e"];
+
+/// The contents a history writes: few, so that twins are common.
+const CONTENTS: u8 = 3;
 
 /// The writers of a history: more than the lowered vector caps of 2 and 3,
 /// so that a line of versions at one path, or the bases beneath a tree
@@ -37,19 +49,55 @@ const WRITERS: usize = 5;
 /// exists.
 #[derive(Clone, Debug)]
 enum Op {
-    Write { dev: u8, path: u8, content: u8 },
-    Delete { dev: u8, path: u8 },
-    TreeDelete { dev: u8 },
-    Rename { dev: u8, from: u8, to: u8 },
-    Apply { dev: u8 },
-    Deliver { to: u8, pick: u16 },
-    Round { a: u8, b: u8 },
-    Days { n: u16 },
+    Write {
+        dev: u8,
+        path: u8,
+        content: u8,
+    },
+    /// A write made before the path is applied: the person edits the file
+    /// while a version of it is still arriving (4.7 item 6).
+    Edit {
+        dev: u8,
+        path: u8,
+        content: u8,
+    },
+    Mkdir {
+        dev: u8,
+        path: u8,
+    },
+    Delete {
+        dev: u8,
+        path: u8,
+    },
+    TreeDelete {
+        dev: u8,
+    },
+    Rename {
+        dev: u8,
+        from: u8,
+        to: u8,
+    },
+    Apply {
+        dev: u8,
+    },
+    Deliver {
+        to: u8,
+        pick: u16,
+    },
+    Round {
+        a: u8,
+        b: u8,
+    },
+    Days {
+        n: u16,
+    },
 }
 
 fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
-        5 => (any::<u8>(), 0u8..5, any::<u8>()).prop_map(|(dev, path, content)| Op::Write { dev, path, content }),
+        5 => (any::<u8>(), 0u8..5, 0..CONTENTS).prop_map(|(dev, path, content)| Op::Write { dev, path, content }),
+        2 => (any::<u8>(), 0u8..5, 0..CONTENTS).prop_map(|(dev, path, content)| Op::Edit { dev, path, content }),
+        1 => (any::<u8>(), 0u8..2).prop_map(|(dev, path)| Op::Mkdir { dev, path }),
         2 => (any::<u8>(), 0u8..5).prop_map(|(dev, path)| Op::Delete { dev, path }),
         1 => any::<u8>().prop_map(|dev| Op::TreeDelete { dev }),
         1 => (any::<u8>(), 0u8..5, 0u8..5).prop_map(|(dev, from, to)| Op::Rename { dev, from, to }),
@@ -67,7 +115,7 @@ fn op() -> impl Strategy<Value = Op> {
 /// passed through the writers before it, so a line soon holds more devices
 /// than the lowered cap and pruning takes place.
 fn line() -> impl Strategy<Value = Vec<Op>> {
-    proptest::collection::vec((0u8..5, 0u8..8, any::<u8>(), any::<u16>()), 4..14).prop_map(
+    proptest::collection::vec((0u8..5, 0u8..8, 0..CONTENTS, any::<u16>()), 4..14).prop_map(
         |steps| {
             let mut ops = Vec::new();
             let mut prev = 0u8;
@@ -88,10 +136,133 @@ fn line() -> impl Strategy<Value = Vec<Op>> {
     )
 }
 
-/// A history: random steps of every kind, or a line of versions (half
-/// each), so that every property also meets pruning.
+/// A history that makes twins (the R1 review of the identical-heads fix,
+/// R1-5): every writer writes one path with one of two contents, or makes
+/// one directory, apart from the others; device 0 then holds every one of
+/// them and a random device what a round with it brings; one of them
+/// writes over the path (now and then before applying it), deletes it,
+/// renames it or deletes `d`, or, over a directory, makes it again or
+/// deletes `d`; then random steps of every kind. So writes and tree deletes
+/// meet twins at their own path and beneath, with pruning at the lowered
+/// caps.
+fn twins() -> impl Strategy<Value = Vec<Op>> {
+    (
+        (0u8..5, 0u8..2, any::<bool>()),
+        proptest::collection::vec(0u8..2, WRITERS),
+        (any::<u8>(), 0u8..4, 0..CONTENTS),
+        proptest::collection::vec(op(), 0..16),
+    )
+        .prop_map(
+            |((path, dir, mkdir), contents, (dev, then, content), rest)| {
+                let mut ops = Vec::new();
+                for (d, c) in (0u8..).zip(contents) {
+                    ops.push(if mkdir {
+                        Op::Mkdir { dev: d, path: dir }
+                    } else {
+                        Op::Write {
+                            dev: d,
+                            path,
+                            content: c,
+                        }
+                    });
+                }
+                for b in 1..WRITERS {
+                    ops.push(Op::Round {
+                        a: 0,
+                        b: u8::try_from(b).unwrap_or(0),
+                    });
+                }
+                ops.push(Op::Round {
+                    a: 0,
+                    b: dev % u8::try_from(WRITERS).unwrap_or(1),
+                });
+                ops.push(match then {
+                    0..=2 if mkdir => Op::Mkdir { dev, path: dir },
+                    0 if content == 0 => Op::Edit { dev, path, content },
+                    0 => Op::Write { dev, path, content },
+                    1 => Op::Delete { dev, path },
+                    2 => Op::Rename {
+                        dev,
+                        from: path,
+                        to: content,
+                    },
+                    _ => Op::TreeDelete { dev },
+                });
+                ops.extend(rest);
+                ops
+            },
+        )
+}
+
+/// A history: random steps of every kind, a line of versions, or a history
+/// of twins (a third each), so that every property also meets pruning and
+/// twins.
 fn history(max: usize) -> impl Strategy<Value = Vec<Op>> {
-    prop_oneof![proptest::collection::vec(op(), 1..max), line()]
+    prop_oneof![proptest::collection::vec(op(), 1..max), line(), twins()]
+}
+
+/// What a device has on its disk, by its index: its bases, then their twins
+/// (4.4, "Bases"; stated here apart from the index's own test of it): every
+/// applied record held at a base's path, not a tree delete, whose content is
+/// that base's (two tombstones, two directories, or two files with the same
+/// plaintext hashes), whose vector does not cover the base's dot, which is
+/// not the first head at its path in display order (non-tombstones first,
+/// directories before files, the greater `mtime_ns` first, then the smaller
+/// record hash), the record the engine puts there, and which, for the base
+/// at the path itself, comes after it in display order.
+fn on_disk(d: &Dev) -> (Vec<Meta>, Vec<Meta>) {
+    let s = &d.ix.s;
+    let bases: Vec<(bool, RecordHash, Meta)> = s
+        .bases
+        .iter()
+        .filter_map(|((_, place), h)| Some((*place == Place::Path, *h, s.base_meta(h)?.clone())))
+        .collect();
+    let base_hashes: BTreeSet<RecordHash> = s.bases.values().copied().collect();
+    let same = |b: &Meta, m: &Meta| {
+        !b.tree
+            && !m.tree
+            && b.path == m.path
+            && b.deleted == m.deleted
+            && (b.deleted
+                || (b.kind == m.kind
+                    && (b.kind == Kind::Directory
+                        || b.plain_hashes
+                            .iter()
+                            .map(|x| x.0)
+                            .eq(m.plain_hashes.iter().map(|x| x.0)))))
+    };
+    let rank = |h: &RecordHash, m: &Meta| {
+        (
+            m.deleted,
+            !m.deleted && m.kind == Kind::File,
+            core::cmp::Reverse(m.mtime_ns),
+            *h,
+        )
+    };
+    let mut first: BTreeMap<&str, (RecordHash, &Meta)> = BTreeMap::new();
+    for (h, m) in s.held.iter().filter_map(|(h, r)| Some((*h, r.meta()?))) {
+        if !m.tree {
+            let f = first.entry(m.path.as_str()).or_insert((h, m));
+            if rank(&h, m) < rank(&f.0, f.1) {
+                *f = (h, m);
+            }
+        }
+    }
+    let twin = |(at_path, bh, b): &(bool, RecordHash, Meta), h: &RecordHash, m: &Meta| {
+        same(b, m)
+            && !m.vector.covers(&b.dot)
+            && first.get(m.path.as_str()).is_none_or(|(f, _)| f != h)
+            && (!*at_path || rank(bh, b) < rank(h, m))
+    };
+    let twins: Vec<Meta> = s
+        .held
+        .iter()
+        .filter(|(h, _)| !base_hashes.contains(h))
+        .filter_map(|(h, r)| Some((h, r.meta()?)))
+        .filter(|(h, m)| bases.iter().any(|b| twin(b, h, m)))
+        .map(|(_, m)| m.clone())
+        .collect();
+    (bases.into_iter().map(|(_, _, m)| m).collect(), twins)
 }
 
 /// A drop observed at a device: what was dropped, the records that may
@@ -125,6 +296,9 @@ struct World {
     unexplained: Vec<String>,
     /// The records written whose vector pruning shortened.
     pruned: usize,
+    /// The writes made with a twin on the disk where they wrote (R1-5: the
+    /// histories meet twins).
+    twinned: usize,
 }
 
 impl World {
@@ -149,6 +323,7 @@ impl World {
             c_failures: Vec::new(),
             unexplained: Vec::new(),
             pruned: 0,
+            twinned: 0,
         }
     }
 
@@ -189,16 +364,22 @@ impl World {
             .iter()
             .filter_map(|(h, r)| Some((*h, r.meta()?.clone())))
             .collect();
-        let bases: Vec<Meta> = self.devs[i]
-            .ix
-            .s
-            .bases
-            .values()
-            .filter_map(|h| self.devs[i].ix.s.base_meta(h).cloned())
-            .collect();
+        let (mut bases, twins) = on_disk(&self.devs[i]);
         let Ok(w) = self.devs[i].write(changes) else {
             return;
         };
+        let at = |t: &Meta| {
+            changes.iter().any(|c| match c {
+                Change::Put(p) => t.path == p.path,
+                Change::Rename { from, to } => t.path == *from || t.path == to.path,
+                Change::TreeDelete { path, .. } => {
+                    licketysync_protocol::record::at_or_beneath(&t.path, path)
+                }
+                Change::Promote { to, .. } => t.path == to.path,
+            })
+        };
+        self.twinned += usize::from(twins.iter().any(at));
+        bases.extend(twins);
         for (h, _) in &w.records {
             let s = self.devs[i].signed(h).clone();
             self.archive.insert(*h, s);
@@ -207,11 +388,15 @@ impl World {
             self.opened(*h);
             self.check_c(h, &bases);
         }
-        // Property (k), as bases.py states it (the R1 review's IR-6): a
-        // version the write dropped was on the disk there, a base at its own
-        // path (or, for a scan's tree delete, at or beneath its directory),
-        // or a base there covered it, or a base there is a later record of
-        // its device.
+        // Property (k), as bases.py states it (the R1 review's IR-6), its
+        // content on the disk counted as on the disk (the identical-heads
+        // fix of 2026-11-08): a version the write dropped was on the disk
+        // there, a base at its own path or a twin of one (or, for a scan's
+        // tree delete, at or beneath its directory), or one of those there
+        // covered it, or one of those there is a later record of its device
+        // (for a tree delete, at another path beneath its directory too:
+        // "Why it is safe" 8(a), a version held but not yet on the disk
+        // included, the owner's decision of 2026-11-08).
         let tree_dirs: Vec<&str> = changes
             .iter()
             .filter_map(|c| match c {
@@ -291,6 +476,29 @@ impl World {
                         m,
                     ))],
                 );
+            }
+            Op::Edit { dev, path, content } => {
+                // What the engine has put on the disk stays as it was: a
+                // version still arriving there is no base.
+                let i = pick(dev, w);
+                let m = self.devs[i].mtime + 1_000;
+                self.devs[i].mtime = m;
+                self.write(
+                    i,
+                    &[Change::Put(super::kit::file(
+                        PATHS[usize::from(path)],
+                        content,
+                        m,
+                    ))],
+                );
+            }
+            Op::Mkdir { dev, path } => {
+                let i = pick(dev, w);
+                let p = DIRS[usize::from(path) % DIRS.len()];
+                self.devs[i].apply(p);
+                let m = self.devs[i].mtime + 1_000;
+                self.devs[i].mtime = m;
+                self.write(i, &[Change::Put(super::kit::dir(p, m))]);
             }
             Op::Delete { dev, path } => {
                 let i = pick(dev, w);
@@ -422,12 +630,13 @@ impl World {
         self.note_held(j);
     }
 
-    /// Property (c), for a record just written from `bases` (the writer's
-    /// bases before the write): its vector is the full join of the bases it
-    /// was written from (at its path, or at and beneath a tree delete's
-    /// directory), with entries taken out and none added or raised, so it
-    /// covers a subset of what that join covers, and what it drops with
-    /// pruning it drops without (4.4 "Why it is safe" 5 and 7).
+    /// Property (c), for a record just written from `bases` (what the writer
+    /// had on its disk before the write, [`on_disk`]: its bases and their
+    /// twins): its vector is the full join of those it was written from (at
+    /// its path, or at and beneath a tree delete's directory), with entries
+    /// taken out and none added or raised, so it covers a subset of what that
+    /// join covers, and what it drops with pruning it drops without (4.4 "Why
+    /// it is safe" 5 and 7).
     fn check_c(&mut self, h: &RecordHash, bases: &[Meta]) {
         let Some(m) = self.index_meta(h) else {
             return; // a cleanup: no vector
@@ -626,6 +835,103 @@ fn a_line_through_five_writers_prunes_c() {
     }
 }
 
+/// Two writers make one file and one directory alike, apart; after a round
+/// one writes over the file and the other deletes `d`, each with a twin on
+/// its disk where it writes, at the directory's own path and beneath it,
+/// and (c) and (k) hold at every cap: the histories meet twins whatever the
+/// random cases are (R1-5).
+#[test]
+fn a_history_of_twins_meets_them_c_k() {
+    let ops = [
+        Op::Write {
+            dev: 0,
+            path: 2,
+            content: 1,
+        },
+        Op::Write {
+            dev: 1,
+            path: 2,
+            content: 1,
+        },
+        Op::Mkdir { dev: 0, path: 0 },
+        Op::Mkdir { dev: 1, path: 0 },
+        Op::Round { a: 0, b: 1 },
+        Op::Write {
+            dev: 0,
+            path: 2,
+            content: 2,
+        },
+        Op::TreeDelete { dev: 1 },
+    ];
+    for cap in [2, 3, 32] {
+        let w = run(&ops, WRITERS, cap);
+        assert_eq!(w.twinned, 2, "both writes over twins at {cap}");
+        assert!(w.unexplained.is_empty(), "at {cap}: {:?}", w.unexplained);
+        assert!(w.k_failures.is_empty(), "(k) at {cap}: {:?}", w.k_failures);
+        assert!(w.c_failures.is_empty(), "(c) at {cap}: {:?}", w.c_failures);
+    }
+}
+
+/// A write made while versions of its path are still arriving, beside a
+/// concurrent record of its base's content that is first among the heads
+/// (the confirm review's C1): device 0's base at `a` is X (`mtime_ns`
+/// 4 000); device 1, holding X on its disk, writes Y over it, other
+/// content, at 2 000; device 2 writes Z apart, X's content, at 3 000, so
+/// that Z comes after X in display order but first among the heads, the
+/// record the engine would put at `a`. Device 0 holds Y and Z, applies
+/// neither, and edits `a`: Z is not on its disk, the edit leaves it and Y
+/// beside it, and (k) holds at every cap. Before, the edit covered Z as X's
+/// twin, and (k) failed.
+#[test]
+fn a_write_beside_a_twin_first_among_the_heads_leaves_it_k() {
+    let ops = [
+        Op::Write {
+            dev: 0,
+            path: 1,
+            content: 0,
+        },
+        Op::Write {
+            dev: 0,
+            path: 1,
+            content: 1,
+        },
+        Op::Write {
+            dev: 0,
+            path: 0,
+            content: 1,
+        },
+        Op::Round { a: 0, b: 1 },
+        Op::Write {
+            dev: 1,
+            path: 0,
+            content: 2,
+        },
+        Op::Write {
+            dev: 2,
+            path: 1,
+            content: 2,
+        },
+        Op::Write {
+            dev: 2,
+            path: 0,
+            content: 1,
+        },
+        Op::Round { a: 0, b: 1 },
+        Op::Round { a: 0, b: 2 },
+        Op::Edit {
+            dev: 0,
+            path: 0,
+            content: 0,
+        },
+    ];
+    for cap in [2, 3, 32] {
+        let w = run(&ops, WRITERS, cap);
+        assert!(w.unexplained.is_empty(), "at {cap}: {:?}", w.unexplained);
+        assert!(w.k_failures.is_empty(), "(k) at {cap}: {:?}", w.k_failures);
+        assert_eq!(w.devs[0].heads("a").len(), 3, "the edit, Z and Y at {cap}");
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { max_shrink_iters: 256, ..super::proptest_config(12) })]
 
@@ -634,8 +940,10 @@ proptest! {
     /// (b) no record covers a record that knows it; (f) a sealed peer drops a
     /// record only when a held record or an applying group names it; (k) no
     /// write covers a held version whose content was not on the writer's
-    /// disk unless a base there covered it; (j) a reopen of the store gives
-    /// the same index, on every device.
+    /// disk (a base there or a twin of one) unless one of those there covered
+    /// it or is a later record of its device (for a tree delete, at or
+    /// beneath its directory); (j) a reopen of the store gives the same
+    /// index, on every device.
     #[test]
     fn histories_keep_claims_a_b_c_f_j_k(ops in history(28), cap in prop_oneof![Just(2usize), Just(3), Just(32)]) {
         let mut w = run(&ops, WRITERS, cap);

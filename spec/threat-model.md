@@ -325,18 +325,32 @@ since there is no per-writer table and a vector never holds more than 32 entries
 others is that a device that was away while more than 32 device IDs wrote one path sees an old
 version of it as a conflict copy once (`protocol.md` §4.4, "Why it is safe" 5, TM-41); **flood
 heads**: sign any number of concurrent versions of one path, which every peer keeps until a write
-covers them, at most 32 per write (`protocol.md` §4.4); **issue cleanups**: name any record in a
-signed cleanup, so that every peer forgets it, the same power over sealed peers that writing over a
-file or deleting it gives over everyone (`protocol.md` §4.4, "Cleanup"); **exhaust counters**: sign
-a record whose counter is near `MAX_COUNTER`, after which no device can write in the folder until it
-is shared again, or one whose counter lies far in the future, which the Lamport rule carries to
-every later record until real time catches up and which moves the folder's own time forward by as
-much, so that every deletion is forgotten that much early, files coming back (the clock rule refuses
-a counter more than a year ahead, `protocol.md` §4.4); write names that are not in Unicode NFC,
-which readers do not check and which are then paths distinct from their NFC forms (`protocol.md`
-§4.4); flood with records and chunks; give the write key to anyone; act without being identified,
-since records name only a device ID their signer chooses, never shown as an author, and nothing
-records who changed what (the owner's decision, 2026-10-18).
+covers them, at most 32 per write (`protocol.md` §4.4), versions of one content (twins) as much as
+others: a write covers the twins of what its writer has on its disk, up to 32, and those left over
+are conflict copies of that content after an edit, or the file back after a delete, until the next
+write; and a tree delete names at most 32 records at its directory's own path, so records there
+from more than 32 device IDs (identical directories, or conflict copies) come back after it, until
+the next delete (`protocol.md` §4.4, "A tree delete"); **forge twins**: sign a version whose
+plaintext hashes are those of an honest device's version at a path, concurrent with it, after it in
+display order and not the first head there, which that device's next write there then covers and
+names (`protocol.md` §4.4, "Bases"), only removing the
+forged version, and whose vector the write joins. Through a tree delete that join reaches further
+than the forged version does: each entry of its vector covers the records of that entry's device at
+other paths beneath the directory, versions the deleter holds whose content may not have reached
+its disk ("Why it is safe" 8a). It gains the forger nothing it lacks: a forged version given a later
+`mtime_ns` becomes the base, its vector joined as much, with no twin at all; and a write holder can
+sign any tree delete, with any vector, itself; **issue cleanups**: name any record in a signed
+cleanup, so that every peer forgets it, the same power over sealed peers that writing over a file or
+deleting it gives over everyone (`protocol.md` §4.4, "Cleanup"); **exhaust counters**: sign a record
+whose counter is near `MAX_COUNTER`, after which no device can write in the folder until it is
+shared again, or one whose counter lies far in the future, which the Lamport rule carries to every
+later record until real time catches up and which moves the folder's own time forward by as much, so
+that every deletion is forgotten that much early, files coming back (the clock rule refuses a
+counter more than a year ahead, `protocol.md` §4.4); write names that are not in Unicode NFC, which
+readers do not check and which are then paths distinct from their NFC forms (`protocol.md` §4.4);
+flood with records and chunks; give the write key to anyone; act without being identified, since
+records name only a device ID their signer chooses, never shown as an author, and nothing records
+who changed what (the owner's decision, 2026-10-18).
 
 Cannot: be removed except by the others unlinking and sharing again by hand (TM-42); make honest
 peers that meet hold different records, because set digests over record hashes find every difference
@@ -1229,30 +1243,39 @@ short of records from the future and of stale copies that wait for the write hol
 cleanup that named them. A sealed peer or relay can still withhold records from a peer that meets no
 one else; it cannot make two read or write holders that meet disagree, nor make a read or write
 holder drop a version. Pruning and expiry may cost spurious conflicts or reappearance, never silent
-loss (TM-43). A local edit or delete is built only from the versions on the writing device's disk,
-so a version that has arrived but whose content has not reached the disk is never replaced by an
-edit made without it: the two become a conflict (`protocol.md` §4.4, "Bases"; "Why it is safe" 9). A
+loss (TM-43). A local edit or delete is built only from the versions on the writing device's disk
+and their twins, the other versions of the same content, concurrent with them and, at the path,
+after them in display order, never the first head, which it covers with them (so that a file two
+devices wrote alike,
+shown as one file, is one version after the next save: the identical-heads fix of 2026-11-08). So a
+version that has arrived but whose content has not reached the disk is never replaced by an edit
+made without it: the two become a conflict (`protocol.md` §4.4, "Bases"; "Why it is safe" 9), and a
+version of the same content is replaced only as the one already seen; a later version of it, one
+that changed only the mode say, and one the engine has yet to put at the path stay conflicts too. A
 writer-fault record that every release judges a fault goes when its path is next written, and the
 issue about it says that saving the file again clears it; the stated residual is that one at a file
 ID nobody writes again, and a cleanup that is itself a writer fault, stay on every tier
 (`protocol.md` §4.4, "Heads"). The stated residuals, each of which replaces a version as a later
 edit would and moves its file to the archive (TM-35): a tree delete also covers a version beneath
-its directory that its writer never held, when that version's device later wrote another record
-there that the writer did hold, which a relay or the order of a reconciliation can bring about for a
-file renamed within the directory (§3.3); two devices under one device ID (a cloned disk image) can
-replace each other's concurrent edits of a path one of them had written before, and so can a third
-device's edit made from one of their records; and a device restored from a backup while its clock
-reads earlier than its last write can have a new edit replaced by any record, its own or another
-device's, that carries one of its earlier counters, after a single write of that path since the
-backup, a tree delete included; a device that followed the clock rule's remedy can have its later
-edits of a path covered by its own records of the time its clock was ahead, once those come back
-(`protocol.md` §4.4, "Why it is safe" 8, "What adding the folder again leaves"). Stops honest peers
-diverging when a writer signs two histories, which per-writer sequence numbers or version vectors
-alone let both sides miss (Kleppmann 2022, "Making CRDTs Byzantine fault tolerant"), answered by
-keeping every concurrent version and comparing hashes of records; stops a storage party resolving or
-discarding anything; and, with TM-43, stops unbounded growth from turning into silent loss. Enforced
-by `index` (coverage, names, cleanups, live sets, set digests, the property tests of `protocol.md`
-§8 item 7) and `protocol` (the exchange); `engine` for the conflict copies and the archive.
+its directory that its writer never held, or held but had not yet on its disk, when that version's
+device later wrote another record there that the writer had on its disk, as a base or a twin, or
+knew of through one, which a relay or the order of a reconciliation can bring about for a file
+renamed within the directory (§3.3), and a folder linked on two devices can for a file still
+arriving when the folder is deleted (the owner's decision of 2026-11-08); two devices under one
+device ID (a cloned disk image) can replace each other's concurrent edits of a path one of them had
+written before, and so can a third device's edit made from one of their records; and a device
+restored from a backup while its clock reads earlier than its last write can have a new edit
+replaced by any record, its own or another device's, that carries one of its earlier counters, after
+a single write of that path since the backup, a tree delete included; a device that followed the
+clock rule's remedy can have its later edits of a path covered by its own records of the time its
+clock was ahead, once those come back (`protocol.md` §4.4, "Why it is safe" 8, "What adding the
+folder again leaves"). Stops honest peers diverging when a writer signs two histories, which
+per-writer sequence numbers or version vectors alone let both sides miss (Kleppmann 2022, "Making
+CRDTs Byzantine fault tolerant"), answered by keeping every concurrent version and comparing hashes
+of records; stops a storage party resolving or discarding anything; and, with TM-43, stops unbounded
+growth from turning into silent loss. Enforced by `index` (coverage, names, cleanups, live sets, set
+digests, the property tests of `protocol.md` §8 item 7) and `protocol` (the exchange); `engine` for
+the conflict copies and the archive.
 
 **TM-42. Removing someone is unlinking and sharing again, and the app says what that does not do.**
 There is no revocation and no re-key protocol (owner's decisions of 2026-10-18 and 2026-10-22): the
@@ -1273,13 +1296,17 @@ Bounding the index has two costs, both visible, neither a loss. Pruning a vector
 `MAX_VECTOR_ENTRIES` (the least recently active writer dropped first) can leave an older version
 live beside a newer one, shown as a conflict copy; forgetting a tombstone or tree delete after the
 365-day deletion horizon, or a cleanup after its 30 days, can bring a deleted file back, as the file
-or as a conflict copy, when a device or sealed peer that kept an old copy offers it again. Neither
-ever lets an older version replace a newer one, and nothing drops a version that no later signed
-record or cleanup replaces (`protocol.md` §4.4, "Why it is safe" 4 to 7 and 10 to 12). The same
-holds for the clock rule's leeway: a clock up to a year ahead makes deletions be forgotten up to
-that much early, so files come back, never go (TM-40). Stops the bounds that keep the index small
-from turning into silent loss, the failure the plan's hardening review found worse than a visible
-conflict. Enforced by `index` (pruning, expiry and the property tests of `protocol.md` §8 item 7).
+or as a conflict copy, when a device or sealed peer that kept an old copy offers it again. The same
+bound on a tree delete's names, 32 records at its directory's own path with their devices mandatory
+in its vector, brings back records there from more than 32 device IDs (identical directories, or
+conflict copies), until the next delete (`protocol.md` §4.4, "A tree delete"). None ever lets an
+older version replace a newer one,
+and nothing drops a version that no later signed record or cleanup replaces (`protocol.md` §4.4,
+"Why it is safe" 4 to 7 and 10 to 12). The same holds for the clock rule's leeway: a clock up to a
+year ahead makes deletions be forgotten up to that much early, so files come back, never go (TM-40).
+Stops the bounds that keep the index small from turning into silent loss, the failure the plan's
+hardening review found worse than a visible conflict. Enforced by `index` (pruning, expiry, the tree
+delete's names and the property tests of `protocol.md` §8 item 7).
 
 ## 5. What stays visible
 

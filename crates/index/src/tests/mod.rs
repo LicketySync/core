@@ -9,8 +9,10 @@
 //! open, the store and the transaction overlay; the property tests (a) to
 //! (m) of item 7 (`properties`; (l) also in `structures`, (m) in
 //! `structures` and `digests`); the structures that judge a tree delete
-//! without a walk and keep the digests (`structures`); and the regressions,
-//! each named after the bug it pins.
+//! without a walk and keep the digests (`structures`); the regressions,
+//! each named after the bug it pins; and the tests of concurrent heads with
+//! identical content, twins, under a write (`identical`, the identical-heads
+//! bug of 2026-11-08; item 7's vector of twins is theirs).
 
 #![allow(
     clippy::unwrap_used,
@@ -32,6 +34,7 @@ mod cleanups;
 mod digests;
 mod fuzz_seeds;
 mod heads;
+mod identical;
 pub(crate) mod kit;
 mod open;
 mod outcomes;

@@ -107,6 +107,13 @@ gate! {
     tree_delete => "engine-tree-delete",
     sealed_cleanup => "engine-sealed-cleanup",
     expiry => "engine-expiry",
+    identical_edit_0 => "engine-identical-edit-0",
+    identical_edit_1 => "engine-identical-edit-1",
+    identical_later_edits => "engine-identical-later-edits",
+    identical_earlier_edits => "engine-identical-earlier-edits",
+    identical_three => "engine-identical-three",
+    identical_delete => "engine-identical-delete",
+    identical_directories => "engine-identical-directories",
 }
 
 /// The stress run, outside the gate.

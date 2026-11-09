@@ -31,6 +31,11 @@
 //! in. A scenario whose edits must be made over versions already on the
 //! editor's disk (an edit made before is concurrent with the version, 4.4
 //! "Bases") makes them after that.
+//!
+//! The `engine-identical-*` runs (the `identical` module) are two or three
+//! members that write one path with the same bytes apart, meet, and then
+//! change it once: every twin is covered, and nothing of the old content is
+//! left anywhere (the identical-heads bug of 2026-11-08).
 
 use core::cell::RefCell;
 use core::time::Duration;
@@ -1171,7 +1176,7 @@ fn expiry_expect(run: &Run) -> Result<(), String> {
 pub type Builder = fn(u64) -> Run;
 
 /// Every engine scenario's name and builder.
-pub const ALL: [(&str, Builder); 18] = [
+pub const ALL: [(&str, Builder); 25] = [
     ("engine-clean", clean),
     ("engine-drops", drops),
     ("engine-drops-stress", drops_stress),
@@ -1190,6 +1195,19 @@ pub const ALL: [(&str, Builder); 18] = [
     ("engine-tree-delete", tree_delete),
     ("engine-sealed-cleanup", sealed_cleanup),
     ("engine-expiry", expiry),
+    (
+        "engine-identical-edit-0",
+        identical::equal_mtimes_zero_edits,
+    ),
+    ("engine-identical-edit-1", identical::equal_mtimes_one_edits),
+    ("engine-identical-later-edits", identical::later_twin_edits),
+    (
+        "engine-identical-earlier-edits",
+        identical::earlier_twin_edits,
+    ),
+    ("engine-identical-three", identical::three),
+    ("engine-identical-delete", identical::delete),
+    ("engine-identical-directories", identical::directories),
 ];
 
 /// The run of the engine scenario `name` for `seed`.
@@ -1214,6 +1232,8 @@ pub fn run(name: &str, seed: u64) -> Outcome {
     outcome.failure = Some(format!("no engine scenario `{name}`"));
     outcome
 }
+
+mod identical;
 
 #[cfg(test)]
 mod tests {

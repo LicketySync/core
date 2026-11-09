@@ -21,10 +21,12 @@
 //!   ahead of the clock is refused; everything else is verified, then held, or
 //!   held opaque, or dropped at once beneath a tree delete, dropping what it
 //!   replaces.
-//! - Writing ([`Txn::write`], [`Change`]): `S` from the path's bases, the
-//!   vector its join pruned to 32, the names, tree deletes with their
-//!   tombstones and cleanup, conflict copies made ordinary files, one batch
-//!   one commit; and the cleanups of a round's end ([`Txn::end_round`]).
+//! - Writing ([`Txn::write`], [`Change`]): `S` from the path's bases and
+//!   their twins (the heads of a base's content concurrent with it and, at
+//!   the path, after it in display order, never the first head), the vector
+//!   its join pruned to 32, the names, tree deletes with their tombstones
+//!   and cleanup, conflict copies made ordinary files, one batch one commit;
+//!   and the cleanups of a round's end ([`Txn::end_round`]).
 //! - Opening ([`Index::open`]): every stored record and base checked again on
 //!   every core (TM-9), held again in its stored order, the high-water mark
 //!   checked, a folder whose records lie more than a year ahead of the clock

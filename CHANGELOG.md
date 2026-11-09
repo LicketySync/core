@@ -6,6 +6,263 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Cover every identical concurrent head when writing over a path (the identical-heads bug, found
+  and confirmed on 2026-11-08): when two devices wrote the same bytes at one path apart, the next
+  save, delete, rename or tree delete covered one of the two versions, and the other stayed on every
+  device. A folder linked on two devices that already hold it makes every file such a pair.
+  - **The bug.** Two heads whose content does not differ (two files with the same `plain_hashes`,
+    two directories, two tombstones) show as one file with no conflict copy, so the engine names
+    one of them, the first in display order, as the path's base (4.4, "Bases"; `apply_path` in
+    `crates/engine/src/sync/disk.rs`). `Txn::s_at` built `S` from the bases alone, and
+    `Txn::plan_tree_delete` its join, so a write covered that head only, and every other twin stayed
+    live on every device: after an edit, a conflict copy of the old content; after a delete or a
+    rename, the old file back at the path; after a tree delete of two identical directories, the
+    directory back; after a new version over two tombstones, a second head. The editing device's own
+    twin was left whenever the other's sat at the path. The spec contradicted itself: section 9
+    ("Two devices create the same file independently") and 4.4's "the write covers every head it
+    holds" said the next save covers both, while 4.4 "Bases" kept one base per path.
+  - **The fix**, in the index alone, with no store-format or engine change. A base's **twins** are
+    the other live heads at its path that hold its content and are concurrent with it
+    (`write::twin_of`): their content does not differ (`views::same_content`: two tombstones
+    whatever their kinds, two directories, two files with the same plaintext hashes; never a tree
+    delete), their vector does not cover the base's dot, for the base at the path itself they come
+    after it in display order, and none is the first head in display order at the path, the record
+    the engine puts there (`Txn::twins_at`). `S` (`Txn::s_at`, `Txn::twins_at`,
+    `Txn::first_in_s_order`) is the bases and their twins, at most 32: the bases first, then the
+    twins, the device's own records first within each, then display order, so a twin never takes a
+    place a base would have had. The twins are named in `replaces` like any member of `S`. A tree
+    delete (`Txn::plan_tree_delete`, `Txn::twins_beneath`) joins the twins of the bases at or
+    beneath its directory with the bases; it names the first 32 of the bases and twins at its own
+    tag, in `S`'s order, their devices mandatory in its prune, so that its vector covers every
+    record it names; and it writes the tombstone that follows it for a twin its pruned vector
+    misses, as for a base.
+  - **The reviews' round** (2026-11-08: two reviewers and the security pass, every ruling taken).
+    - *What a twin is not* (R2-1, the security review's F1, R1-3). Twins were first every head of a
+      base's content. A later version of the base that changed only its mode or time, held but not
+      yet on the disk, was then a twin, and a local edit or delete covered it with no conflict copy
+      and nothing shown, against 4.7 item 6 ("never one over the other"); so was a concurrent
+      version of the content that comes first in display order, which the engine has yet to put at
+      the path, its time and mode not on the disk. Now a twin is concurrent with its base (its
+      vector does not cover the base's dot, for a conflict copy's base too) and, for the base at the
+      path, comes after it in display order. Neither condition implies the other (a concurrent
+      version with a later `mtime_ns` comes first; a later version with the same `mtime_ns` can come
+      after), so both are kept. Every case the fix was made for is one of concurrent twins, and all
+      still pass. Between concurrent twins, times and modes are still not compared (below, "For
+      phase 1").
+    - *The order of `S`* (F5). With the device's own records first, 32 records signed under its own
+      device ID with its base's content (a cloned image, or a write holder writing under its ID,
+      "Why it is safe" 8(b)) took every place of `S`, and a save did not cover the version it was
+      written from, another device's. The bases now come first.
+    - *A tree delete's names at its own path* (R1-1, R2-3, F2, F4). It named the bases there, then
+      their twins up to 32, and pruned its vector with no mandatory entry, two choices made apart:
+      with 40 identical directories it named records its vector missed (eight in the first author's
+      fixture, against 4.4 "Names" and "Why it is safe" 10), or left records neither named nor
+      covered (seven or eight in the reviewers' fixtures, the directory back, unstated). Now its
+      names are a subset of what its vector covers. R1-1's proposal, to name first the twins the
+      vector misses, would have named records the vector does not cover, so the security review's
+      rule was taken. The residual, stated in 4.4 ("A tree delete"), section 9's list,
+      `threat-model.md` §3.6 and TM-43: records at the directory's own path past the 32 named, of
+      more devices than the vector holds, stay heads, the directory (or a file at its name and its
+      conflict copies) back, until the next delete there takes them (40 identical directories: eight
+      left, whatever the display order).
+    - *A directory with 64 or more conflict copies at its path could not be deleted* (R1's finding
+      outside the fix, folded in because the same cap fixes it). A tree delete named every base at
+      its own tag with no cap, and past `MAX_REPLACES` the write was refused (`Draft(Replaces(72))`
+      with 71 copies), so the directory could not be deleted from that device. Its names there are
+      now at most 32; the copies past them that its vector does not cover stay heads until the next
+      delete there. Regression test
+      `a_directory_with_64_or_more_conflict_copies_at_its_path_can_be_deleted`.
+    - *A folder delete over a file still arriving* (R2-2, F3, R1-4; the owner's decision of
+      2026-11-08, "Delete it, archive (Recommended)"). A tree delete's join takes the dot and vector
+      of a base or twin beneath its directory, which can cover an earlier version of the same device
+      at another path beneath it that the deleter holds but has not yet put on its disk. Before the
+      fix this happened through bases; the fix made it happen through twins too, whatever the
+      display order. The owner chose the spec's option: a folder delete takes what is inside it, a
+      file still on its way included, which goes to the archive on the device that had it (TM-35).
+      "Why it is safe" 8(a) now covers versions held but not yet on the disk, reached through a
+      base's or twin's dot or vector; 9 has that exception for tree deletes; section 9's list,
+      TM-41's residuals and property (k)'s text (with the later-record clause its test checks) say
+      so; and `threat-model.md` §3.6 "forge twins" gives the two reasons a forged twin gains nothing
+      (a forged version with a later `mtime_ns` becomes the base anyway; a write holder can sign any
+      tree delete). No code change.
+    - *Wording* (R1-2, R2-4, F6): the rename rule's `S` (the bases at each path and their twins);
+      "Why it is safe" 3 and 10; 8(b)'s "clone", so that "twin" has one meaning in the spec;
+      section 6 (the twin rule never changes within major 1); 4.7 item 6; the comments of
+      `heads.rs`'s lost update and of `crates/engine/src/rules.rs`'s conflict test; and a dated note
+      in `gates/phase-0.md`'s TM-41 row.
+  - **The confirm review** (2026-11-08, with a security pass; every ruling taken).
+    - *A twin is never the first head* (C1). The display-order condition compared a twin with its
+      base, not with the path's heads, so it kept the head the engine has yet to put at the path out
+      of the twins only while the base at the path was itself the first head. Once a later version
+      still arriving had replaced the base (B's Y over A's X, other content or a mode change of X's
+      bytes), a concurrent record of X's bytes that sorts after X but first among the heads (C's Z)
+      counted as X's twin, and A's edit covered it, its mode and time gone with no conflict copy;
+      so did a record of a conflict copy's content first in display order, a copy's base having
+      twins whatever the display order. No bytes were lost (a twin's are a base's, on the disk),
+      and peers converged. Now `Txn::twins_at` also leaves out the first head in display order at
+      the tag (never a tree delete), the record the engine puts at the path, which counts only once
+      it is a base; both earlier conditions are kept, and a tree delete finds the twins beneath it
+      through `twins_at` too. 4.4 "Bases" says so ("a twin is never the first head in display order
+      at its path"), and "Why it is safe" 9, 4.7 item 6, sections 6, 8 item 7 and 9, TM-41,
+      `threat-model.md` §3.6's "forge twins", the TM-41 note in `gates/phase-0.md`, `on_disk` in
+      the property tests and the doc comments of the index's `write.rs` and `lib.rs` and the
+      engine's `write.rs` follow. Section 9's "one the device has yet to put on its disk" now reads
+      "at the path", as 4.4 and 4.7 item 6 say (below, "For phase 1": a twin of a conflict copy's
+      base that is not the first head is still covered, though the engine would write it beside
+      the path as a copy of its own).
+    - *Wording* (C2, C3). Section 6 and the TM-41 note in `gates/phase-0.md` give the display-order
+      condition for the base at the path alone. Section 9's list, §3.6 and TM-43 give the tree
+      delete's residual as records at the directory's own path from more than 32 devices, identical
+      directories or conflict copies (the reviewer deleted a directory with 63 file conflict copies
+      at its path from 63 devices: 32 named, `d` back as a file with 31 copies, alike on the
+      deleter, a read holder and a sealed holder), and TM-43 says "None ever lets…".
+    - *Tests* (C1, C4), each named after the behaviour, the reviewer's three probes among them; the
+      first five fail on 7105352 (its `write.rs` with these tests) and pass after:
+      `a_twin_first_among_the_heads_once_its_base_is_replaced_by_other_content_stays_a_conflict`
+      and `..._by_its_content_stays_a_conflict` (the edit named X and Z, and Z was gone on every
+      device; now X alone, and Z and Y are conflict copies on A, B and C),
+      `a_twin_of_a_conflict_copy_first_in_display_order_stays_a_conflict` (the edit named T with X
+      and the copy; now T is a conflict copy on A, C and E),
+      `a_tree_delete_leaves_a_twin_first_among_the_heads_beneath_it_once_its_base_is_replaced` (the
+      tree delete's join took Z's dot), and in `properties.rs`
+      `a_write_beside_a_twin_first_among_the_heads_leaves_it_k`, a fixed history in which (k)
+      failed, `on_disk` stating the first-head rule apart from the index's;
+      `a_concurrent_record_of_the_bases_content_ahead_of_it_but_not_first_stays_a_conflict` passes
+      before and after: it pins the display-order condition, which the first-head rule made
+      redundant in the round's test of it. `properties.rs`'s 114-character doc line is wrapped, and
+      `twins()` now makes the directory again over its twins in three of four histories that make
+      directories, by the device the history picks (before, only their tree-delete quarter met
+      directory twins): over 200 fixed-seed cases of `histories_keep_claims_a_b_c_f_j_k`, the cases
+      with a write made with a twin on the disk where it wrote went from 58 to 79 (93 such writes
+      to 123).
+  - **Past 32.** Twins compete for `S`'s 32 places. With 40 identical heads, a write covers 32, and
+    those last in `S`'s order stay heads: after an edit, conflict copies of the old content; after a
+    delete, the file back at the path; until the next write there, made with them on the disk,
+    covers them. Nothing is lost; 40 twins take two writes (tested below). The same holds for the
+    tombstone a tree delete writes at a path whose twin its pruned vector misses, and for a tree
+    delete's own path (above).
+  - **The spec.** `spec/protocol.md` 4.4: "Names"; "Bases" (the twins defined, and why); "The vector
+    and names of a new record" (`S` is the bases at `p` and their twins, the bases first; what
+    happens past 32; pruning; the rename; the tree delete's join, names, mandatory entries, residual
+    and tombstones); "A newer release's version"; "Heads" ("a write covers every head whose content
+    is on its writer's disk, at the path, as a conflict copy, or as a twin of either, up to 32");
+    "Why it is safe" 2, 3, 8, 9 ("A local write never replaces a version whose content its device
+    has not had on its disk, short of 8a for a tree delete") and 10. 4.7 item 6 ("The current
+    version", "Tree deletes", "Names and cleanups"). Section 6: the twin rule is fixed for major 1.
+    Section 8 item 7: the twins vectors and property (k). Section 9's list gains records at a
+    directory's own path from more than 32 devices and the file still arriving, and its rejected
+    alternatives the bases-only rule. Section 9 "Two devices create the same file independently" is
+    unchanged: its "The next save covers both" now holds. `spec/threat-model.md` §3.6: "flood heads"
+    with twins and the tree delete's residual, and "forge twins"; TM-41 (an edit is built from the
+    versions on the disk and their twins; the residual of 8(a)); TM-43 (the tree delete's names).
+  - **Tests.** The 14 tests that confirmed the bug, written first and committed with the fix, each
+    named after the behaviour: 8 at the record level in `crates/index/src/tests/identical.rs` (two
+    and three devices; the editor's own twin at the path or the other's; equal and different
+    `mtime_ns`; a delete; a rename; two directories under a tree delete; two tombstones under a new
+    version) and 6 in `crates/sim/src/scenarios/engine/identical.rs` (real engines apart until 10 s,
+    the twins written at 1 s, member 1's at 3 s in two variants, a probe at 45 s that every member
+    shows every twin and no copy, the change at 50 s, then the full oracle and a check that only the
+    change is left; five seeds each). Before the fix all 14 failed (`cargo nextest run --run-ignored
+    ignored-only`: 8 of 8 in the index, each on every editor; 6 of 6 in the simulator, every seed
+    passing the oracle and failing the check: every member agreed on the wrong result); after it all
+    pass. New with the fix: 40 twins and a conflict copy under a save by the device whose own twin
+    is last in display order (`S` its two bases, then its own twin, then the next 29 twins; nine
+    left, conflict copies of the old content; the next save covers them), and 40 twins under a
+    delete (32 covered, the file back, the next delete covers the rest, and a save then covers the
+    two tombstones, twins); a tree delete whose vector, pruned past 32 device IDs, keeps a base and
+    misses its twin (the tombstone after it, at the twin's path, covers it; a path whose twins the
+    vector covers gets none); a tree delete held beside a tombstone base, no twin of it (the
+    directory made again names the tombstone alone, and the tree delete stays held); the vector
+    `twins` in `crates/index/tests/vectors/heads.json` (entries added; none of the other vectors
+    changed). The seven simulator runs are gate scenarios, `engine-identical-edit-0`, `-edit-1`,
+    `-later-edits`, `-earlier-edits`, `-three`, `-delete` and `-directories`, in `engine::ALL`,
+    `scenarios::engine_scenarios` and `crates/engine/tests/converge.rs`: about 0.1 s each over the
+    gate's five seeds.
+  - **Tests of the reviews' round**, in `identical.rs`, each named after the behaviour, the
+    reviewers' probes among them. Eleven fail on the code before the round (575ad50's `write.rs`
+    with these tests: 11 of the 16 new or corrected tests fail, and so do property (k) and
+    `vector_heads`), and pass after it:
+    `a_later_version_that_changed_only_the_mode_at_the_same_mtime_stays_a_conflict`,
+    `..._at_a_later_mtime_stays_a_conflict` (R2-1's scenario and P3: both heads on both devices; one
+    head before), `..._at_an_earlier_mtime_stays_a_conflict` (after its base in display order, so
+    concurrency alone tells it from a twin),
+    `..._outlives_a_delete_made_before_it_reached_the_disk`,
+    `a_concurrent_twin_the_engine_has_yet_to_put_at_the_path_stays_a_conflict` (the second
+    condition alone: it fails with the first condition only),
+    `a_later_version_of_a_conflict_copy_with_its_content_stays_beside_an_edit`,
+    `records_under_the_writers_own_id_cannot_push_its_base_out_of_s` (P6),
+    `a_tree_delete_names_at_its_own_path_only_what_its_vector_covers` (P7, over the first author's
+    fixture, R1-1's mirrored one and R2-3's, P1's),
+    `forty_identical_directories_a_tree_delete_names_its_own_twin_first` (its doc comment and
+    assertions corrected: 32 go, eight are left, the next delete takes them),
+    `forty_identical_directories_in_any_display_order_go_within_two_tree_deletes` (R1-1's and
+    R2-3's fixtures) and `a_directory_with_64_or_more_conflict_copies_at_its_path_can_be_deleted`.
+    Five pin what the rulings keep and pass before and after:
+    `a_folder_delete_takes_a_file_beneath_still_arriving_through_a_twins_dot` and
+    `..._through_a_bases_dot` (P2, P2b and R2-2's probe: the file goes, on the deleter and on the
+    device that had it),
+    `a_twin_arriving_after_the_write_stays_a_head_a_conflict_copy_of_the_old_content` (P4, on all
+    three devices), `a_tombstone_beside_a_live_base_and_its_twin_is_no_twin_and_stays_a_head` and
+    `three_twins_and_two_identical_conflict_copies_go_with_one_save` (P5), and in `rules.rs`, for
+    two mutants of `plan_tree_delete`'s unchanged lines that survived both rounds,
+    `a_tree_delete_names_the_shared_faults_at_its_tag_up_to_max_replaces_and_its_cleanup_the_rest`
+    and `a_tree_deletes_cleanup_names_no_base_kept_outside_its_directory`. The vector `twins`
+    gains a later version of the base's content under a save and 40 directories under two tree
+    deletes, and its 40-twin `S` is listed in the new order. The property tests (R1-5) now meet
+    twins: files take one of three contents, histories make directories at `d` and `d/e`, write
+    while a version of the path is still arriving (`Op::Edit`), and a third of them start with
+    every writer writing one path apart (`twins()`); `on_disk` states the new twin rule apart from
+    the index's. Over 200 fixed-seed cases of `histories_keep_claims_a_b_c_f_j_k`, the cases with a
+    write made with a twin on the disk where it wrote went from one to 58 (93 such writes), and with
+    575ad50's `write.rs` property (k) now fails at the gate's 12 cases (a later version of a base's
+    content covered); `a_history_of_twins_meets_them_c_k` pins a fixed history. The index suite
+    takes about 9 s, 1 s more.
+  - **Mutants** (cargo-mutants 27.1.0, `-p licketysync-index -F` on the changed functions, under
+    `ci/mutants.sh`'s caps). With the fix: the first run left eight survivors in new code, which
+    three tests added since kill (`same_content`'s `||` made `&&`, the order of the twins a tree
+    delete named at its own tag, and the tombstone for a twin its pruned vector misses); the second,
+    33 caught, 11 unviable, 6 missed, none in new code. With the reviews' round, on `twin_of`,
+    `s_at`, `first_in_s_order`, `twins_at`, `twins_beneath`, `plan_tree_delete` and
+    `same_content`: 55 mutants, 34 caught, 15 unviable (a body replaced by a constant leaves its
+    arguments unused, which the workspace's `--deny=unused` refuses), 6 missed, none in new or
+    changed lines. Two are in lines of `plan_tree_delete` that neither round changed (`<` made
+    `<=` where shared writer faults fill `replaces` up to `MAX_REPLACES`, and `&&` made `||` in the
+    filter of the bases kept only as bases that its cleanup names); the two `rules.rs` tests above
+    kill them (checked by applying each by hand: its test fails). Four delete a field of a struct
+    update in other functions (`Txn::renumber`, `open`, `Txn::sign_and_hold`, `Txn::end_round`),
+    which cargo-mutants lists whatever `-F` says; they are the weekly run's to judge. `twin_of`
+    compares display ranks with `cmp(..).is_lt()`, since `<` made `<=` would be an equivalent
+    mutant: two records' ranks are never equal, the record hash ending them. Taking out either of
+    `twin_of`'s last two conditions by hand fails tests of its own (the concurrency: the mode change
+    at an earlier `mtime_ns`, the delete and the conflict copy; the display order: the concurrent
+    twin not yet at the path, and property (k); since the confirm review, whose first-head rule
+    keeps that twin out too, the record ahead of the base but not first, and property (k)). With
+    the confirm review, on `twin_of`, `twins_at` (the one function changed) and `twins_beneath`, in
+    6 minutes: 14 mutants in those three, 8 caught and 6 unviable, none missed, the new lines' among
+    the caught (`!` deleted in `!m.tree`, which seeks the first head among the tree deletes, and
+    `!=` made `==` in `Some(*h) != first`); and 13 struct-update field deletions in other functions,
+    which cargo-mutants lists whatever `-F` and `-E` say: 7 caught, 2 unviable, and missed the four
+    above. Taking out the first-head rule by hand fails the five tests of C1 that fail on 7105352.
+  - **For phase 1** (R1-3 as R2-1 rewords it, and R1-6):
+    - *Modes between concurrent twins.* Twins compare no time or mode: of concurrent twins that
+      differ in mode, one is on the disk (at the path, the first in display order; beside it, the
+      conflict copy the engine wrote), and a write covers the others with no conflict copy, a twin
+      of a conflict copy's base that the engine would have written beside the path as a copy of its
+      own included. Phase 0's engine writes mode 0 everywhere, so nothing shows today. Once modes
+      are recorded, is that right, or should a twin that differs in mode be a conflict copy? Before
+      1.0 it can change; after, section 6 makes it a new major.
+    - *Cost.* Finding twins compares every applied record at a tag with every base there, plaintext
+      hash by plaintext hash: heads times bases times chunks per write, and per path beneath a tree
+      delete. Write holders control both counts (flood heads; a conflict copy on the disk per head
+      of other content). Bound it with TM-22's phase 1 bounds, for example by comparing against the
+      distinct contents of the bases.
+  - **A follow-up, not in this change.** Identical conflict copies of a third head still make one
+    copy file each, with the same bytes: two twins concurrent with a head of other content that sits
+    at the path are two conflict copies of one content (the three-twin test showed it before the
+    fix, and the twins left past 32 after an edit are such copies). Showing them as one copy is a
+    change to the views and the engine's copy names.
+  - Reviewed by: (left for the coordinator).
+
 - Spike B's follow-ups, from its final confirm review (2026-11-04) and the reviews of this change: a
   test that holds `ci/check-wasm-bindgen.sh`'s lock branch; TM-22's residual (e) with its
   pre-authentication byte figure, which is not a memory bound, and the memory a connection can keep
@@ -1163,7 +1420,8 @@ paths or the API also names the security-reviewer pass.
     another order can differ there; should such a path follow the rule for a path with no heads?
     The oracle's (b′) needs no carve-out for it, since (b) refuses opaque records in every gate
     scenario; a future scenario that plants them must make (b′) skip each path with no heads and an
-    opaque record.
+    opaque record. And the identical-heads fix's two (its entry, "For phase 1", 2026-11-08): modes
+    between concurrent twins, and the cost of finding twins beside TM-22's bounds.
   - Dependencies: none new; the engine depends on the workspace's keys, protocol and index crates,
     dev-depends on the simulator and `proptest`; the simulator depends on the keys crate;
     `ci/geiger-baseline.txt`'s `engine` and `sim` lines now count the keys crate's dependencies.

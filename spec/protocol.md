@@ -734,10 +734,10 @@ on another: whether such a record arrives before or after any other changes noth
 **Names.** A record **names** the records whose fingerprints its `replaces` lists, and a cleanup
 names the records its groups list (below). Names are in the clear and signed, so every tier reads
 them. A write holder names only records whose signatures it has verified and that it has judged
-replaced by vectors or forgotten: the bases its write replaces, stale copies its write covers, and,
-in cleanups, what the cleanup cases list (below). So for read and write holders a name says no more
-than coverage and expiry already do ("Why it is safe" 10); for sealed peers it is the only thing
-that replaces a version.
+replaced by vectors or forgotten: the bases and twins its write replaces, stale copies its write
+covers, and, in cleanups, what the cleanup cases list (below). So for read and write holders a name
+says no more than coverage and expiry already do ("Why it is safe" 10); for sealed peers it is the
+only thing that replaces a version.
 
 **Bases.** A read or write holder that puts versions on its disk keeps, for each path, its
 **bases**: the records whose content it has on disk there, that is the version the file at the path
@@ -761,21 +761,53 @@ a write over the conflict turns the copy into a version at its own path ("What b
 copy"), that version becomes the base of the copy's own path, and the copy is no longer a base of
 the original one. Sealed holders put nothing on disk and keep no bases.
 
+A base's **twins** are the other live heads at its path that hold its content and are concurrent
+with it: their content does not differ from the base's (below, "Heads": two directories, two files
+with the same `plain_hashes`, or two tombstones whatever their kinds; a tree delete is no one's
+twin); their vector does not cover the base's dot, so a later version of the base, one that changed
+only its mode or time say, is never its twin; for the base at the path itself, they come after it in
+display order (below); and a twin is never the first head in display order at its path, the record
+the engine puts there, which counts only once it is a base. So a twin is never the head the engine
+has yet to put at the path, whose time and mode are not yet on the disk, even when the base at the
+path is no longer the first head (a later version of it still arriving replaced it) or the twin
+matches a conflict copy's base. Neither the second condition nor the third implies the other: a
+concurrent version with a later `mtime_ns` comes first, and a later version with the same `mtime_ns`
+can come after. A conflict copy's base has twins by all but the third, its place being beside the
+path whatever the display order. The display order shows a base and its twins as one file with no
+conflict copy, and the engine names only one of them as the base, but the content of each is on the
+disk as much as the base's is, so a write counts the twins with the bases (below). Between a base
+and its twins, concurrent, times and modes are not compared: the time and mode on the disk are the
+base's, which at the path comes first of them in display order. Twins are common: two devices that
+create the same file apart make a pair, and a folder linked on two devices that already hold it
+makes every file a pair (the identical-heads fix of 2026-11-08: before it, a write counted the bases
+alone and covered one twin, and the others stayed live on every device, a conflict copy of the old
+content after an edit, the old file back after a delete or a rename, a deleted directory back; the
+reviews of the fix made a twin concurrent with its base, not ahead of the base at the path and never
+the first head, so that a version still arriving whose only change is its mode or time stays a
+conflict, 4.7 item 6).
+
 **The vector and names of a new record.**
 
 - **A version or a tombstone** that device `d` writes at path `p`, from what it finds on its disk:
-  let `S` be `d`'s bases at `p` (above), never a tree delete, at most `MAX_VECTOR_ENTRIES` (32) of
-  them, its own records first and then the first in display order (below) when there are more. `S`
-  is built from what is on `d`'s disk and never from what it holds: a version `d` holds whose
-  content is not yet on its disk is not in `S`, so the write does not cover it, and it stays a head
-  beside the write, a conflict (the owner's rule that an edit is never silently replaced; "Why it is
-  safe" 9). Every live record at `p` that is not in `S` stays a head until a later write covers it.
-  The vector is the **join** of the dots and vectors of `S` (for each device, the greatest counter
-  that any record of `S` gives it, in its vector or as its own dot), then pruned. A write therefore
-  covers every record in `S`, and every record that those covered, unless pruning took that record's
-  entry out. An edit, a delete and a write that resolves a conflict (`d` holding the conflict's
-  heads on its disk, at the path and as conflict copies) are all this one rule; a path new to `d`
-  has `S` empty and an empty vector.
+  let `S` be `d`'s bases at `p` (above) and their twins there, never a tree delete, at most
+  `MAX_VECTOR_ENTRIES` (32) of them: the bases first, then the twins, its own records first within
+  each, then the first in display order (below) when there are more (decision: so a twin never takes
+  a place a base would have had, and records signed under `d`'s own device ID, "Why it is safe"
+  8b, cannot push its base out). `S` is built from what is on `d`'s disk and never from what it
+  holds: a version `d` holds whose content is not yet on its disk is not in `S`, so the write does
+  not cover it, and it stays a head beside the write, a conflict (the owner's rule that an edit is
+  never silently replaced; "Why it is safe" 9). A twin's content is a base's, on the disk, and a
+  time or mode in which a twin differs from its base was never there, the base's being shown in its
+  place, so covering it replaces no content the person has not seen. Every live record at `p` that
+  is not in `S` stays a head until a later write covers it. So do the twins past 32, the last in
+  that order: beside the write they are conflict copies of the old content after an edit, or the old
+  file back after a delete, until the next write there, made with them on the disk, covers them (40
+  twins take two writes). The vector is the **join** of the dots and vectors
+  of `S` (for each device, the greatest counter that any record of `S` gives it, in its vector or as
+  its own dot), then pruned. A write therefore covers every record in `S`, and every record that
+  those covered, unless pruning took that record's entry out. An edit, a delete and a write that
+  resolves a conflict (`d` holding the conflict's heads on its disk, at the path and as conflict
+  copies) are all this one rule; a path new to `d` has `S` empty and an empty vector.
 - **Its names.** The record's `replaces` lists, first, the fingerprint of every record in `S` (at
   most 32); then the fingerprint of every record held at `p`'s tag that `d` judges a **shared writer
   fault**, one whose seal fails a check of step 7 other than the check of `kind`: those checks are
@@ -796,34 +828,45 @@ the original one. Sealed holders put nothing on disk and keep no bases.
   because its `kind` is one this release does not know is not named: it may be a newer release's
   version ("Latest only, as read and write holders keep it", below).
 - **Pruning.** When the join has more than `MAX_VECTOR_ENTRIES` (32) entries, the record keeps its
-  **mandatory** entries, those of the devices of the records in `S`, and fills the remaining places
-  with the other entries of greatest counter, the smaller device ID first between equal counters;
-  the rest are dropped. Since counters follow writes, the entries dropped are those whose devices
-  wrote least recently on that path's line of versions: the least recently active writer goes
-  first (the owner's choice of 2026-10-25 between a count and a time window), as Riak prunes its
-  vector clocks (Sheehy, "Why Vector Clocks Are Hard", 2010). The mandatory entries are at most 32,
-  one per record of `S`, so they always fit.
+  **mandatory** entries, those of the devices of the records in `S` (for a tree delete, of the
+  records it names at its own path, below), and fills the remaining places with the other entries of
+  greatest counter, the smaller device ID first between equal counters; the rest are dropped. Since
+  counters follow writes, the entries dropped are those whose devices wrote least recently on that
+  path's line of versions: the least recently active writer goes first (the owner's choice of
+  2026-10-25 between a count and a time window), as Riak prunes its vector clocks (Sheehy, "Why
+  Vector Clocks Are Hard", 2010). The mandatory entries are at most 32, one per record of `S` or of
+  those a tree delete names, so they always fit.
 - **A rename** from `p` to `q` is two records, written in this order: a version at `q` (with `S` the
-  bases at `q`), then a tombstone at `p` (with `S` the bases at `p`). Written in that order and
-  pushed in it (4.5), a peer that receives both from one device over one connection sees at worst
-  both paths for a moment, never neither; from two devices, or through a reconciliation, the
-  tombstone may arrive first. A directory moved with what it holds is a version at every new path,
-  then a tree delete of the old directory. A copy is a version at the new path.
+  bases at `q` and their twins), then a tombstone at `p` (with `S` the bases at `p` and their
+  twins). Written in that order and pushed in it (4.5), a peer that receives both from one device
+  over one connection sees at worst both paths for a moment, never neither; from two devices, or
+  through a reconciliation, the tombstone may arrive first. A directory moved with what it holds is
+  a version at every new path, then a tree delete of the old directory. A copy is a version at the
+  new path.
 - **A tree delete** of directory `P` that `d` writes when its disk no longer holds `P`: its vector
   is the join of the dots and vectors of every base `d` keeps at or beneath `P` (the versions on its
-  disk there, and the tombstones and tree deletes it applied there), pruned with no mandatory entry;
-  its `replaces` names the bases at `P`'s own tag, then the shared writer faults held there (as
-  above). Like `S`, the join is built from the disk: a version `d` holds beneath `P` whose content
-  never reached its disk is not in it, and survives the delete. Opaque records are never bases, so
-  they are in neither. When the pruned vector leaves some base beneath `P` uncovered, `d` then
-  writes a tombstone at that base's path (as above), after the tree delete, so that `d` holds
-  nothing of its own beneath `P` but tombstones; this happens when more than 32 device IDs wrote
-  what lies beneath `P`, and the files of the devices pruned out each get a tombstone. In the same
-  commit `d` writes a cleanup, `because` the tree delete, naming every record beneath `P` that it
-  held or kept as a base and that the tree delete covers (below), so that sealed peers forget them.
-  The vector is that of the tree `d` deletes, not of the whole folder (decision: a folder-wide
-  vector would cover more versions that `d` never held, "Why it is safe", and would fill its 32
-  places with devices that never wrote beneath `P`).
+  disk there, and the tombstones and tree deletes it applied there) and of their twins, pruned with
+  the devices of the records it names at `P`'s own tag mandatory; its `replaces` names, first, the
+  bases at `P`'s own tag and their twins there, at most 32 of them, in `S`'s order (above), then the
+  shared writer faults held there (as above). So its vector covers every record it names ("Names"),
+  and its names stay within `MAX_REPLACES` however many conflict copies sit at `P`'s own path
+  (decision of 2026-11-08: before, it named every base there, and with 64 or more the write was
+  refused, so `d` could not delete the directory). A record at `P`'s own tag past those 32 goes if
+  the vector covers it, and otherwise stays a head until the next delete there: when more than 32
+  device IDs made `P` alike, apart, the directory comes back, until it is deleted again, made with
+  them on the disk (a stated residual, section 9; `threat-model.md` TM-43). Like `S`, the join is
+  built from the disk: a version `d` holds beneath `P` whose content never reached its disk is not
+  in it, and survives the delete, unless the join reaches a later record of its device beneath `P`
+  ("Why it is safe" 8a). Opaque records are never bases or twins, so they are in neither. When the
+  pruned vector leaves some base or twin beneath `P` uncovered, `d` then writes a tombstone at its
+  path (as above, `S` holding that path's bases and twins), after the tree delete, so that `d` holds
+  nothing of its own beneath `P` but tombstones; this happens when more than 32 device IDs wrote at
+  or beneath `P`, and the files of the devices pruned out each get a tombstone. In the same commit
+  `d` writes a cleanup, `because` the tree delete, naming every record beneath `P` that it held or
+  kept as a base and that the tree delete covers (below), so that sealed peers forget them. The
+  vector is that of the tree `d` deletes, not of the whole folder (decision: a folder-wide vector
+  would cover more versions that `d` never held, "Why it is safe", and would fill its 32 places with
+  devices that never wrote beneath `P`).
 
 **Latest only, as read and write holders keep it.** For each file ID, a read or write holder holds
 that tag's **live** records: those not **replaced**, where a record is replaced when a record held
@@ -845,12 +888,13 @@ at the record's own tag.
   writes over that version, as for any version. No release silently replaces such a version. This
   release never names it: it is no shared writer fault, never a base and never covered here, so it
   is neither in `S`, nor among the shared faults, nor a stale copy, and no cleanup case reaches it.
-  And at a release that can read it, a write made here covers it only through an entry that one of
-  this device's bases brought (its vector is the join of its bases), that is through a base that
-  already covered it or was a later record of its own device at the path, so a version that came
-  after it ("Why it is safe" 3 and 9); otherwise the newer release holds the write and the newer
-  version side by side, a conflict, and loses neither. Tree deletes and cleanups written here are
-  built the same way, from bases and from what this release can judge.
+  And at a release that can read it, a write made here covers it only through an entry that a
+  record of `S` brought (its vector is the join of `S`, this device's bases and their twins), that
+  is through a base or twin that already covered it or was a later record of its own device at the
+  path, so a version that came after it ("Why it is safe" 3 and 9); otherwise the newer release
+  holds the write and the newer version side by side, a conflict, and loses neither. Tree deletes
+  and cleanups written here are built the same way, from bases, their twins and what this release
+  can judge.
 - Nothing else drops a record: what replaces it is a signed record or cleanup that the device holds,
   and expiry drops only tombstones, tree deletes and cleanups. A base kept only as a base (above) is
   no held record, and goes when the engine names a newer base. No peer's say-so and no clock drops a
@@ -1144,8 +1188,10 @@ verification below.
   ordered together (the views, 4.7), opaque ones come after every head, by ascending record hash
   (decision: a reader can compare nothing else of them).
 - One head is the path's current version; a tombstone head means the path is deleted. Two or more
-  heads are a **conflict**, and every head is kept until a write covers them; the write covers every
-  head it holds, up to 32, so writing the path resolves its conflict, and contents are never merged.
+  heads are a **conflict**, and every head is kept until a write covers them; a write covers every
+  head whose content is on its writer's disk, at the path, as a conflict copy, or as a twin of
+  either ("Bases"), up to 32, so writing the path resolves its conflict, and contents are never
+  merged.
   The **display order** of a path's heads is: heads that are not tombstones first, and among those
   directories before files (decision: a directory's children need it at the path); tombstones last,
   whose kind is not compared; then, within each of these groups, the greater `mtime_ns` first; then
@@ -1159,7 +1205,7 @@ verification below.
   file and one tombstone show the file and make no copy (an edit beats a delete); a file and a
   directory show the directory and make the file a conflict copy; two files with different content
   show the one first in display order and copy the other; two identical files or two directories
-  show the first and copy nothing.
+  show the first and copy nothing, twins that the next write covers together.
 - **What becomes of a conflict copy.** Until some device writes the path, a copy is the index's
   second head, which every device shows the same way. The device that writes the path over a
   conflict, holding the heads on its disk, first writes each conflict copy it has on disk as a
@@ -1195,17 +1241,18 @@ holder can do anyway by writing over it.
 2. *Every entry of a vector names a record that the vector's record knows.* Each entry `(e, c)` of a
    version or tombstone's vector is the dot of a record that `e` wrote at the same tag and that the
    record knows; for a tree delete, at or beneath its tag. By induction on writes: the entries come
-   from the dots of the bases in `S`, or in a tree delete's join, which the writer kept, and from
-   their vectors, whose entries name records they knew; a join keeps one of the counters it
-   compares, and pruning only removes.
+   from the dots of the records in `S`, or in a tree delete's join (bases, which the writer kept,
+   and their twins, which it held), and from their vectors, whose entries name records they knew; a
+   join keeps one of the counters it compares, and pruning only removes.
 3. *Coverage means "after".* If `V` covers `U`, then `V` knows `U`, or `V` knows a record that `U`'s
    device wrote after `U`: at `U`'s tag, or, for a tree delete `V`, at or beneath its tag. For
    `V.vector[U.device_id] = c ≥ U.counter` names, by 2, a record `U'` of `U`'s device that `V`
    knows; if `c = U.counter`, `U'` is `U` (A1, A2); otherwise `U'` came after `U` on its device (A1,
    the writer's rule). For a version, `U'` was written by `U`'s own device at `U`'s path after `U`,
-   from its bases there, which put its own records first: so `U` was in that `S`, or had been
-   replaced there by an applied version that `U'`'s `S` held, through a chain of records each
-   covering the one before, or deleted there. `V` replacing `U` follows the path's own history.
+   from its bases there and their twins, which put the bases first and its own records first among
+   them: so `U` was in that `S`, or had been replaced there by an applied version that `U'`'s `S`
+   held, through a chain of records each covering the one before, or deleted there. `V` replacing
+   `U` follows the path's own history.
 4. *An older version never replaces a newer one.* If `V` knows `U`, then `U` does not cover `V`: `U`
    covering `V` needs `V.counter ≤ U.vector[V.device_id] < U.counter`, and `V` knowing `U` needs
    `U.counter < V.counter` (1). This looks at no entry but dots, so it holds however much either
@@ -1238,21 +1285,26 @@ holder can do anyway by writing over it.
    that a stale peer still holds can come back, and nothing is deleted that `D`'s join did not
    reach.
 8. *Stated residuals.* (a) By 3's second case, a tree delete also covers a version beneath its
-   directory that its writer never held, when it held a later record that the version's device wrote
-   at or beneath that directory: the version's device wrote it, then wrote something else in the
-   same tree, and only the second reached the deleter before the delete. The commonest case is a
-   rename within the directory: a version at `P/b` and then a tombstone at `P/a`, of which the
-   deleter received only the tombstone, so that deleting `P` also deletes `P/b`, which it never saw.
-   Arrival order makes it, so a relay that withholds the version, or a reconciliation that happens
-   to deliver the tombstone's subtree first, can bring it about (`threat-model.md` §3.3). That
-   version was written before the delete in the order the folder's devices saw events (Lamport
-   1978); it is deleted, and the engine moves it to the archive wherever it was held. A tombstone
-   per file would spare it; it is the price of one record per tree, and a folder-wide vector would
-   widen it to the whole folder ("The vector and names of a new record"). (b) A1 fails when two
-   devices write under one device ID: a cloned disk image that carries the device seed, or a write
-   holder that writes under another's ID. Records with one dot stay concurrent, but a record can
-   cover a concurrent record of the other device at the same path when its vector gives their shared
-   ID a counter at least the other's: one that either twin wrote over its own earlier record of that
+   directory that its writer never held, or held but had not yet on its disk, when its join reached
+   a later record that the version's device wrote at or beneath that directory, as the dot of a
+   base or twin there or through one's vector: the version's device wrote it, then wrote something
+   else in the same tree, and only the second reached the deleter's disk before the delete. The
+   commonest case is a rename within the directory: a version at `P/b` and then a tombstone at
+   `P/a`, of which the deleter received only the tombstone, so that deleting `P` also deletes `P/b`,
+   which it never saw. Another is a folder linked on two devices, deleted on one while a file only
+   the other had is still arriving there, when a file the other wrote after it beneath the folder
+   holds what one of the deleter's holds, a twin or the base there (the owner's decision of
+   2026-11-08: a folder delete takes what is inside it, a file still on its way included). Arrival
+   order makes it, so a relay that withholds the version, or a reconciliation that happens to
+   deliver the tombstone's subtree first, can bring it about (`threat-model.md` §3.3). That version
+   was written before the delete in the order the folder's devices saw events (Lamport 1978); it is
+   deleted, and the engine moves it to the archive wherever it was on a disk. A tombstone per file
+   would spare it; it is the price of one record per tree, and a folder-wide vector would widen it
+   to the whole folder ("The vector and names of a new record"). (b) A1 fails when two devices write
+   under one device ID: a cloned disk image that carries the device seed, or a write holder that
+   writes under another's ID. Records with one dot stay concurrent, but a record can cover a
+   concurrent record of the other device at the same path when its vector gives their shared ID a
+   counter at least the other's: one that either clone wrote over its own earlier record of that
    path at such a counter, or one a third device wrote from such a record. The covered record is
    replaced, and its file goes to the archive. (c) A2 fails when a device's index store is restored,
    rebuilt or lost and its clock reads earlier than its last write before: its next records may take
@@ -1265,19 +1317,28 @@ holder can do anyway by writing over it.
    and the residual is closed. The clock rule's remedy is a case of it ("The clock rule", "What
    adding the folder again leaves"), where the later counters can return only once real time has
    come within a year of them.
-9. *A local write never replaces a version its device has not had on its disk.* `S`, and a tree
-   delete's join, are built from bases alone (above). A held version `V` that is not a base is
-   covered by the write only through an entry that some base `B` brings: `B` covers `V`, or `B` is a
-   later record of `V`'s own device at that path; either way, by 3, the disk already held a version
-   that came after `V`. Its names are the fingerprints of `S` and of stale copies the new vector
-   covers, so they add nothing. So a version that arrived but whose content had not reached the disk
-   when the person changed or deleted the file stays live beside the write: a conflict, or, against
-   a delete, a file that comes back. The old file stays on disk until the new content is in place
-   (4.7), so the base and the disk agree. This needs A1 and A2, as 3 does: two records under one dot
-   are covered together by a write made from either (13), so a write made from the one on the disk
-   also replaces the other, which never reached it.
+9. *A local write never replaces a version whose content its device has not had on its disk,
+   short of 8a for a tree delete.* `S`, and a tree delete's join, are built from bases and their
+   twins alone (above), and a twin's content is its base's: the display order showed the two as one
+   file, and the person changed or deleted what they saw. A twin is concurrent with its base, never
+   the first head at its path and, at the path, comes after its base, so neither a later version of
+   the base still arriving, whatever its content, nor a version the engine has yet to put at the
+   path is one. A held version `V` outside them is covered by the write only through an entry that
+   some record `B` in them brings: `B`
+   covers `V`, or `B` is a later record of `V`'s own device at that path; either way, by 3, the disk
+   already held the content of a version that came after `V`. For a tree delete, `B` can also be a
+   later record of `V`'s device at another path beneath its directory, and then `V` goes though its
+   content never reached the disk: the residual of 8a. Its names are the fingerprints of `S` (for a
+   tree delete, of records at its own path that its vector covers) and of stale copies the new
+   vector covers, so they add nothing. So a version that arrived but whose content had not reached
+   the disk when the person changed or deleted the file stays live beside the write: a conflict, or,
+   against a delete, a file that comes back. The old file stays on disk until the new content is in
+   place (4.7), so the base and the disk agree. This needs A1 and A2, as 3 does: two records under
+   one dot are covered together by a write made from either (13), so a write made from the one on
+   the disk also replaces the other, which never reached it.
 10. *A name says no more than coverage.* A write holder names only records whose signatures it has
-    verified: in `replaces`, the bases its write covers and stale copies its new vector covers; in a
+    verified: in `replaces`, the bases and twins its write covers (a tree delete's at its own path
+    among them, their devices mandatory in its prune) and stale copies its new vector covers; in a
     cleanup, records that a held record at their file ID covers or a held tree delete covers
     (`because` that record), or tombstones, tree deletes and cleanups that the folder's time has
     passed by their horizon (`because` empty). A group applies only while its `because` record is
@@ -2174,13 +2235,15 @@ not the only way to build it.
      base and, if the person changed the file meanwhile, writes that change first; the record from
      the peer and the new write are then concurrent, a conflict, never one over the other.
    - *The current version.* The engine does not build vectors: it hands the index a change found on
-     the disk and the index builds the vector from `S`, the path's bases, never from records it
-     holds whose content is not on the disk (4.4, "The vector and names of a new record"; "Why it is
-     safe" 9). What the engine still needs of the current version, for a rename's content, is the
-     base at the path (`Current`: kind, size, chunks, plaintext hashes). An edit, a delete (a
-     tombstone) and a write that resolves a conflict are one change, a put at the path; a rename is
-     a put at the new path, then a tombstone at the old, two records in that order and one commit; a
-     copy is a put.
+     the disk and the index builds the vector from `S`, the path's bases and their twins (the heads
+     of a base's content, concurrent with it and, at the path, after it in display order, never the
+     first head), never from records it holds whose content is not on the disk, nor from a later
+     version of a base or one the engine has yet to put at the path (4.4, "Bases", "The vector and
+     names of a new record"; "Why it is safe" 9). What the engine still
+     needs of the current version, for a rename's content, is the base at the path (`Current`:
+     kind, size, chunks, plaintext hashes). An edit, a delete (a tombstone) and a write that
+     resolves a conflict are one change, a put at the path; a rename is a put at the new path, then
+     a tombstone at the old, two records in that order and one commit; a copy is a put.
    - *The counter.* A written record's counter is the next counter, `max(hw + 1, min(clock_us,
      CLOCK_FLOOR_MAX))`, from the folder's high-water mark and the clock trait, and the records of
      one commit take consecutive counters from one reading of the clock, in the order of 4.4 "The
@@ -2199,19 +2262,22 @@ not the only way to build it.
      each path's heads by hash in display order.
    - *Tree deletes.* A scan that finds a directory gone, with everything beneath it, writes one tree
      delete of that directory (after the deletion brake, as today), its vector the join of the bases
-     beneath it; the index then writes a tombstone for each base beneath it that the pruned vector
-     leaves uncovered, and the cleanup that names, `because` the tree delete, every record beneath
-     it that it covers, paged by `MAX_CLEANUP_ENTRIES`, all in one commit. Files that vanished from
+     beneath it and their twins, its names the first 32 of those at the directory's own path (4.4,
+     "The vector and names of a new record"); the index then writes a tombstone for each base or
+     twin beneath it that the pruned vector leaves uncovered, and the cleanup that names, `because`
+     the tree delete, every record beneath it that it covers, paged by `MAX_CLEANUP_ENTRIES`, all in
+     one commit. Files that vanished from
      a directory that remains get a tombstone each. A directory renamed with what it holds is a put
      at every new path, then a tree delete of the old directory, in one commit. A tree delete
      received makes the engine move to the archive every file beneath it that has no live version
      left, and remove each directory beneath it with no live record left beneath it; a file that a
      tree delete did not cover stays, with the directories it needs.
-   - *Names and cleanups.* The index fills a record's `replaces` (its bases, then the shared writer
-     faults held at the path, then the stale copies noted for that path, the faults that do not fit
-     going into a cleanup in the same commit) and writes the cleanups of 4.4 "Cleanup" (with tree
-     deletes, and at the end of each round for the stale copies and forgotten records noted, 4.5);
-     the engine only commits and pushes them. Sealed holders and read holders write neither.
+   - *Names and cleanups.* The index fills a record's `replaces` (`S`, its bases and their twins,
+     then the shared writer faults held at the path, then the stale copies noted for that path, the
+     faults that do not fit going into a cleanup in the same commit) and writes the cleanups of 4.4
+     "Cleanup" (with tree deletes, and at the end of each round for the stale copies and forgotten
+     records noted, 4.5); the engine only commits and pushes them. Sealed holders and read holders
+     write neither.
    - *The clock rule.* The engine puts its wall clock in each Hello, compares the two Hellos when
      the first folder opens on a connection and refuses a peer out of range (3.2), and offers the
      remedy in the issue: unlink the folder keeping its files, fix the clock, add the folder again
@@ -2423,6 +2489,14 @@ the chains and `Covered` messages of an earlier draft of that day.
   older release name, and every tier drop, a record that a newer release applies; relaxing one needs
   a new major. Making one stricter would split peers the same way, and needs a new major too. The
   compatibility matrix tests both directions (section 8, item 14).
+- The twin rule (4.4, "Bases") never changes within major 1: which records hold one content (the
+  kinds and `plain_hashes`, tombstones of any kind, never a tree delete), and that a twin is
+  concurrent with its base and, for the base at the path, not ahead of it in display order, and
+  never the first head in display order. A write covers and names the twins of what is on its
+  writer's disk, so a release that judged twins otherwise (counting the mode, or
+  a new optional field of `SealedMeta`, as content, say) would have its writers silently cover what
+  an older release shows as a conflict, or keep as a conflict what the older covers; changing it
+  needs a new major.
 - Retiring a suite is a release that stops making folders under it and, later, one that drops it;
   a folder under a retired suite is shared again as a new folder under a current one (`keys.md`
   §7.1, §7.2), and peers that still hold it are told so under Issues.
@@ -2591,74 +2665,103 @@ interval in section 5's constants is a vector.
    V2 and W are both heads (a conflict), V1 is kept as a base until V2's content is applied and is
    never served or counted in a digest, and the file on disk stays V1 until the commit that applies
    new content; the same with a scan's tree delete of the directory holding the path (V2 survives
-   the delete, a file that comes back); a conflict copy written beside the path (its record a base
-   of the path's file ID; after a write over the conflict, the base of its own path, and no longer
-   of the original); a store whose greatest counter lies more than `CLOCK_RULE_LIMIT` ahead of the
-   clock at open, after the clock was set back (the folder does not open, the issue says the records
-   are dated more than a year ahead of the clock, nothing is removed, the high-water mark kept), the
-   clock then passing the time it needs while the device runs (the folder opens then, without a
-   restart, nothing lost), and the same store opened after the clock is right (opens); a base that
-   fails its check at open (dropped and reported, the next write covers nothing, a conflict); a
-   rename (the old path's only head a tombstone, the new path one version) and the same two records
-   delivered in the other order; an opaque record beside the one head (both kept; the next write at
-   the path names it, a shared writer fault, and every tier drops it), 70 shared writer faults at
-   one path (the next write names its bases and as many as fit 64 names, and a cleanup `because` it,
-   in the same commit, the rest), and a record opaque here only because its `kind` is unknown (the
-   next write here neither names nor covers it; on a release that knows the kind, the two are heads,
-   a conflict); tree deletes: one over a directory of three files and a subdirectory (every record
-   beneath it dropped on a read holder, and the cleanup written with it naming the four), a version
-   beneath it written concurrently (kept, a head), a version beneath it whose device's later record
-   the deleter held (dropped: the residual of 4.4 "Why it is safe" 8a), the rename within the
-   directory of that residual delivered tombstone first, nested tree deletes (a second tree delete
-   of the same directory covering the first, which its cleanup names; a tree delete of a parent
-   covering one of a child), a tree delete whose pruned vector misses a held record (the tombstone
-   written after it), and a new file written beneath it afterwards (kept); a tree delete over a
-   directory of 20 000 held files judged by the index (obsolete or not with at most two queries per
-   vector entry and no walk, the same verdict as a walk), one at `d` beside held records at `d-x`,
-   `d.x`, `d0` and `d/x` (only `d` itself and `d/x` beneath it), and one that covers only an earlier
-   tree delete beneath its directory (not obsolete: it replaces that one); expiry by the folder's
-   own time: a tombstone whose counter the greatest counter held exceeds by one microsecond less
-   than `TOMBSTONE_HORIZON` and one by one microsecond more (kept; dropped, and ignored when it
-   arrives again), the same on two devices whose wall clocks differ by six months (the same outcome
-   on both), a cleanup past `CLEANUP_HORIZON`, a folder with no write for two years (nothing
-   expires), a record 11 months ahead raising the folder's time (deletions older than that time less
-   the deletion horizon forgotten at once), and the version a tombstone covered offered again after
-   the tombstone expired (live again: the deleted file reappears); the clock rule: a record whose
-   counter is `CLOCK_RULE_LIMIT` plus one microsecond ahead of the receiver's clock (verified,
-   refused, not relayed, the issue) and one exactly at it (held); the spread: three read or write
-   holders whose clocks are 300 days ahead, right, and 70 days behind (every pair but the first and
-   the last synced at the handshake), where the right one accepts the fast one's record and the slow
-   one then refuses the right one's next record (the issue naming no culprit), and the folder's time
-   on the two sides. Property tests (`proptest`) over random histories of writes, deletes, tree
-   deletes and renames by up to 64 devices with random pruning, arrival orders, exchanges, expiry,
-   cleanups and replays of old records: (a) no record is dropped except by a record that knows it or
-   a later record of its device at its path or beneath the deleted directory (4.4 "Why it is safe" 3
-   and 6); (b) no record covers a record that knows it (4.4 "Why it is safe" 4); (c) with pruning
-   on, the records dropped are a subset of those dropped with pruning off, on the same history (5
-   and 7); (d) the live records, the expired ones, the heads and the records refused depend only on
-   the records held: not on their order, nor on records held and dropped before, nor on any device's
-   clock within the clock rule (two devices fed the same records in different orders, one of them
-   after holding and dropping a cleanup group's `because`, judge every further record alike); (e)
-   any two read or write holders that end caught-up rounds with each other hold the same records and
-   heads (4.5, "Why it converges"), within `MAX_RECONCILE_PASSES` passes or over the rounds owed
-   after, with each device's wall clock random within the clock rule; (f) a sealed peer drops a
-   record only when a held record or a held cleanup group that applies names it (4.4 "Why it is
-   safe" 11); (g) once replays stop, a sealed peer that a write holder meets holds the same records
-   as that write holder after the rounds its cleanups owe, short of stale copies that a cleanup the
-   write holder holds names in a group that no longer applies, which follow once the folder's time
-   has passed that cleanup by `CLEANUP_HORIZON` (in the author's model of these rules, with vectors
-   pruned to 3 entries, at most four rounds, and two after such a cleanup is forgotten); (h) a
-   cleanup replayed at any later point removes no record written after it (12); (i) two records with
-   one dot are both held on every tier, and two devices that hold one each find the difference and
-   end holding both (13); (j) a reopen of the store gives the same index; (k) no local write or
-   scan's tree delete covers a held version whose content was not on the writing device's disk,
-   unless a base there covered it (4.4 "Why it is safe" 9); (l) for every tree delete, the index of
-   4.4 "Judging a tree delete without a walk" finds the same held records covered as a walk over
-   every record held beneath its directory does, nested tree deletes included (the author's model:
-   135 470 tree deletes over paths that share prefixes, all alike); (m) a device's set digests equal
-   those computed afresh from the records it holds, after any sequence of changes; and, at open, a
-   stored high-water mark above the greatest counter held and the clock floor by more than
-   `CLOCK_AHEAD_WARNING` is reported corrupt and replaced (a connection-free vector).
+   the delete, a file that comes back); **twins** (the identical-heads fix of 2026-11-08): two
+   devices that write one file with the same `plain_hashes` apart, then a save by either, the one
+   whose twin sits at the path or the other (the save names and covers both: one head, no copy, on
+   both devices), the same with different `mtime_ns`, with three devices, with a delete and with a
+   rename (nothing left at the path but the tombstone), two identical directories under a scan's
+   tree delete (both covered, no head left), and two tombstones under a new version (both covered);
+   40 twins and a conflict copy under one save by the device whose own twin is last in display
+   order (`S` its two bases, then its own twin, then the next 29 twins in display order; the nine
+   left are heads, conflict copies of the old content, until the next save, made with them on the
+   disk, covers them), and 40 twins under a delete (32 covered, the file back until the next
+   delete); what is no twin: a later version of the base with its content, still arriving, that
+   changed only its mode, at the base's `mtime_ns`, a later one or an earlier one, under a save
+   and under a delete (both heads, a conflict), a concurrent version of the base's content that
+   comes first in display order and that the engine has yet to put at the path (both heads), the
+   same coming after the base but first among the heads, the base replaced by a later version still
+   arriving, of its content or other, under a save and under a tree delete (it and that version
+   heads beside the write), and a concurrent version of a conflict copy's content first in display
+   order (a head beside the save), a later
+   version of a conflict copy's content (a head beside the save), a twin arriving after the write (a
+   head, a conflict copy of the old content, on every device) and a tombstone beside a live base and
+   its twin (a head beside the save); 32 records signed under the writer's own device ID with its
+   base's content (the base, another device's, still in `S` and covered); 40 identical directories
+   under a tree delete in three display orders (32 named, every one covered by its vector; the eight
+   named nowhere left, the directory back, until the next delete takes them), a directory with 71
+   conflict copies at its path (deleted, 32 names, the 40 copies past them left), and a folder
+   deleted while a file beneath it is still arriving, reached through a twin's dot or a base's
+   (deleted: the residual of 4.4 "Why it is safe" 8a); a conflict copy written beside the path (its
+   record a base of the path's file ID; after a write over the conflict, the base of its own path,
+   and no longer of the original); a store whose greatest counter lies more than `CLOCK_RULE_LIMIT`
+   ahead of the clock at open, after the clock was set back (the folder does not open, the issue
+   says the records are dated more than a year ahead of the clock, nothing is removed, the
+   high-water mark kept), the clock then passing the time it needs while the device runs (the folder
+   opens then, without a restart, nothing lost), and the same store opened after the clock is right
+   (opens); a base that fails its check at open (dropped and reported, the next write covers
+   nothing, a conflict); a rename (the old path's only head a tombstone, the new path one version)
+   and the same two records delivered in the other order; an opaque record beside the one head (both
+   kept; the next write at the path names it, a shared writer fault, and every tier drops it), 70
+   shared writer faults at one path (the next write names its bases and as many as fit 64 names, and
+   a cleanup `because` it, in the same commit, the rest), and a record opaque here only because its
+   `kind` is unknown (the next write here neither names nor covers it; on a release that knows the
+   kind, the two are heads, a conflict); tree deletes: one over a directory of three files and a
+   subdirectory (every record beneath it dropped on a read holder, and the cleanup written with it
+   naming the four), a version beneath it written concurrently (kept, a head), a version beneath it
+   whose device's later record the deleter held (dropped: the residual of 4.4 "Why it is safe" 8a),
+   the rename within the directory of that residual delivered tombstone first, nested tree deletes
+   (a second tree delete of the same directory covering the first, which its cleanup names; a tree
+   delete of a parent covering one of a child), a tree delete whose pruned vector misses a held
+   record (the tombstone written after it), and a new file written beneath it afterwards (kept); a
+   tree delete over a directory of 20 000 held files judged by the index (obsolete or not with at
+   most two queries per vector entry and no walk, the same verdict as a walk), one at `d` beside
+   held records at `d-x`, `d.x`, `d0` and `d/x` (only `d` itself and `d/x` beneath it), and one that
+   covers only an earlier tree delete beneath its directory (not obsolete: it replaces that one);
+   expiry by the folder's own time: a tombstone whose counter the greatest counter held exceeds by
+   one microsecond less than `TOMBSTONE_HORIZON` and one by one microsecond more (kept; dropped, and
+   ignored when it arrives again), the same on two devices whose wall clocks differ by six months
+   (the same outcome on both), a cleanup past `CLEANUP_HORIZON`, a folder with no write for two
+   years (nothing expires), a record 11 months ahead raising the folder's time (deletions older than
+   that time less the deletion horizon forgotten at once), and the version a tombstone covered
+   offered again after the tombstone expired (live again: the deleted file reappears); the clock
+   rule: a record whose counter is `CLOCK_RULE_LIMIT` plus one microsecond ahead of the receiver's
+   clock (verified, refused, not relayed, the issue) and one exactly at it (held); the spread: three
+   read or write holders whose clocks are 300 days ahead, right, and 70 days behind (every pair but
+   the first and the last synced at the handshake), where the right one accepts the fast one's
+   record and the slow one then refuses the right one's next record (the issue naming no culprit),
+   and the folder's time on the two sides. Property tests (`proptest`) over random histories of
+   writes (some made while a version of the path is still arriving), directories made, deletes, tree
+   deletes and renames by up to 64 devices, twins among them, with random pruning, arrival orders,
+   exchanges, expiry, cleanups and replays of old records: (a) no record is dropped except by a
+   record that knows it or a later record of its device at its path or beneath the deleted directory
+   (4.4 "Why it is safe" 3 and 6); (b) no record covers a record that knows it (4.4 "Why it is safe"
+   4); (c) with pruning on, the records dropped are a subset of those dropped with pruning off, on
+   the same history (5 and 7); (d) the live records, the expired ones, the heads and the records
+   refused depend only on the records held: not on their order, nor on records held and dropped
+   before, nor on any device's clock within the clock rule (two devices fed the same records in
+   different orders, one of them after holding and dropping a cleanup group's `because`, judge every
+   further record alike); (e) any two read or write holders that end caught-up rounds with each
+   other hold the same records and heads (4.5, "Why it converges"), within `MAX_RECONCILE_PASSES`
+   passes or over the rounds owed after, with each device's wall clock random within the clock rule;
+   (f) a sealed peer drops a record only when a held record or a held cleanup group that applies
+   names it (4.4 "Why it is safe" 11); (g) once replays stop, a sealed peer that a write holder
+   meets holds the same records as that write holder after the rounds its cleanups owe, short of
+   stale copies that a cleanup the write holder holds names in a group that no longer applies, which
+   follow once the folder's time has passed that cleanup by `CLEANUP_HORIZON` (in the author's model
+   of these rules, with vectors pruned to 3 entries, at most four rounds, and two after such a
+   cleanup is forgotten); (h) a cleanup replayed at any later point removes no record written after
+   it (12); (i) two records with one dot are both held on every tier, and two devices that hold one
+   each find the difference and end holding both (13); (j) a reopen of the store gives the same
+   index; (k) no local write or scan's tree delete covers a held version whose content was not on
+   the writing device's disk (a base there, or a twin of one), unless a base or twin there covered
+   it or is a later record of its device there, for a tree delete at or beneath its directory (4.4
+   "Why it is safe" 9 and 8a); (l) for every tree delete, the index of 4.4 "Judging a tree delete
+   without a walk" finds the same held records covered as a walk over every record held beneath its
+   directory does, nested tree deletes included (the author's model: 135 470 tree deletes over paths
+   that share prefixes, all alike); (m) a device's set digests equal those computed afresh from the
+   records it holds, after any sequence of changes; and, at open, a stored high-water mark above the
+   greatest counter held and the clock floor by more than `CLOCK_AHEAD_WARNING` is reported corrupt
+   and replaced (a connection-free vector).
 8. **Exchange** (index for digests and serving, protocol for the decoder vectors, engine for the
    rest; connection vectors unless noted): set digests of an empty subtree (zeros), a leaf of one
    and of 64 records, a node over 65, 65 records at one tag (node form at its 64-nibble prefix, its
@@ -3016,6 +3119,10 @@ a reappearing file or a file in the archive; the few that can let one version re
 should not have, as if it were newer, say so, and the replaced file then goes to the archive:
 
 - more than 32 writers on one file while a device was away (a conflict copy, above);
+- a folder deleted while records at its own path from more than 32 devices are there (identical
+  folders made apart, or conflict copies, files at its name): the deletion takes 32 of them, and the
+  rest come back, as the folder, empty of what was deleted, or as a file and its conflict copies,
+  until the next delete;
 - a device back after a delete was forgotten, or a deletion made offline more than a year before it
   arrives (the file reappears, above);
 - a sealed peer or relay that kept an old copy of a file deleted more than a year ago can bring it
@@ -3039,11 +3146,14 @@ should not have, as if it were newer, say so, and the replaced file then goes to
   release checks) stays, with its pieces on every NAS, until someone saves that file again, which
   the warning about it says; one at a file nobody saves again, or a cleanup message that is itself
   wrong, stays for good;
-- a deleted folder that also takes a file the deleting device had not yet received, when the device
-  that wrote that file later wrote something else in that folder that the deleting device had
-  received. The usual case is a rename inside the folder: the new name and the removal of the old
-  name travel separately, and if only the removal had arrived when the folder was deleted, the
-  renamed file goes too (to the archive). A relay that holds back the new name can make it happen.
+- a deleted folder that also takes a file the deleting device had not yet received, or not yet put
+  on its disk, when the device that wrote that file later wrote something else in that folder that
+  the deleting device had. The usual case is a rename inside the folder: the new name and the
+  removal of the old name travel separately, and if only the removal had arrived when the folder
+  was deleted, the renamed file goes too (to the archive). Another is a folder linked on two
+  devices that already hold it, deleted on one before a file only the other had has finished
+  arriving (the owner's decision of 2026-11-08: a folder delete takes what is inside it). A relay
+  that holds back the new name can make it happen.
 
 And these lose nothing but limit the folder:
 
@@ -3096,6 +3206,14 @@ it (sources read on 2026-10-25, listed in `threat-model.md`'s appendix):
 - *Edits and deletes built from what is on the disk*, against building them from what the index
   holds: the index may hold a version whose content has not arrived, and an edit built from the
   index would silently replace it.
+- *Edits and deletes that cover every version of the content on the disk*, against covering only
+  the one the device names as on its disk: when two devices write the same file apart, or a folder
+  is linked on two devices that already hold it, each file has two versions of one content, shown as
+  one file; an edit that covered only one left the other on every device, as a conflict copy of the
+  old content, or as the deleted file back (the identical-heads bug of 2026-11-08). The other
+  version's content was on the disk all the same, so covering it loses nothing. A later version of
+  the same content, a change of mode still arriving say, or one the device has yet to put at the
+  path, is not such a version: it stays a conflict.
 - *One tombstone per deleted file, one tree delete per deleted directory*, against tree deletes for
   single files too: a tombstone keeps a file's list exact, and sealed peers need no cleanup for it,
   since it names the version it replaces.

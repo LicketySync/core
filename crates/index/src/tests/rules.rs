@@ -360,6 +360,73 @@ fn a_tree_delete_names_the_shared_writer_faults_at_its_tag() {
     );
 }
 
+/// A tree delete names the shared writer faults at its directory's tag after
+/// its own names there, up to `MAX_REPLACES` names in all, and the cleanup
+/// it writes `because` it names the rest (4.4, "Its names"), as a version's
+/// write does: 70 faults beside the directory, of which 63 are named and 7
+/// go by the cleanup. Its own names there are at most 32 (the
+/// identical-heads fix's round of 2026-11-08), so the faults always have
+/// room; a fault past `MAX_REPLACES` in its names would have the write
+/// refused.
+#[test]
+fn a_tree_delete_names_the_shared_faults_at_its_tag_up_to_max_replaces_and_its_cleanup_the_rest() {
+    let mut w = Dev::writer(0xa0);
+    w.mkdir("d");
+    w.apply_all();
+    let mut faults = Vec::new();
+    for i in 0..70u64 {
+        let mut m = sealed_file("d", dev(0xe0), T0 + 10 + i);
+        m.kind = 2;
+        m.size = 0;
+        m.plain_hashes = vec![];
+        m.tree = true;
+        let bad = forge("d", &[], &m, &[]);
+        w.accept(&bad).unwrap();
+        faults.push(bad.hash());
+    }
+    let written = w.tree_delete("d");
+    assert!(written.cleanup, "a cleanup because it");
+    let td = written.records[0].0;
+    assert_eq!(
+        held_record(&w, &td).replaces().len(),
+        MAX_REPLACES,
+        "its directory and 63 faults"
+    );
+    assert!(faults.iter().all(|f| !w.holds(f)), "all 70 gone");
+}
+
+/// The cleanup a tree delete writes `because` it names what it covers at or
+/// beneath its directory only (4.4, "A tree delete"), never a record kept
+/// only as a base elsewhere that its vector happens to cover: E writes `e`
+/// (V1), then `d/x`, then `e` again (V2); W has V1 and `d/x` on its disk and
+/// holds V2, not yet applied, so V1 is kept only as `e`'s base. W's tree
+/// delete of `d` carries E's entry from `d/x`, which covers V1's dot, and
+/// its cleanup does not name V1.
+#[test]
+fn a_tree_deletes_cleanup_names_no_base_kept_outside_its_directory() {
+    let mut e = Dev::writer(0xe0);
+    let v1 = e.put("e", 1);
+    let x = e.put("d/x", 2);
+    let v2 = e.put("e", 3);
+    let mut w = Dev::writer(0xa0);
+    w.take(&e, &[v1, x]);
+    w.apply_all();
+    w.take(&e, &[v2]);
+    assert!(!w.holds(&v1), "V2 covers V1");
+    assert_eq!(w.ix.current("e").unwrap().hash, v1, "V1 kept as e's base");
+    let written = w.tree_delete("d");
+    assert!(written.cleanup, "a cleanup because the tree delete");
+    let named: Vec<RecordHash> = written
+        .records
+        .iter()
+        .filter_map(|(h, _)| w.ix.s.held.get(h))
+        .flat_map(|r| r.record.groups().to_vec())
+        .flat_map(|g| g.forget)
+        .collect();
+    assert!(named.contains(&x), "d/x named");
+    assert!(!named.contains(&v1), "V1, outside d, not named");
+}
+
 /// A write names its path's notes up to `MAX_REPLACES` names; the rest stay
 /// notes, which the round's end names in a cleanup `because` that write.
 #[test]
