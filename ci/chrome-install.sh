@@ -5,16 +5,20 @@
 # values are the ones computed when the pin was taken, after the download's
 # MD5 matched the `x-goog-hash` that Google's storage reports for it. nightly.yml's
 # webtransport-chrome job runs it; locally, the installed Chrome works as well
-# (ci/webtransport-chrome.sh). The release is CHROME_FOR_TESTING; Dependabot
-# cannot see it. To move to release <v> (the newest Stable at
-# googlechromelabs.github.io/chrome-for-testing that has been out 7 days,
-# its date the zip's Last-Modified):
+# (ci/webtransport-chrome.sh). The downloads are ci/download.sh's, which retries
+# a transient failure such as an HTTP 504; the SHA-256 checks follow them. The
+# release is CHROME_FOR_TESTING; Dependabot cannot see it. To move to release
+# <v> (the newest Stable at googlechromelabs.github.io/chrome-for-testing that
+# has been out 7 days, its date the zip's Last-Modified):
 #   curl -fsSLO https://storage.googleapis.com/chrome-for-testing-public/<v>/linux64/chrome-linux64.zip
 #   curl -fsSLO https://storage.googleapis.com/chrome-for-testing-public/<v>/linux64/chromedriver-linux64.zip
 #   curl -fsSI <each URL> | grep -i x-goog-hash; openssl md5 -binary <zip> | base64   # must agree
 #   sha256sum chrome-linux64.zip chromedriver-linux64.zip
-# and change the three values in one reviewed commit (CONTRIBUTING.md, "Pins
-# and the weekly refresh").
+#   wc -c chrome-linux64.zip   # chrome_zip_bytes in ci/test-download.sh
+# and change the three values, and chrome_zip_bytes in ci/test-download.sh (the
+# largest download, which a try of ci/download.sh must let arrive: that test
+# checks it), in one reviewed commit (CONTRIBUTING.md, "Pins and the weekly
+# refresh").
 # Usage: ci/chrome-install.sh <directory>
 set -euo pipefail
 pins=$(dirname "$0")/pins.env
@@ -30,7 +34,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 base="https://storage.googleapis.com/chrome-for-testing-public/$version/linux64"
 for zip in chrome-linux64.zip chromedriver-linux64.zip; do
-  curl --proto '=https' --tlsv1.2 -fsSL -o "$tmp/$zip" "$base/$zip"
+  "$(dirname "$0")/download.sh" "$base/$zip" "$tmp/$zip"
 done
 echo "$chrome_sha256  $tmp/chrome-linux64.zip" | sha256sum --check --strict
 echo "$driver_sha256  $tmp/chromedriver-linux64.zip" | sha256sum --check --strict

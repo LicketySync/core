@@ -6,6 +6,121 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Retry the CI scripts' downloads, so that a short outage at a download host does not turn `main`
+  red (the owner's approval of 2026-11-09: "Go ahead with the download retry change"). The push of
+  ebb6a67 failed CI run 42568260092: the gitleaks job's `ci/gitleaks-install.sh` got `curl: (22) The
+  requested URL returned error: 504` from GitHub's release download, on three tries (05:36, 05:48
+  and 05:49 UTC on 2026-11-09), and passed on a manual rerun at 12:19. The code was never at fault.
+  - **The change.** `ci/download.sh <https URL> <output file>` holds the curl options of a
+    download. `ci/gitleaks-install.sh` (the `gitleaks` job of `ci.yml`, and the local setup of
+    `gate.sh`'s gitleaks step) and `ci/chrome-install.sh` (two zips, the nightly
+    `webtransport-chrome` job) call it where they called curl; the SHA-256 checks after the
+    downloads are as they were. The helper keeps `--proto '=https' --tlsv1.2` and `-fSL`, with
+    `--no-progress-meter` in place of `-s` so that the CI log shows the notice of each retry, and
+    adds `--retry 8 --retry-all-errors` (curl's own backoff, 1 s then 2, 4 and on to 128, 255 s in
+    all, after any failure: a timeout, an HTTP error of any kind, a connection refused, reset or
+    closed with no reply, a failed TLS handshake, a body cut off), `--retry-connrefused`,
+    `--connect-timeout 30`, `--max-time 300` and `--retry-max-time 450`. It needs curl 7.71.0
+    (2020): Ubuntu 22.04 has 7.81.0 and 24.04 has 8.5.0 (neither was run), the development machine
+    8.18.0; `ci/test-download.sh` also passes with 8.15.0 and 8.21.0 (the Flatpak runtimes' curls).
+    The notice of a retry is worded "Will retry in N seconds" by 8.15.0 and 8.18.0 and "Retrying in
+    N seconds" by 8.21.0, and the test accepts both.
+  - **The cost.** curl cannot tell a failure that no retry cures from an outage (a host in trouble
+    answers 404 and refuses connections too), so `--retry-all-errors` makes every permanent failure
+    be reported after the 255 s of backoff (about four minutes) instead of at once: a 404 from a
+    wrong pin, a connection refused for good, an output file that cannot be written (curl's exit
+    status 23, retried all the same: measured with 8.18.0 and 8.21.0). That is acceptable: the job
+    fails either way, so what is lost is four minutes of a run that was going to be red, and the
+    878 s bound below still holds; a wrong pin comes only with a commit that changes a pin, and
+    such a commit is reviewed anyway. The plain `--retry` would have left out a connection reset
+    or closed with no reply, a failed TLS handshake and a body cut off, which is what a download
+    host in trouble often does.
+  - **Time.** `--max-time 300`: the largest download, Chrome for Testing 156.0.8078.80's
+    `chrome-linux64.zip`, is 201,329,937 bytes (a HEAD request; `chromedriver-linux64.zip` is
+    11,898,387), which needs 0.67 MB/s (the 180 s first chosen needed 1.12 MB/s and cut a slow
+    download that was progressing). A stuck download ends in 878 s (14.6 minutes) at most: the
+    window (450 s), the longest wait (128 s) and one more try (300 s). The Chrome job's two take
+    29.3 of its 45 minutes. The `gitleaks` job had no `timeout-minutes` (the default is 6 hours,
+    which a curl that sleeps a whole Retry-After could use up); it has 25: the 14.6 minutes and 10
+    for the checkout and the scans (about 6 s of scanning here). The `ci-scripts` job, which runs
+    the test of the helper, had none either; it has 10: its steps take about 10 s together here,
+    and the real-curl cases of the test end after 60 s at most (below).
+  - **What it leaves behind.** The helper removes the output file before curl runs, and again when
+    curl gives up (curl leaves the part it got: 5946 bytes after a body cut off), and fails (exit 1,
+    naming the URL) when curl exits 0 and the file is missing or empty; it removes the file with
+    `rm -f --`, so that an output file named like an option goes too. That happens: curl 8.15.0,
+    8.18.0 and 8.21.0 exit 0 with no file when a 503 carries a Retry-After that would end after the
+    window ("The Retry-After: time would make this command line exceed the maximum allowed time for
+    retries"; measured). A retry cannot leave a bad file that passes: curl truncates the one `-o`
+    file before each try (measured: a body cut off after 5946 of 11892 bytes, then a whole one,
+    left the 11892-byte file, not 17838), nothing resumes with `-C`, and the SHA-256 check passes
+    only for the pinned file whatever the file holds.
+  - **What it leaves out.** An outage longer than about four minutes: the 504 came back on the
+    three tries of 2026-11-09 over 13 minutes, so this might not have kept that run green. Raising
+    `--retry` and `--retry-max-time` in `ci/download.sh` is the knob; the two jobs' timeouts would
+    then need raising too, and `ci/test-download.sh` fails until they are.
+  - **Other downloads, checked and not changed.** No other download changes. `cargo install`: cargo
+    retries 3 times (cargo 1.99.1 asked a registry that answered 504 four times in all), so a
+    longer outage can still fail it. `taiki-e/install-action` v2.88.0: its `main.sh` tries each
+    download 10 times and gives curl `--retry 10` (read through a web summary). The Codecov upload:
+    its job has `continue-on-error: true`. Semgrep 1.182.0 fetches the rules of `semgrep scan
+    --config p/rust` with 3 retries (up to 4 attempts) on HTTP 413, 429 and 5xx, and
+    `dtolnay/rust-toolchain` runs rustup, which retries a download `RUSTUP_MAX_RETRIES` times (both
+    from the reviews). The advisory-db fetch from github.com (the incident's host) by `cargo deny`
+    and `cargo audit`, and `cargo vet`'s imports from raw.githubusercontent.com: not checked (a
+    search of cargo-deny 0.20.2's, cargo-audit 0.22.2's and cargo-vet 0.10.3's sources for "retry"
+    finds none; the libraries under them were not read). The Semgrep container image pull: not
+    checked. `bootstrap.sh`, outside this repository, is a one-time local setup.
+  - **The check and the tests.** `ci/check-downloads.sh` fails on a line that calls `curl` or `wget`
+    in `ci/*.sh` (not `ci/download.sh` or `ci/test-*.sh`), `gate.sh` or a workflow, comment lines
+    aside, so that a future download script uses the helper. `ci/test-download.sh` (122 cases,
+    about 2 s; needs python3 and openssl) runs: the options `download.sh` gives a stand-in curl;
+    the longest stuck download against the `timeout-minutes` it reads from `ci.yml` and
+    `nightly.yml`, and that the `ci-scripts` job of `ci.yml` has one (at most an hour, and enough
+    for the 60 s below with 5 minutes to spare); what the helper leaves when the stand-in fails
+    after writing part of a file, exits 0 with no file or an empty one, or finds a file from
+    before, also for an output file named `-out` (each of the three removals needs the `--`); the
+    two install scripts on the stand-in (their pinned URLs, `--retry`, and each SHA-256 check still
+    refusing another file); the real curl against an HTTPS server on 127.0.0.1, where a 504, a
+    404, a body cut off half way and a connection closed with no reply are each retried and the
+    file arrives whole (a plain curl is shown to keep the cut-off part, so the whole file is not
+    the part and the file appended), with the notice of the retry in the log, and a 503 with
+    `Retry-After: 100000` is a failure with no file after one request; and `check-downloads.sh` on
+    this repository and on trees made for each case. The six real-curl cases run at the same
+    time, so the one second that curl waits before a retry is spent once and nothing in the test
+    sleeps; a failure no retry cures, such as a 404 for 255 s, is tested on the stand-in. Each
+    real-curl case runs under `/usr/bin/timeout 60` (by full path, as `ci/webtransport-chrome.sh`
+    does), so that a curl without the Retry-After check, which would sleep the 100000 s, fails the
+    case instead of holding the job; the 503 must fail by itself, not by the timeout's kill
+    (status 124), and the test checks that predicate on made-up statuses.
+  - **Without the change.** The check fails on the install scripts of ebb6a67 (their two `curl`
+    lines); with the first version of this change (an `exec curl` with `--retry 8
+    --retry-connrefused`, no `--retry-all-errors`, no `timeout-minutes` on the `gitleaks` or
+    `ci-scripts` job), 32 of the 122 cases fail. 27 mutants of the helper and of the two jobs'
+    timeouts, made by hand against the previous version of the tests, each failed a case; nine
+    more, made against this version, each fail one: the old `'Will retry'` check on curl 8.21.0; a
+    curl that asks once for the 503 and then sleeps (under a 3 s limit); the `ci-scripts` job with
+    no `timeout-minutes`, with 5 and with 360; each of the three `rm -f --` without `--`; and the
+    503's check accepting the status 124. With that sleeping curl and the 503's old check (a
+    failure of any kind, which a kill by the timeout also is), no case fails: the hang would go
+    unseen. `gate.sh` and the `ci-scripts` job of `ci.yml` run both scripts; `CONTRIBUTING.md`
+    names python3 and openssl and says where the helper is.
+  - **The confirm review's round** (2026-11-09; every ruling taken, the coordinator's squash at
+    landing aside). The review found that the log case failed on curl 8.21.0, whose retry notice
+    reads "Retrying in" (the test now accepts both wordings); that the 503 case could hang for
+    hours on a curl without the Retry-After check, under a job with the 6-hour default (each
+    real-curl case now has a 60 s limit, the 503 must fail by itself, and the `ci-scripts` job has
+    `timeout-minutes: 10`); and four smaller points: the cost now names every permanent failure,
+    the wording of the other downloads is exact (Semgrep: 3 retries), the Chrome zip's size in
+    `ci/test-download.sh` is in the pin-bump steps of `ci/chrome-install.sh`, and the helper's `rm`
+    takes `--`.
+  - Reviewed 2026-11-09 by a7edf7cec93922127 (first review, on 9e9eceb: blocked by two, now
+    fixed) and a3433b29f0e90ae60 (second review: one should-fix and three nits, now fixed); confirm
+    aa61d66f62df8b7b8 on 3dc2794: blocked by two, now fixed; re-confirm aca11784548bdc137 on
+    04a5b18: clean, with three nits left as follow-ups. CI scripts only, no keys, protocol, paths
+    or API, so no security pass. Authors a480f78b3db51b6a5 and af6667d10501e6430; fixes by
+    a2975bcf2abdd691c and a77a3871a3985c011. Landed as one squashed commit.
+
 - Cover every identical concurrent head when writing over a path (the identical-heads bug, found
   and confirmed on 2026-11-08): when two devices wrote the same bytes at one path apart, the next
   save, delete, rename or tree delete covered one of the two versions, and the other stayed on every
@@ -261,7 +376,11 @@ paths or the API also names the security-reviewer pass.
     at the path are two conflict copies of one content (the three-twin test showed it before the
     fix, and the twins left past 32 after an edit are such copies). Showing them as one copy is a
     change to the views and the engine's copy names.
-  - Reviewed by: (left for the coordinator).
+  - Reviewed 2026-11-08 by a180da590c6353049 (first review: blocked by two, now fixed),
+    a85f0a2b23241ead1 (second review: blocked by two, now fixed) and a2dd99da5bd378a17 (security:
+    blocked by six, now fixed); confirm with the security pass af561b996e0e3da72: blocked by C1,
+    then clean. Author ab584c2f42dfde15b (tests by a5e7cfc66aa437aee); fixes by a87514402d93f94f2
+    and a5383171d1976046e. (Filled in 2026-11-09 from the commit message of ebb6a67.)
 
 - Spike B's follow-ups, from its final confirm review (2026-11-04) and the reviews of this change: a
   test that holds `ci/check-wasm-bindgen.sh`'s lock branch; TM-22's residual (e) with its

@@ -415,9 +415,14 @@ jobs:
   # installs GITLEAKS (ci/pins.env) after checking its SHA-256 and says how to
   # move it (Dependabot cannot see it); ci/gitleaks.sh holds the flags,
   # .gitleaks.toml the allowlists, .gitleaksignore the one ignored finding.
+  # timeout-minutes is the install's longest stuck download (878 s, 14.6
+  # minutes: ci/download.sh) and 10 minutes for the checkout and the scans
+  # (about 6 s of scanning here), so that a download host in trouble cannot
+  # hold the runner for the default 6 hours; ci/test-download.sh checks it.
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -464,11 +469,20 @@ jobs:
   # that file and made-up ones; the line-ending attributes of the test
   # vectors and fuzz seeds, checked on Linux with Windows' core.autocrlf=true
   # (the Windows runner would check this script itself out with CRLF, which
-  # bash rejects); and the toolchain half of the pinning rule,
-  # ci/toolchains.sh with its tests. gate.sh runs the same.
+  # bash rejects); the toolchain half of the pinning rule, ci/toolchains.sh
+  # with its tests; and the download helper, ci/download.sh, which retries a
+  # transient failure (the gitleaks job's HTTP 504 failed run 42568260092),
+  # with its tests, on a stand-in curl and on a server on 127.0.0.1, and
+  # ci/check-downloads.sh, which fails a script that calls curl or wget on
+  # its own. gate.sh runs the same.
+  # timeout-minutes: the steps take about 10 seconds together, and
+  # ci/test-download.sh ends a hung download test after 60 seconds, so 10
+  # minutes is ample and a hung step cannot hold the runner for the default 6
+  # hours; ci/test-download.sh checks it.
   ci-scripts:
     name: tests of the CI scripts and .gitattributes; the toolchain check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: ci/test-mutants.sh
@@ -480,3 +494,5 @@ jobs:
       - run: ci/test-toolchains.sh
       - run: ci/toolchains.sh
       - run: ci/test-check-pins.sh
+      - run: ci/test-download.sh
+      - run: ci/check-downloads.sh

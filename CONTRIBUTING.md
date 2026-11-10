@@ -136,10 +136,17 @@ or a careful finding reproduces locally with the same tool (`ci/mutants.sh
 <k>/<n> <budget>` runs one shard of the mutants as the weekly job does: each
 mutant's tests limited to twice the unmutated tree's test time, at least
 300 s, and on Linux each test process under the job's caps on memory and file
-size). `ci/test-mutants.sh` also needs python3 and prlimit (util-linux).
+size). `ci/test-mutants.sh` also needs python3 and prlimit (util-linux), and
+`ci/test-download.sh` python3 and openssl.
 gitleaks is optional (`ci/gitleaks-install.sh ~/.local/bin` installs the
-release CI pins). CI adds the full-history gitleaks scan, the other operating
-systems, CodeQL and, once configured, ClusterFuzzLite.
+release CI pins). Every download in the CI scripts (gitleaks, and Chrome for
+Testing in `nightly.yml`) goes through `ci/download.sh`, which retries any
+failure for about four minutes, such as the HTTP 504 that failed CI run
+42568260092 (so a failure no retry cures, such as a 404 from a wrong pin, is
+reported only after those four minutes); a new script calls it, not curl or
+wget, and `ci/check-downloads.sh` (in the gate and CI) fails one that does. CI
+adds the full-history gitleaks scan, the other operating systems, CodeQL and,
+once configured, ClusterFuzzLite.
 
 The Rust toolchains: `RUST_STABLE`, which `rust-toolchain.toml`'s
 `channel = "stable"` must give the checkout, and `RUST_NIGHTLY`, a dated
@@ -195,7 +202,8 @@ change:
   tools, typos, semgrep and its image digest, gitleaks and its SHA-256, the
   Codecov CLI, `net-cross`'s Android NDK and Xcode, and the nightly
   `webtransport-chrome` job's Chrome for Testing with the SHA-256 of its two
-  zips (`ci/chrome-install.sh` says how to take them) and its
+  zips and the size of the Chrome zip, which `ci/test-download.sh` checks
+  (`ci/chrome-install.sh` says how to take them), and its
   wasm-bindgen-cli, which moves in the same change as
   `browser-tests/webtransport`'s `wasm-bindgen`, `wasm-bindgen-futures`,
   `wasm-bindgen-test`, `js-sys` and `web-sys`: Dependabot skips those crates

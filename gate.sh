@@ -263,6 +263,13 @@ step ci/test-fuzz-targets.sh
 step ci/test-check-netlog.sh
 step ci/test-check-wasm-bindgen.sh
 step ci/test-check-vendored.sh
+# Every download in the CI scripts goes through ci/download.sh, which retries a
+# transient failure (an HTTP 504 failed CI run 42568260092): the helper, and the
+# two install scripts that use it, on a stand-in curl and on a server on
+# 127.0.0.1; and the check that no script, gate.sh or workflow calls curl or
+# wget on its own.
+step ci/test-download.sh
+step ci/check-downloads.sh
 # 90% line coverage on each of the crates the plan names, and on the index
 # crate, which TM-17, TM-40 and TM-41 name as their enforcer (review ruling of
 # 2026-10-22), measured per crate: only that crate's own files count, so a

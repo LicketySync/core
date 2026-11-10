@@ -2,7 +2,9 @@
 # Installs the pinned gitleaks release (the MIT-licensed command-line tool) into
 # a directory, after checking the tarball against the SHA-256 its release
 # publishes. CI's gitleaks job runs it; locally, `ci/gitleaks-install.sh
-# ~/.local/bin` makes gate.sh run gitleaks too. Linux x86_64 only.
+# ~/.local/bin` makes gate.sh run gitleaks too. Linux x86_64 only. The download
+# is ci/download.sh's, which retries a transient failure such as the HTTP 504
+# that failed CI run 42568260092 (2026-11-09); the SHA-256 check follows it.
 # The release and its SHA-256 are GITLEAKS and GITLEAKS_LINUX_X64_SHA256 in
 # ci/pins.env; Dependabot cannot see them. To move to release <v>: take the
 # linux_x64 line of its checksums,
@@ -22,8 +24,8 @@ dest=${1:?usage: ci/gitleaks-install.sh <directory>}
 tarball="gitleaks_${version}_linux_x64.tar.gz"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-curl --proto '=https' --tlsv1.2 -fsSL -o "$tmp/$tarball" \
-  "https://github.com/gitleaks/gitleaks/releases/download/v${version}/$tarball"
+"$(dirname "$0")/download.sh" \
+  "https://github.com/gitleaks/gitleaks/releases/download/v${version}/$tarball" "$tmp/$tarball"
 echo "$sha256  $tmp/$tarball" | sha256sum --check --strict
 tar -xzf "$tmp/$tarball" -C "$tmp" gitleaks
 mkdir -p "$dest"
