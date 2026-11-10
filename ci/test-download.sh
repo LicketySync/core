@@ -22,12 +22,19 @@
 #   in", by version); the 503 is a failure with no file, not curl's exit status
 #   0. The cases run at the same time, so the one retry each costs, about a
 #   second, curl's own first wait before a retry, is spent once (nothing here
-#   sleeps, and curl has no shorter wait). Each runs under /usr/bin/timeout, so
-#   that a helper or a curl that hangs (a curl without the Retry-After check
-#   waits out a whole 100000 s) fails the case and ends the test instead of
-#   holding the CI job for hours; the 503 must fail by itself, not by that
-#   timeout's kill. A failure that no retry cures, and the 404 of a wrong pin,
-#   which curl retries for 255 s, are tested on the stand-in;
+#   sleeps, and curl has no shorter wait). Each runs under timeout(1)
+#   (/usr/bin/timeout where there is one, else the first `timeout` on PATH, as
+#   ci/mutants.sh finds it), so that a helper or a curl that hangs fails the
+#   case and ends the test instead of holding the CI job for hours; the 503
+#   must fail by itself, not by that timeout's kill (status 124) and not by a
+#   timeout that is not there (status 127). The `late` case needs a curl that
+#   honours a Retry-After by giving up when it would end after
+#   --retry-max-time, a check curl has had since 7.79.0 (Ubuntu 22.04's 7.81.0,
+#   24.04's 8.5.0 and 8.15.0 to 8.21.0 have it); curl 7.74.0 (Debian 11) has
+#   no such check, so it waits out the whole 100000 s, the timeout kills it and
+#   the case fails. The dump of a failed run names the curl for that reason. A
+#   failure that no retry cures, and the 404 of a wrong pin, which curl retries
+#   for 255 s, are tested on the stand-in;
 # - ci/check-downloads.sh on this repository, and on trees made for each case:
 #   a direct curl or wget fails it, comments and other words do not.
 # The expected exit code or file is the assertion. Needs python3 and openssl.
@@ -405,17 +412,22 @@ clean_env() { env -u https_proxy -u HTTPS_PROXY -u all_proxy -u ALL_PROXY -u CUR
   HOME="$tmp/home" NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
   CURL_CA_BUNDLE="$tmp/cert.pem" SSL_CERT_FILE="$tmp/cert.pem" "$@"; }
 pids=()
+# timeout(1) by its path where it is there, else the first on PATH, as
+# ci/mutants.sh and ci/test-mutants.sh find it: a `timeout` earlier on PATH may
+# not kill grandchildren (ci/webtransport-chrome.sh also names the path).
+# timeout_for <preferred path>: the program to run the cases under.
+timeout_for() { if [ -x "$1" ]; then echo "$1"; else echo timeout; fi; }
+tmo=$(timeout_for /usr/bin/timeout)
 # Each case ends in this many seconds (the cases need about two): the status 124
-# is a kill by /usr/bin/timeout, by full path because a `timeout` earlier on PATH
-# may not kill grandchildren (ci/webtransport-chrome.sh does the same). Without a
-# limit a curl that sleeps a Retry-After of 100000 s (28 hours; 8.15.0, 8.18.0
-# and 8.21.0 do not, and no older curl was run) would hold this test, and the
-# ci-scripts job with its default of 6 hours, until the job is cancelled.
+# is a kill by that timeout. Without a limit a curl that sleeps a Retry-After of
+# 100000 s (28 hours; a curl before 7.79.0 does, as its source reads; 8.15.0,
+# 8.18.0 and 8.21.0 do not, measured) would hold this test, and the ci-scripts
+# job with its default of 6 hours, until the job is cancelled.
 fetch_seconds=60
 fetch() { # fetch <path>: download.sh from the server, in the background (pids); $tmp/f/<path>.got, .out and .rc
   (
     rc=0
-    clean_env /usr/bin/timeout "$fetch_seconds" "$download" "https://127.0.0.1:$port/$1" "$tmp/f/$1.got" \
+    clean_env "$tmo" "$fetch_seconds" "$download" "https://127.0.0.1:$port/$1" "$tmp/f/$1.got" \
       > "$tmp/f/$1.out" 2>&1 || rc=$?
     echo "$rc" > "$tmp/f/$1.rc"
   ) &
@@ -424,17 +436,23 @@ fetch() { # fetch <path>: download.sh from the server, in the background (pids);
 probe() { # probe <path>: a plain curl, with the options of download.sh but no retry, in the background
   (
     rc=0
-    clean_env /usr/bin/timeout "$fetch_seconds" curl --proto '=https' --tlsv1.2 -fSL --no-progress-meter \
+    clean_env "$tmo" "$fetch_seconds" curl --proto '=https' --tlsv1.2 -fSL --no-progress-meter \
       -o "$tmp/f/$1.got" "https://127.0.0.1:$port/$1" > "$tmp/f/$1.out" 2>&1 || rc=$?
     echo "$rc" > "$tmp/f/$1.rc"
   ) &
   pids+=("$!")
 }
 exit_of() { [ "$(cat "$tmp/f/$1.rc")" = "$2" ]; }                  # exit_of <path> <status>
-failed_by_itself() { # failed_by_itself <path>: a failure that is not the kill of the timeout (status 124)
+failed_by_itself() { # failed_by_itself <path>: a failure of download.sh or curl, not of the timeout around them
   local status
   status=$(cat "$tmp/f/$1.rc")
-  [ "$status" != 0 ] && [ "$status" != 124 ]
+  # timeout(1)'s own statuses: 124 it killed the command, 125 it failed itself, 126 the
+  # command could not be run, 127 it was not found (also env's, when timeout is not
+  # there), 137 it was killed. None is a status of download.sh (curl's, 1 or 2) or of curl.
+  case $status in
+    0 | 124 | 125 | 126 | 127 | 137) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 got_the_file() { cmp -s "$tmp/f/$1.got" "$tmp/body"; }              # got_the_file <path>: the file, whole and nothing else
 got_no_file() { [ ! -e "$tmp/f/$1.got" ]; }                         # got_no_file <path>
@@ -445,11 +463,20 @@ requests_are() { [ "$(grep -c "^$1 " "$tmp/requests")" -eq "$2" ]; } # requests_
 said() { grep -q "$2" "$tmp/f/$1.out"; }                             # said <path> <text in the log>
 
 not() { ! "$@"; }
-for status in 0 1 22 124; do echo "$status" > "$tmp/f/status-$status.rc"; done
+for status in 0 1 2 22 28 124 125 126 127 137; do echo "$status" > "$tmp/f/status-$status.rc"; done
 check_ "a status of 0 is not a failure by itself" not failed_by_itself status-0
 check_ "the status 1 is a failure by itself" failed_by_itself status-1
+check_ "the status 2 is a failure by itself" failed_by_itself status-2
 check_ "curl's status 22 is a failure by itself" failed_by_itself status-22
+check_ "curl's status 28 is a failure by itself" failed_by_itself status-28
 check_ "the status 124, the kill of the timeout, is not a failure by itself" not failed_by_itself status-124
+check_ "the status 125, the failure of the timeout itself, is not a failure by itself" not failed_by_itself status-125
+check_ "the status 126, a command that could not be run, is not a failure by itself" not failed_by_itself status-126
+check_ "the status 127, a timeout or a command that is not there, is not a failure by itself" not failed_by_itself status-127
+check_ "the status 137, a kill by SIGKILL, is not a failure by itself" not failed_by_itself status-137
+check_ "timeout(1) is its path when that is there" test "$(timeout_for /bin/sh)" = /bin/sh
+check_ "timeout(1) is the one on PATH when its path is not there" test "$(timeout_for "$tmp/no/such/timeout")" = timeout
+check_ "the timeout the cases run under can be run" "$tmo" 5 true
 
 before=$fails
 serve "err504=504,200 err404=404,200 cut=cut,200 hangup=empty,200 late=503/100000 part=cut"
@@ -483,13 +510,26 @@ check_ "the ci-scripts job (ci.yml) has a timeout-minutes of at most an hour (no
   job_ends_within_an_hour ci.yml ci-scripts
 check_ "the ci-scripts job's timeout-minutes allows these cases their $fetch_seconds seconds, with 5 minutes to spare" \
   job_allows ci.yml ci-scripts $((fetch_seconds + 300))
-if [ "$fails" != "$before" ]; then
+# What a failed run shows: whatever each case's helper or curl said, what the server was
+# asked, and the curl that ran (the `late` case needs one with the Retry-After check).
+failure_dump() {
+  local f
   for f in "$tmp"/f/*.out; do
     echo "--- ${f##*/} (download.sh or curl said):"
     cat "$f"
   done
   echo "--- the server was asked:"
   cat "$tmp/requests"
+  echo "--- the curl that ran:"
+  curl --version | head -n 1 || true
+}
+dump_names_the_curl() { # the dump is taken whole first: grep -q on a pipe could end the dump with SIGPIPE
+  local dump
+  dump=$(failure_dump) && grep -qxF -- "$(curl --version | head -n 1)" <<< "$dump"
+}
+check_ "the dump of a failed run names the curl (its first line of --version)" dump_names_the_curl
+if [ "$fails" != "$before" ]; then
+  failure_dump
 fi
 
 # --- ci/check-downloads.sh ---------------------------------------------------

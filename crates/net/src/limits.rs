@@ -7,8 +7,13 @@
 //! that each one exists, is set explicitly rather than left at a library's
 //! default, and is checked before a swarm is built.
 //!
-//! What these bound, and what they do not (TM-22 states the four residuals
-//! and their phase 1 and phase 4 items, each required before 1.0):
+//! What these bound, and what they do not. TM-22 is the list of what the
+//! transports as built leave open: its lettered residuals, each with the
+//! phase that closes it, and its phase 1 item "QUIC stream memory", all
+//! required before 1.0. A new one is added there, not here. The bullets below
+//! are the ones that bear on these bounds, those of the swarm's QUIC and TCP,
+//! each with TM-22's letter where it has one; the WebTransport listener's
+//! (feature `webtransport`, off by default) are in TM-22 only.
 //!
 //! - At most [`Limits::max_established_total`] connections, each holding at
 //!   most [`Limits::connection_receive_window`] bytes a peer sent and this
@@ -18,7 +23,8 @@
 //!   On TCP a connection one past it is refused at once and costs only its
 //!   socket (the TCP flood test). The counter is one for every source and
 //!   transport: that many connections that never finish their handshake lock
-//!   every inbound peer out for the handshake timeout, renewably.
+//!   every inbound peer out for the handshake timeout, renewably (TM-22's
+//!   residual (b)).
 //! - No new connection while the process's resident memory is above
 //!   [`Limits::max_process_memory_bytes`] (`libp2p-memory-connection-limits`,
 //!   read at most every 100 ms). A node is built only on an operating system
@@ -34,19 +40,29 @@
 //!   phase 4 (an iOS memory check of `net`'s own, or an upstream release on a
 //!   sysinfo that builds for iOS), and `net` refuses to start on iOS until
 //!   then.
-//! - Not bounded by any of these: QUIC Initials. `libp2p-quic` 0.14 accepts
-//!   every Initial quinn hands it before the swarm's limits are asked, so
-//!   each costs a QUIC connection and a TLS server handshake until it is
-//!   refused and drained or times out, at whatever rate an attacker sends
-//!   (the security review of 2026-11-03 measured 10 000 Initials at about
-//!   412 MB, about 41 KB each, and seconds of CPU). quinn's Retry or its
-//!   incoming cap would bound this; `libp2p-quic` exposes neither.
-//! - Not bounded either: yamux's connection receive window on TCP, which
-//!   `libp2p-yamux` 0.48 does not let us set. It starts at 256 KiB per stream
-//!   and auto-tunes from the round trip yamux measures with its pings and the
-//!   rate this side reads, up to yamux's 1 GiB ceiling, so a remote that
-//!   delays its ping answers inflates the estimate and can grow one
-//!   connection's window, and what it may send unread, toward that ceiling.
+//! - Not bounded by any of these: QUIC Initials (TM-22's residual (a)).
+//!   `libp2p-quic` 0.14 accepts every Initial quinn hands it before the
+//!   swarm's limits are asked, so each costs a QUIC connection and a TLS
+//!   server handshake until it is refused and drained or times out, at
+//!   whatever rate an attacker sends (the security review of 2026-11-03
+//!   measured 10 000 Initials at about 412 MB, about 41 KB each, and seconds
+//!   of CPU). quinn's Retry or its incoming cap would bound this;
+//!   `libp2p-quic` exposes neither.
+//! - Not bounded either: yamux's connection receive window on TCP (TM-22's
+//!   residual (c)), which `libp2p-yamux` 0.48 does not let us set. It starts
+//!   at 256 KiB per stream and auto-tunes from the round trip yamux measures
+//!   with its pings and the rate this side reads, up to yamux's 1 GiB ceiling,
+//!   so a remote that delays its ping answers inflates the estimate and can
+//!   grow one connection's window, and what it may send unread, toward that
+//!   ceiling.
+//! - And not bounded: the memory behind a QUIC connection's unread bytes.
+//!   [`Limits::connection_receive_window`] counts bytes, not memory: quinn
+//!   keeps each frame's data as a slice of the buffer of the UDP read it came
+//!   in, and frees that buffer only when every slice is gone, so many small
+//!   frames can keep far more memory alive than their bytes, and the process
+//!   memory limit above only refuses new connections. TM-22's phase 1 item
+//!   "QUIC stream memory" states the figure, from reading quinn's code and not
+//!   measured.
 
 use core::fmt;
 use core::time::Duration;

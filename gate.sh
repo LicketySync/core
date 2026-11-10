@@ -274,6 +274,22 @@ step ci/check-downloads.sh
 # crate, which TM-17, TM-40 and TM-41 name as their enforcer (review ruling of
 # 2026-10-22), measured per crate: only that crate's own files count, so a
 # well-tested neighbour cannot mask it.
+# The clean comes first. cargo-llvm-cov reports on every test binary of a
+# workspace crate in target/llvm-cov-target, but before a run it removes only
+# the crate it measures, so a binary of another crate from an earlier gate run
+# stays: engine's, which links the index, carries the index code of that run,
+# and its coverage map, counted against the new files, took the index from 98%
+# to 75% in a rerun of the case (views.rs and write.rs at about half): the gate
+# failed for no reason, twice on 2026-11-08. `clean --workspace` removes every
+# workspace crate's artifacts and the profile data there and keeps the
+# dependencies' build. Wider, a plain `cargo llvm-cov clean` removes the whole
+# directory and adds about 22 s (251 s for the loop on an empty directory, 229 s
+# on a warm one); narrower, deleting the test binaries by hand would copy
+# cargo-llvm-cov's own rules for which files are a crate's and save about 3 s.
+# Measured on 2026-11-09: the clean itself takes under a second and the loop
+# takes the same time after it (230 s against 229 s). Once is enough: what the
+# loop builds itself is of this tree.
+step cargo llvm-cov clean --workspace
 for c in keys protocol index engine; do
   others=$(ls crates | grep -vx "$c" | paste -sd'|' -)
   step cargo llvm-cov nextest --all-features --fail-under-lines 90 \

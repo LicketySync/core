@@ -28,8 +28,9 @@
 #   good, an output file that cannot be written (curl's exit status 23, retried
 #   all the same: measured with curl 8.18.0 and 8.21.0). That is acceptable: the
 #   job fails either way, so what is lost is four minutes of a run that was
-#   going to be red, and the 878 s bound below still holds; a wrong pin comes
-#   only with a commit that changes a pin, and such a commit is reviewed anyway.
+#   going to be red, and the 878 s bound below still holds (with curl 7.79.0 or
+#   later, as below); a wrong pin comes only with a commit that changes a pin,
+#   and such a commit is reviewed anyway.
 #   --retry-all-errors needs curl 7.71.0; the plain --retry would retry only a
 #   timeout and an HTTP 408, 429, 500, 502, 503 or 504.
 #   --retry-connrefused (curl 7.52.0) is implied by it (measured with curl
@@ -44,21 +45,26 @@
 #   less than 450 s have passed since the first try began when a try fails; the
 #   wait before the retry is not counted (measured with curl 8.18.0: with a
 #   window of 5 s the tries began at 0, 1, 3 and 7 s). The window is longer than
-#   one try so that a first try that times out is not the last. So a stuck
-#   download ends in 878 s (14.6 minutes) at most: the window, the longest wait
-#   (128 s) and one more try. The two downloads of nightly.yml's
-#   webtransport-chrome job take 29.3 minutes of its 45, and the gitleaks job
-#   of ci.yml, whose one download takes 14.6, has timeout-minutes 25.
-#   ci/test-download.sh checks both. A Retry-After header (429, 503) is
+#   one try so that a first try that times out is not the last. So, with curl
+#   7.79.0 or later, a stuck download ends in 878 s (14.6 minutes) at most: the
+#   window, the longest wait (128 s) and one more try. The two downloads of
+#   nightly.yml's webtransport-chrome job take 29.3 minutes of its 45, and the
+#   gitleaks job of ci.yml, whose one download takes 14.6, has timeout-minutes
+#   25. ci/test-download.sh checks both. A Retry-After header (429, 503) is
 #   honoured by curl as the wait, but not past the window: if it would end
 #   after the window, curl 8.15.0, 8.18.0 and 8.21.0 give up with exit status 0
 #   and no file (measured with a 503: "The Retry-After: time would make this
 #   command line exceed the maximum allowed time for retries", exit 0), which
-#   is why this script checks for the file.
-# Every option is in curl 7.71.0 (2020) and later: Ubuntu 22.04 has curl
-# 7.81.0 and 24.04 has 8.5.0 (neither was run); the development machine has
-# 8.18.0, and ci/test-download.sh also passed with 8.15.0 and 8.21.0
-# (2026-11-09).
+#   is why this script checks for the file. That check against the window came
+#   with curl 7.79.0. Before it curl honours a Retry-After all the same and
+#   waits out a long one whole (curl 7.74.0 sleeps the 100000 s of
+#   ci/test-download.sh's `late` case), so the 878 s bound does not hold on a
+#   curl older than 7.79.0.
+# Every option is in curl 7.71.0 (2020) and later, which is the minimum for the
+# options themselves; the 878 s bound needs 7.79.0 or later. Ubuntu 22.04 has
+# curl 7.81.0 and 24.04 has 8.5.0 (neither was run); CI's curl (8.5.0 on
+# ubuntu-latest) and the development machine's (8.18.0) are both past 7.79.0,
+# and ci/test-download.sh also passed with 8.15.0 and 8.21.0 (2026-11-09).
 # A retry never leaves a partial or appended file behind. The output is the one
 # file given to -o, and curl truncates it before it tries again (checked with
 # curl 8.18.0: a try cut off after 5946 of 11892 bytes, then a complete one,

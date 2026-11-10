@@ -42,8 +42,10 @@ opt-level = 3
 
 # libp2p-webtransport-websys 0.6.0 requires wasm-bindgen-futures =0.4.58 from
 # rust-libp2p's workspace (to dodge a gloo-timers 0.2.6 break that futures-timer
-# 3.0.4 no longer has; upstream PRs #6446 and #6671 relax it). This is the
-# published 0.6.0 source (MIT) with only that requirement relaxed to 0.4.79.
+# 3.0.4 no longer has; upstream PRs #6446 and #6671 relax it, and the owner's
+# #6747 removes it, waiting for a gloo-timers release: vendor/README.md says
+# what it does). This is the published 0.6.0 source (MIT) with only that
+# requirement relaxed to 0.4.79.
 # The owner, 2026-11-04: "Yes, keep the patched version until upstream releases
 # the fix." It goes once such a release has been out 7 days (vendor/README.md;
 # ci/check-vendored.sh holds the copy to vendor/SHA256SUMS).

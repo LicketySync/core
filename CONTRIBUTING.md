@@ -57,42 +57,73 @@ agrees it is not one.
 
 ## Local checks
 
-`./gate.sh` first checks the pins (below) and runs `ci/toolchains.sh`, then
-runs, in order, every CI check that can fail and fits on one machine (it needs
-the network for the advisory database and Semgrep's community rules):
+`./gate.sh` is the list. It runs, in order and stopping at the first that
+fails, every CI check that can fail and fits on one machine (it needs the
+network for the advisory database and Semgrep's community rules), and prints
+`== <command>` before each check after the first group (the pins and the
+toolchains print no such line), so from there its output is the current list
+and its comments say why each is there. This section names only the groups, in
+`gate.sh`'s order, and not every command: when the two differ, `gate.sh` is
+right. A check is added to `gate.sh` and to CI, and here only when it starts a
+group. The groups:
 
-```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo nextest run --workspace --all-features
-cargo test --workspace --doc
-RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items
-cargo deny check
-cargo deny --config deny-production.toml check bans
-cargo audit
-cargo machete
-cargo vet --locked
-cargo +<RUST_NIGHTLY> udeps --workspace --all-targets
-cargo fetch --locked --manifest-path fuzz/Cargo.toml
-typos
-semgrep --test --metrics=off --config .semgrep/project.yml .semgrep/tests/project.rs
-semgrep scan --metrics=off --timeout 60 --config p/rust --config .semgrep --exclude .semgrep --error
-ci/gitleaks.sh tree   # only when gitleaks is installed
-ci/test-geiger.sh
-ci/geiger.sh
-ci/test-no-hostnames.sh
-ci/no-hostnames.sh
-ci/test-pinned-actions.sh
-ci/pinned-actions.sh
-ci/test-toolchains.sh
-ci/test-mutants.sh
-ci/test-fuzz-targets.sh
-cargo llvm-cov nextest --all-features --fail-under-lines 90 -p licketysync-<crate> --ignore-filename-regex 'crates/(<the others>)/'   # once each for keys, protocol, index, engine
-```
+1. **The pins**, before anything is built: `ci/check-pins.sh` on
+   `ci/pins.env`; every tool and toolchain at its pinned version, and every
+   copy of a version in a workflow or in `ci/geiger-baseline.txt` (below, "Pins
+   and the weekly refresh"); `ci/toolchains.sh`.
+2. **Rust**: `cargo fmt`, clippy pedantic with `-D warnings` (all targets, all
+   features), nextest, doc-tests, rustdoc with warnings denied.
+3. **Dependencies**: `cargo deny` (and the production bans of
+   `deny-production.toml`), `cargo audit` on core's lockfile and on `fuzz/`'s,
+   `cargo machete`, `cargo vet --locked`.
+4. **The browser test crate**, `browser-tests/webtransport` (spike B), a
+   workspace of its own: its lockfile fetched `--locked`, audited,
+   deny-checked and vetted against its own `supply-chain/`; its code formatted
+   and clippy pedantic on wasm32; `ci/check-vendored.sh` (the vendored
+   libp2p-webtransport-websys is the copy `vendor/SHA256SUMS` lists) and
+   `ci/check-wasm-bindgen.sh` (its wasm-bindgen is the pinned
+   wasm-bindgen-cli's).
+5. **Unused dependencies and the fuzz lockfile**: `cargo udeps` on the pinned
+   nightly; `fuzz/Cargo.lock` current (`cargo fetch --locked`).
+6. **Scans**: typos; Semgrep, first the project rules' own cases, then the scan;
+   gitleaks over the working tree (`ci/gitleaks.sh tree`), only when gitleaks
+   is installed.
+7. **The CI scripts**, each check with the test that runs it on made-up
+   inputs: cargo-geiger's counts against the baseline (`ci/test-geiger.sh`,
+   `ci/geiger.sh`); no hostname beyond `spec/allowed-hosts.txt`
+   (`ci/test-no-hostnames.sh`, `ci/no-hostnames.sh`); every action in the
+   workflows pinned by commit (`ci/test-pinned-actions.sh`,
+   `ci/pinned-actions.sh`); the tests of group 1's two checks
+   (`ci/test-toolchains.sh`, `ci/test-check-pins.sh`); the line-ending
+   attributes of the test vectors and fuzz seeds
+   (`ci/test-vector-line-endings.sh`); the scripts the weekly and nightly
+   workflows run, on stand-ins for their tools or made-up logs
+   (`ci/test-mutants.sh`, `ci/test-fuzz-targets.sh`,
+   `ci/test-check-netlog.sh`); the tests of group 4's two checks
+   (`ci/test-check-wasm-bindgen.sh`, `ci/test-check-vendored.sh`); and the
+   download helper with the check that nothing downloads without it
+   (`ci/test-download.sh`, `ci/check-downloads.sh`).
+8. **Coverage**, last: at least 90% of lines in each of the keys, protocol,
+   index and engine crates, measured per crate, after
+   `cargo llvm-cov clean --workspace`.
 
 The coverage threshold is per crate: only that crate's own files count, so a
 well-tested neighbour cannot mask an under-tested one (`gate.sh` has the exact
 loop).
+
+The clean comes first because `cargo llvm-cov` reports on every test binary
+that belongs to a workspace crate in `target/llvm-cov-target`, but before a run
+removes only the crate it measures. A binary of another crate left by an
+earlier run, such as engine's, which links the index, then carries the index
+code of that run, and its coverage map counts the old code against the new
+files: the index measurement failed for no reason (twice, 2026-11-08).
+`cargo llvm-cov clean --workspace` removes every workspace crate's artifacts
+and the profile data there, and keeps the build of the dependencies. It takes
+under a second and the four measurements take as long after it as before (about
+230 s on the development machine, nearly all of it engine's tests); a plain
+`cargo llvm-cov clean`, which removes the whole directory, adds about 22 s for
+the dependencies' rebuild. Run the clean first before a coverage command of
+your own, too.
 
 `ci/geiger.sh` prints the cargo-geiger report and fails when any of a crate's
 five used unsafe counts differs from its line in `ci/geiger-baseline.txt`, up

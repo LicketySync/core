@@ -6,6 +6,102 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Clean the stale coverage binaries inside `gate.sh`, bring the gate list in `CONTRIBUTING.md` up
+  to date, and settle five small follow-ups (the coordinator's brief of 2026-11-09): three of the
+  download retry's re-confirm review, one doc comment of `net`, one note on the upstream pull
+  request that unpins the vendored crate. Docs, gate wiring and one test script; no keys,
+  protocol, paths or API, so no security pass.
+  - **`gate.sh` cleans `target/llvm-cov-target` before the coverage loop** (`cargo llvm-cov clean
+    --workspace`, gate.sh:292). The bug: cargo-llvm-cov reports on every test binary of a
+    workspace crate in that directory, and before a run removes only the crate it measures, so a
+    binary left by an earlier gate run in another crate stays. Engine's links the index; with the
+    index changed, its coverage map still holds the old index code and the index measurement
+    failed for no reason, twice on 2026-11-08 (`write.rs` and `views.rs` at about half). The
+    workaround was to run the clean by hand before `gate.sh`; the gate does it now. The choice
+    among removals: `cargo llvm-cov clean --workspace` (every workspace crate's artifacts and the
+    profile data, the dependencies' build kept), a plain `cargo llvm-cov clean` (the whole
+    directory) or deleting the test binaries by hand. The first, because the second adds the
+    dependencies' rebuild and the third copies cargo-llvm-cov's rules for which files belong to a
+    crate. Cost, measured here on 2026-11-09 with cargo-llvm-cov 0.9.1: the clean takes under a
+    second and cuts `target/llvm-cov-target` from 1.9 GB to 247 MB; the four measurements take 229
+    s on a warm directory (keys 5, protocol 10, index 24, engine 190) and 230 s after the clean
+    (8, 10, 24, 188); on an empty directory, as a plain clean would leave it, 251 s. CI is not
+    changed: its coverage job runs `cargo llvm-cov nextest --workspace` before the loop, which
+    cleans every workspace member itself.
+  - **`CONTRIBUTING.md`'s "Local checks"** listed 26 commands and left out the pins, the browser
+    test crate's checks, `cargo audit` on `fuzz/`, and the checks of the CI scripts added since
+    (check-pins, vector line endings, check-netlog, check-wasm-bindgen, check-vendored,
+    test-download, check-downloads). It now says that `gate.sh` is the list, then names eight
+    groups in `gate.sh`'s order, each with its scripts, and gives the reason for the clean. Why
+    groups: a list of commands had fallen behind `gate.sh` more than once, and the groups change
+    only when a kind of check is added; the section says that `gate.sh` is right when they
+    differ. Checked with a loop over `gate.sh`: every `ci/` script it runs is named in the
+    section.
+  - **`crates/net/src/limits.rs` module doc**: "TM-22 states the four residuals" was out of date.
+    TM-22 lists seven residuals, (a) to (g), (e) to (g) of the WebTransport listener, and the
+    phase 1 item "QUIC stream memory". The doc now says that TM-22 is the list (so a new residual
+    is added there and the doc is not wrong), that its bullets are the ones that bear on the
+    swarm's QUIC and TCP bounds with TM-22's letters ((a), (b), (c), (d)), and adds the bullet it
+    lacked: the receive window counts bytes, not the memory behind them. A doc comment only.
+  - **`browser-tests/webtransport/vendor/README.md` and `Cargo.toml`** name the owner's pull
+    request rust-libp2p #6747 beside #6446 and #6671: what it does (removes the exact
+    `wasm-bindgen-futures` pin for `0.4.80`, requires futures-timer 3.0.4, wraps the wakers in
+    `AssertUnwindSafe` in two crates, adds a browser timer test, bumps
+    libp2p-webtransport-websys to 0.6.1), that it is open and waits for a gloo-timers release, and
+    that taking its release will move this crate's own wasm-bindgen pins. Read from the public
+    pages; nothing posted.
+  - **`ci/test-download.sh`** (132 cases, 122 before). D1: the failure dump prints the first line of
+    `curl --version`, and the header says that the `late` case needs a curl with the Retry-After
+    check. D3: the cases run under `/usr/bin/timeout`, else the `timeout` on PATH, as
+    `ci/mutants.sh` finds it; `failed_by_itself` no longer counts the statuses of timeout(1)
+    itself (125, 126, 127, 137, besides 124) as the helper's failure, so a missing timeout (127)
+    cannot pass the `late` check. D2 is the fix of the entry below ("each fail at least one case"),
+    which also gains the D1 sentence. The sentences about curl's Retry-After say what its source
+    (`tool_operate.c` at the release tags) shows: curl 7.74.0 honours a Retry-After and sleeps the
+    whole 100000 s, and the check against `--retry-max-time` came with 7.79.0. That bears on
+    `ci/download.sh` too: on a curl before 7.79.0 a long Retry-After is waited out, not cut at the
+    retry window (ubuntu-latest's 8.5.0 has the check), so its 878 s bound needs 7.79.0 or later;
+    the header of `ci/download.sh` says so (the minimum for its options stays 7.71.0).
+  - **Without the change** (mutants of the new test script, made by hand): the dump without the
+    curl line fails the dump case; the old `failed_by_itself` fails four cases (125, 126, 127, 137);
+    no fallback for timeout(1) fails two; a missing timeout fails 17 cases, and with the old
+    predicate that missing timeout passes the two `late` cases that look at the status and the
+    file (the request count still fails). The stale-binary case: with the index of ebb6a67^ put
+    back in the tree and the engine binaries of 598e58a in `target/llvm-cov-target`, the index
+    measurement fails (75.10% of lines, `views.rs` 52.23%, `write.rs` 45.41%) and passes after
+    `cargo llvm-cov clean --workspace` (97.66%, 98.47% and 97.60%); the index was restored
+    afterwards. A second stale state, made with engine's tests built against an index that held a
+    harmless probe (an unused function and 40 comment lines, then removed): the index measurement
+    alone fails without the clean (76.49%, exit 1), and `./gate.sh` run from that state passes
+    (1236 s, the index at 97.80%).
+  - **Review round** (two reviews of the first commit, both clean; the reviewers are named at
+    landing). The nits taken are documentation only, with no change in behaviour. The header of
+    `ci/download.sh` says that its 878 s bound needs curl 7.79.0 or later, because an older curl
+    waits out a long Retry-After, that 7.71.0 stays the minimum for the options themselves, and that
+    CI's curl (8.5.0) and the development machine's (8.18.0) are both past 7.79.0. The `limits.rs`
+    doc no longer says that TM-22 states the bound that item requires, since TM-22 gives only the
+    figure of about 2.9 GiB and "then bound it"; "all required before 1.0" stays, being the owner's
+    decision of 2026-11-08, and main's TM-22 still says "proposed ... pending the owner's word"
+    until wip/spec-1103, which lands next, rewrites it to "Required before 1.0 (owner, 2026-11-08)".
+    `CONTRIBUTING.md` says that the `== <command>` lines start after group 1, the pins, which print
+    none. `vendor/README.md` says "the owner's fork" and not the account's name, "bumps
+    libp2p-webtransport-websys to 0.6.1", and "gets the fix for the `panic = "unwind"` build", and
+    names ranile/gloo#587, the open pull request of 2026-11-08 that prepares the gloo release (read
+    from the public page; nothing posted). A confirm review then found the README's claim that
+    gloo-timers 0.4 is the line with the `panic = "unwind"` fix false, and the README now says what
+    the public pages show (read with `gh`; nothing posted): futures-timer 3.0.4 and its master
+    require gloo-timers 0.4.0, which was released on 2026-03-25 without the fix (ranile/gloo#562,
+    merged on 2026-05-16, in no release), and #587 sets gloo-timers to 0.5.0, which that
+    requirement does not accept, so a gloo-timers release alone does not fix the emscripten build
+    through futures-timer 3.0.4 and it also needs a futures-timer release that takes gloo-timers
+    0.5 or a gloo-timers 0.4.x patch. The `ci/test-download.sh` bullet above is reworded and
+    rewrapped to 100 columns.
+  - Reviewed 2026-11-09 by a2cd936bf7be06fdb (first review: clean, five nits, taken) and
+    a31bae1614414701a (second review: clean, six nits, taken); confirm ab9f3d48c7a239370: blocked by
+    one (the README's gloo-timers sentence), now fixed; confirm a426db48eecc921dc: clean. Docs, gate
+    wiring and one test script, so no security pass. Author a7178481ac635223c; fixes by
+    a87237740ed18dcb4 and a43b116d2c83d809a. Landed as one squashed commit.
+
 - Retry the CI scripts' downloads, so that a short outage at a download host does not turn `main`
   red (the owner's approval of 2026-11-09: "Go ahead with the download retry change"). The push of
   ebb6a67 failed CI run 42568260092: the gitleaks job's `ci/gitleaks-install.sh` got `curl: (22) The
@@ -92,19 +188,24 @@ paths or the API also names the security-reviewer pass.
     real-curl case runs under `/usr/bin/timeout 60` (by full path, as `ci/webtransport-chrome.sh`
     does), so that a curl without the Retry-After check, which would sleep the 100000 s, fails the
     case instead of holding the job; the 503 must fail by itself, not by the timeout's kill
-    (status 124), and the test checks that predicate on made-up statuses.
+    (status 124), and the test checks that predicate on made-up statuses. The `late` case needs a
+    curl that honours a Retry-After by giving up when it would end after `--retry-max-time`, which
+    curl has done since 7.79.0 (read from `tool_operate.c` at the release tags, not run: Ubuntu
+    22.04's 7.81.0 and 24.04's 8.5.0 have it; 8.15.0, 8.18.0 and 8.21.0 were run); curl 7.74.0
+    (Debian 11) sleeps the whole Retry-After, so there the timeout kills the case and it fails. The
+    test's failure dump names the curl for that reason.
   - **Without the change.** The check fails on the install scripts of ebb6a67 (their two `curl`
     lines); with the first version of this change (an `exec curl` with `--retry 8
     --retry-connrefused`, no `--retry-all-errors`, no `timeout-minutes` on the `gitleaks` or
     `ci-scripts` job), 32 of the 122 cases fail. 27 mutants of the helper and of the two jobs'
     timeouts, made by hand against the previous version of the tests, each failed a case; nine
-    more, made against this version, each fail one: the old `'Will retry'` check on curl 8.21.0; a
-    curl that asks once for the 503 and then sleeps (under a 3 s limit); the `ci-scripts` job with
-    no `timeout-minutes`, with 5 and with 360; each of the three `rm -f --` without `--`; and the
-    503's check accepting the status 124. With that sleeping curl and the 503's old check (a
-    failure of any kind, which a kill by the timeout also is), no case fails: the hang would go
-    unseen. `gate.sh` and the `ci-scripts` job of `ci.yml` run both scripts; `CONTRIBUTING.md`
-    names python3 and openssl and says where the helper is.
+    more, made against this version, each fail at least one case: the old `'Will retry'` check on
+    curl 8.21.0; a curl that asks once for the 503 and then sleeps (under a 3 s limit); the
+    `ci-scripts` job with no `timeout-minutes`, with 5 and with 360; each of the three `rm -f --`
+    without `--`; and the 503's check accepting the status 124. With that sleeping curl and the
+    503's old check (a failure of any kind, which a kill by the timeout also is), no case fails:
+    the hang would go unseen. `gate.sh` and the `ci-scripts` job of `ci.yml` run both scripts;
+    `CONTRIBUTING.md` names python3 and openssl and says where the helper is.
   - **The confirm review's round** (2026-11-09; every ruling taken, the coordinator's squash at
     landing aside). The review found that the log case failed on curl 8.21.0, whose retry notice
     reads "Retrying in" (the test now accepts both wordings); that the 503 case could hang for
