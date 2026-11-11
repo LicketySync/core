@@ -8,9 +8,10 @@
 //! default, and is checked before a swarm is built.
 //!
 //! What these bound, and what they do not. TM-22 is the list of what the
-//! transports as built leave open: its lettered residuals, each with the
-//! phase that closes it, and its phase 1 item "QUIC stream memory", all
-//! required before 1.0. A new one is added there, not here. The bullets below
+//! transports as built leave open: its lettered residuals (a) to (h), each
+//! with the phase that closes it, all required before 1.0; the last, (h),
+//! is the phase 1 item "QUIC stream memory" (the owner's decision of
+//! 2026-11-08). A new one is added there, not here. The bullets below
 //! are the ones that bear on these bounds, those of the swarm's QUIC and TCP,
 //! each with TM-22's letter where it has one; the WebTransport listener's
 //! (feature `webtransport`, off by default) are in TM-22 only.
@@ -60,9 +61,9 @@
 //!   keeps each frame's data as a slice of the buffer of the UDP read it came
 //!   in, and frees that buffer only when every slice is gone, so many small
 //!   frames can keep far more memory alive than their bytes, and the process
-//!   memory limit above only refuses new connections. TM-22's phase 1 item
-//!   "QUIC stream memory" states the figure, from reading quinn's code and not
-//!   measured.
+//!   memory limit above only refuses new connections. TM-22's residual (h),
+//!   the phase 1 item "QUIC stream memory", states the figure, from reading
+//!   quinn's code and not measured, and requires it bounded before 1.0.
 
 use core::fmt;
 use core::time::Duration;

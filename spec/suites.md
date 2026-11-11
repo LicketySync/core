@@ -1,6 +1,8 @@
 # Lickety-Sync cryptographic suites
 
-Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model). This file names
+Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model), amended
+2026-11-10 for the security protocol of a relay's circuit (transport, "Circuits", and the approved
+crates' rows for it). This file names
 every algorithm, parameter and crate that may perform cryptography in this workspace, the apps and
 the browser client. It is normative: first-party code uses nothing that is not listed here, and a
 change that needs something else adds it here first, with the reason, and is reviewed as a change to
@@ -237,7 +239,7 @@ used for large files, nothing else.
   else can, so the hint and the proof key are secret from everyone without a key to the folder (a
   network observer, a relay, a connected peer with no key), from whom they hide which folder the
   other side is proving; the sealed payload that opens under the proof key is what admits a peer.
-  The drafts keyed both with the folder ID, which every relay knew.
+  The drafts keyed both with the folder ID, which every person who ever saw a key string knew.
 - **`derive_key` for every purpose key, from uniformly random key material only.**
   `derive_key(label, material)` with a registered label and 32 bytes of uniformly random material: a
   write secret, a data key, an access key, a device seed, a link secret. Every key in the system
@@ -357,10 +359,11 @@ observer what a sealed peer would otherwise see (threat model section 5).
 **One security protocol per transport (decision).** Each transport offers exactly one security
 protocol, so multistream-select has nothing to choose between before either side is authenticated:
 TLS 1.3 on QUIC and on TCP; Noise only inside WebSocket, WebTransport and WebRTC, where TLS is not
-offered. On TCP, a listener offered any other security protocol answers `na` (multistream-select)
-and the connection ends without being established, when the dialer gives up or the handshake
-timeout passes (`net` tests the Noise and plaintext refusals and the handshake timeout); on QUIC
-nothing is offered, TLS being part of QUIC. This
+offered (a relay's circuit is the one exception, from phase 6, and only on the listening side:
+"Circuits", below). On TCP, a listener offered any other security protocol answers `na`
+(multistream-select) and the connection ends without being established, when the dialer gives up or
+the handshake timeout passes (`net` tests the Noise and plaintext refusals and the handshake
+timeout); on QUIC nothing is offered, TLS being part of QUIC. This
 qualifies the plan's "nothing is negotiated before the secure channel exists": libp2p does negotiate
 the security protocol, so the sentence is made true by giving it one candidate per transport (threat
 model, section 3.1 and TM-1). What the rule does not prevent is the choice of transport: an attacker
@@ -395,8 +398,9 @@ unless every crate that depends on rustls disables default features; the change 
   provider, which is deferred until some other need forces it. Certificates follow the libp2p TLS
   specification: each side's certificate is self-signed by its own freshly generated P-256 key and
   carries the libp2p extension, in which the libp2p identity key signs the certificate's public key.
-  The certificate key is not a Lickety-Sync key: `rcgen` generates it on `ring` for each of the four
-  TLS configurations a node builds (two per transport), it is neither derived from the seed nor
+  The certificate key is not a Lickety-Sync key: `rcgen` generates it on `ring` for each of the TLS
+  configurations a node builds, two per transport: four on QUIC and TCP, and from phase 2 two more
+  for circuits ("Circuits", below), six in all; it is neither derived from the seed nor
   stored, and it reaches rustls as PKCS#8 bytes that `ring` writes and `aws-lc-rs` reads (and signs
   the CertificateVerify with), with no `pkcs8`, `der` or `spki` crate, which `deny.toml` bans
   because no first-party key is encoded so;
@@ -466,6 +470,28 @@ unless every crate that depends on rustls disables default features; the change 
   background requests are kept off the network by the test's flags and checked from its net log.
   Inside the outer layer, Noise is classical as for every browser path (above). `wtransport` and
   the browser-only crates are in section 3.1 (proposed).
+- **Circuits** (relayed connections through a public relay or a hole-punch coordinator, phases 2
+  and 7; the spec author's choice of 2026-11-10, after the security review of that day, for the
+  owner's review). A circuit relay v2 circuit is a byte stream through the device in the middle,
+  and libp2p upgrades it with a security protocol of its own, end to end between the two peers;
+  the middle sees only that channel's ciphertext. Between two native ends it is **TLS 1.3**
+  through `libp2p-tls`, with the same rustls configuration as on QUIC and TCP, so its key exchange
+  offers X25519MLKEM768 first and a recording of it stays closed to a future quantum computer.
+  **Noise** XX through `libp2p-noise`, classical, is used only where a browser client is one end
+  (phase 6), since `libp2p-tls` does not build for the browser. A native dialer offers exactly one
+  of the two on a circuit: TLS, or Noise to a peer whose addresses mark it as a browser client
+  (phase 6's design), a mark that phase 6 takes only from sources the device in the middle cannot
+  alter, an invite or the peer exchange of a folder's peers over an end-to-end channel, never from
+  the circuit or from anything the device in the middle says (the confirm review of 2026-11-10), so
+  that no relay or coordinator can make a native dialer offer Noise to a native peer. So a device
+  in the middle that rewrites the negotiation gets a failed
+  handshake, never a weaker one between two native ends. A native listener accepts TLS on a
+  circuit, and Noise too only from phase 6, for browser dialers: the one exception to "one security
+  protocol per transport", which a downgrade cannot use against a native dialer, since that dialer
+  never offers Noise to a native peer. What a recorded Noise circuit reveals to a future quantum
+  computer is what a sealed peer sees, the folder ID among it (threat model, section 5's quantum
+  entry). The relay hop between each peer and the device in the middle is an ordinary QUIC or TCP
+  connection, under the rules above.
 - **Tor** (phase 7) through Arti: onion-service cryptography is Tor's.
 
 **The libp2p identity key (decision).** The transport authenticates each side's libp2p identity, an
@@ -528,9 +554,9 @@ unaudited post-quantum crates required goes with them.
 | `argon2` | `0.6` | 0.6.0, 2026-08-27 | none named | Argon2id with the parameters of section 2.5, `zeroize` feature; from phase 1, with the key store | Argon2i or Argon2d; the crate's defaults; the `password-hash` PHC API as a verifier |
 | `zeroize` | `1` | 1.9.1, 2026-10-06 | none named; small, widely reviewed | Every secret type: `Zeroize`, `ZeroizeOnDrop`, `Zeroizing<T>`, the `derive` feature | — |
 | `subtle` | `2` | 2.6.1, 2024-06-24 | none named; small, widely reviewed | Constant-time comparison of secrets and tags: `ConstantTimeEq`, `Choice`, `CtOption` | — |
-| `rustls` | `0.23` | 0.23.46, 2026-10-14 | Cure53 2020 | TLS 1.3 for QUIC and TCP as section 2.6, through `libp2p-tls` and `libp2p-quic`: `aws-lc-rs` provider, `prefer-post-quantum`; first-party configurations only through `builder_with_provider` with `aws_lc_rs::default_provider()`; `net` installs that provider as the process default at startup; the `ring` provider only as `libp2p-websocket` ships it | TLS 1.2; the default builders in first-party code; the `ring` provider in first-party code or as the installed default; its HPKE module |
+| `rustls` | `0.23` | 0.23.46, 2026-10-14 | Cure53 2020 | TLS 1.3 for QUIC and TCP, and from phase 2 inside circuits between native ends, as section 2.6, through `libp2p-tls` and `libp2p-quic`: `aws-lc-rs` provider, `prefer-post-quantum`; first-party configurations only through `builder_with_provider` with `aws_lc_rs::default_provider()`; `net` installs that provider as the process default at startup; the `ring` provider only as `libp2p-websocket` ships it | TLS 1.2; the default builders in first-party code; the `ring` provider in first-party code or as the installed default; its HPKE module |
 | `aws-lc-rs` | `1` (1.18.2 in `Cargo.lock`) | 1.18.2, 2026-10-12 | AWS-LC's FIPS build is FIPS 140-3 validated | rustls's crypto provider, so the TLS 1.3 handshake on both transports and QUIC's packet protection, Initial keys included, which `quinn-proto` takes from rustls's QUIC API on the configuration's provider; beneath it, `rustls-webpki`'s signature verification. `quinn-proto` links it too, through the `rustls-aws-lc-rs` feature `libp2p-quic` turns on, but calls none of it: `libp2p-quic` also turns on `quinn-proto`'s `ring` feature, which takes precedence, so `quinn-proto`'s own primitives run on `ring` (read 2026-11-03 in `quinn-proto` 0.11.19; the link is why `deny.toml` lists `quinn-proto` as a wrapper). On Windows, AWS-LC's assembly comes as the prebuilt NASM objects that `aws-lc-sys` ships (rustls's `aws_lc_rs` feature turns on `prebuilt-nasm`), assembled by AWS, not here (recorded 2026-11-03; an item before any Windows release: build them with a pinned NASM instead) | Direct calls to any primitive in first-party code |
-| `libp2p-tls`, `libp2p-quic`, `libp2p-noise` | `0.7`, `0.14`, `0.47` (`net` depends on `libp2p-tls` and `libp2p-quic` directly, not through the `libp2p` facade, whose weak `tokio` feature would put DNS, mDNS and UPnP crates in `Cargo.lock`; `libp2p-noise` directly only under the `webtransport` feature, proposed; for review) | 0.7.0, 0.14.0, 0.47.0, 2026-09-11 | none named | The transports of section 2.6: `make_client_config` and `make_server_config` as `libp2p-tls` builds them (its `Config` on TCP, `libp2p-quic`'s `Config::new` on QUIC); `libp2p-quic` on quinn, with its stateless-reset HMAC key on `ring` from the identity's derived secret | Noise patterns other than XX; Noise on QUIC or TCP; TLS inside WebSocket, WebTransport or WebRTC; building a node while `SSLKEYLOGFILE` is set (both configurations carry rustls's `KeyLogFile`, which writes session secrets to that file; `net` refuses, TM-6) |
+| `libp2p-tls`, `libp2p-quic`, `libp2p-noise` | `0.7`, `0.14`, `0.47` (`net` depends on `libp2p-tls` and `libp2p-quic` directly, not through the `libp2p` facade, whose weak `tokio` feature would put DNS, mDNS and UPnP crates in `Cargo.lock`; `libp2p-noise` directly only under the `webtransport` feature, proposed; for review, and from phase 6 for circuits with a browser end) | 0.7.0, 0.14.0, 0.47.0, 2026-09-11 | none named | The transports of section 2.6: `make_client_config` and `make_server_config` as `libp2p-tls` builds them (its `Config` on TCP and, from phase 2, inside circuits between native ends; `libp2p-quic`'s `Config::new` on QUIC); `libp2p-quic` on quinn, with its stateless-reset HMAC key on `ring` from the identity's derived secret; from phase 6, `libp2p-noise` XX inside a circuit with a browser client at one end, a native listener accepting it there beside TLS ("Circuits") | Noise patterns other than XX; Noise on QUIC or TCP; Noise inside a circuit between two native ends, or offered by a native dialer to a native peer, and inside any circuit before phase 6; TLS inside WebSocket, WebTransport or WebRTC; building a node while `SSLKEYLOGFILE` is set (both configurations carry rustls's `KeyLogFile`, which writes session secrets to that file; `net` refuses, TM-6) |
 | `libp2p-websocket` | with `libp2p` `0.57` | 0.46.0, read 2026-10-17 | none named | The WebSocket transport of section 2.6, its outer TLS classical as shipped (rustls on `ring`) | Any claim that its outer TLS is post-quantum until the phase 2 change lands; the linked-device channel |
 | `wtransport` (proposed; for review) | `0.7` (`default-features = false`, features `aws-lc-rs`, `self-signed` and `quinn`, the last only exposing quinn's transport configuration; optional, `net`'s feature `webtransport`, off by default) | 0.7.2, 2026-08-11 | none named; a small project, so TM-8's active-upstream check applies | The device-side WebTransport listener of section 2.6 (spike B): its server endpoint on quinn with `net`'s QUIC windows and stream limit and a rustls `ServerConfig` that `net` builds itself through `builder_with_provider` on `aws_lc_rs::default_provider()` with its groups and suites replaced (TLS 1.3 only, X25519MLKEM768 and X25519 permitted, the dialer's order choosing between them, `libp2p-tls`'s suite order winning, 0-RTT off). In that configuration two pieces of first-party code: a key-exchange group that delegates every call to `aws-lc-rs`'s X25519MLKEM768 or X25519 and records which one rustls chose, computing nothing itself, and a resolver that serves the one certificate and records the groups the `ClientHello` offered. Its `self-signed` builder, `rcgen` 0.14 on `aws-lc-rs`, for the ECDSA P-256 certificate valid at most 14 days; `Certificate::hash`, SHA-256 of the DER through `sha2`, for the certhash; its client and `ServerHashVerification` in tests only. Beneath it `quinn-proto` runs its stateless-reset, token and Retry cryptography on `ring`, `ring`'s role (3) below, since `libp2p-quic`'s `ring` feature unifies with it | Its `ring` and `dangerous-configuration` features; its default TLS configurations (`with_identity` and the client's defaults, which use its own provider choice); `with_no_cert_validation`; `with_native_certs` and its DNS resolver; a certificate valid more than 14 days; first-party key-exchange code that computes anything |
 | `libp2p-webtransport-websys` (browser only; proposed; for review) | `0.6` (wasm32 only, in `browser-tests/webtransport`, a workspace of its own; the published 0.6.0 source vendored with only `wasm-bindgen-futures = "=0.4.58"` relaxed to `0.4.79`, by the owner's decision of 2026-11-04, "Yes, keep the patched version until upstream releases the fix.", until a release without the pin has been out 7 days; `ci/check-vendored.sh` holds the copy to its `SHA256SUMS`) | 0.6.0, 2026-09-11 | none named | The browser half of spike B's test, and phase 6's browser client: the browser's own WebTransport with `serverCertificateHashes` (Chrome's TLS, which this file does not govern) and `libp2p-noise` as initiator with the dialed certhashes. `libp2p-noise` 0.47 does all of Noise's Diffie-Hellman, ephemeral and static, with its own keypair on `x25519-dalek` 3.0.0 (`curve25519-dalek` 5.0.0), there and on native targets; on wasm32 `snow`'s RustCrypto resolver supplies ChaChaPoly (`chacha20poly1305` 0.10) and SHA-256 (`sha2` 0.10), and its `curve25519-dalek` 4.1.3, `aes`, `ctr` and `aes-gcm` compile there only and are never selected; all `deny.toml`-wrapped. `wasm-bindgen` 0.2.129, `js-sys` and `web-sys` 0.3.106 beneath it | Native builds; changes to the vendored source beyond that one requirement |

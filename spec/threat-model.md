@@ -3,12 +3,21 @@
 Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model), revised the same day
 for the coordinator's rulings R-K6 and S-1 to S-4 and the owner's second set of answers, and on
 2026-10-25 for the index that keeps only the latest versions, ordered by version vectors (the
-owner's decision of that day; `protocol.md` §4.4, §4.5). This file is normative for every crate in
-this workspace, for the apps in `app/` and for the browser client in `web/`. Its companions are
-`suites.md` (algorithms and approved crates), `keys.md` (folder keys, derivations, records, key
-strings) and `protocol.md` (wire protocol). The plan, "Lickety-Sync: Project Plan", is the source
-these files are written from; where this file is silent the plan decides, and where they disagree
-the disagreement is raised, never quietly resolved.
+owner's decision of that day; `protocol.md` §4.4, §4.5), and on 2026-11-08 for the owner's answers
+of 2026-11-03 to 2026-11-08: a path whose records a device cannot read follows the rule for a path
+with no heads (TM-41); relays are public only, and hole punches are coordinated only by devices
+whose persons turned that on (TM-25); and TM-22's "QUIC stream memory" is required before 1.0
+(residual (h)); and on 2026-11-10 for the reviews of that revision and the owner's decisions of that
+day: a device remembers what it archived when a path's records became unreadable, and keeps those
+copies until a version it reads covers them (TM-35, TM-41); every connectivity setting is a
+device-wide default each folder may override; a device takes a punch only from a known peer or a key
+holder, counting only the folders whose settings allow a punch through that coordinator; and its
+coordinators travel only to its folders' peers and in invites (TM-25). This file is normative for
+every crate in this workspace, for the apps in `app/` and for the browser client in `web/`. Its
+companions are `suites.md` (algorithms and approved crates), `keys.md` (folder keys, derivations,
+records, key strings) and `protocol.md` (wire protocol). The plan, "Lickety-Sync: Project Plan", is
+the source these files are written from; where this file is silent the plan decides, and where they
+disagree the disagreement is raised, never quietly resolved.
 
 Every requirement below has a number, TM-1 to TM-43. Five of them, TM-16, TM-19, TM-34, TM-36 and
 TM-38, are **retired** (2026-10-22): they existed only for issued keys, revocation and defences
@@ -36,15 +45,18 @@ marks a deleted file, one **tree delete** a deleted directory with everything be
 write holder's signed **cleanup** tells sealed peers which records to forget; a **chunk** is a piece
 of a file, cut where a chunker keyed from the data key says (from phase 1; phase 0 cuts fixed-size
 pieces); a **sealed peer** holds ciphertext it cannot open; a browser in **vault mode** is a sealed
-peer that stores ciphertext in the browser's own storage; a **relay** forwards ciphertext for peers
-that cannot reach each other; **peer exchange** is peers telling each other the addresses of peers
-they share a folder with; the **archive** keeps replaced and deleted files (Trash can, 30 days by
-default); the **deletion brake** pauses a folder and announces no deletions when more than a
-threshold of its files vanish at once from a device's own disk, until the person confirms; it never
-holds back deletions that arrive from peers (TM-35); **unlinking** a folder removes it from a device
-and keeps its files and its archive; **sharing again** makes a new folder over existing files
-(`keys.md` §7); a **parcel link** is the plan's one-time "send one file to someone" invite, which
-carries addresses because the recipient may share no peer with the sender.
+peer that stores ciphertext in the browser's own storage; a **relay** forwards the encrypted bytes
+of a connection between peers that cannot reach each other, and is always public: anyone's device
+whose person turned relaying on, used only for the folders whose public-relays switch is on
+(TM-25); **peer exchange** is peers telling each other the addresses of peers they share a folder
+with; the **archive** keeps replaced and deleted files (Trash can, 30 days by default, a setting:
+the owner's decision of 2026-11-10); the
+**deletion brake** pauses a folder and announces no deletions when more than a threshold of its
+files vanish at once from a device's own disk, until the person confirms; it never holds back
+deletions that arrive from peers (TM-35); **unlinking** a folder removes it from a device and keeps
+its files and its archive; **sharing again** makes a new folder over existing files (`keys.md` §7);
+a **parcel link** is the plan's one-time "send one file to someone" invite, which carries addresses
+because the recipient may share no peer with the sender.
 
 ## 1. What we protect (assets)
 
@@ -80,7 +92,8 @@ holder of one key is trusted alike.
 | Read key holders | Verification key, data key, index, plaintext | To read; their changes are rejected by every peer | Same |
 | Sealed key holders (sealed peers) | Verification key, access key, ciphertext, signed records, chunk ciphertext hashes | To store and serve ciphertext faithfully; nothing else, and faithfulness is verified rather than assumed | Same; a NAS, a friend's machine, a browser in vault mode |
 | Linked devices (phase 5) | A person's devices, passing folder keys to each other over an authenticated channel | As holders of the keys they receive | Same |
-| Relays: private, public, volunteer | Both endpoints' addresses, timing, volume, the folder a reservation names | Nothing; carries end-to-end ciphertext only | Another person's device, chosen per folder; off by default except own-device relays |
+| Relays (public only: the owner's decision of 2026-11-03) | Both endpoints' addresses and libp2p peer IDs, timing, volume and the sizes of the encrypted frames it forwards; no folder ID, since a reservation and a circuit name peers, never a folder | Nothing; forwards end-to-end ciphertext only, within the limits its person set (TM-25) | Any computer whose person turned relaying on, theirs or a stranger's, never a phone; no relay is used, and none is served, unless turned on: using per folder, serving per device. There are no own-device, private or protected relays, since a device cannot tell its person's machines from a friend's when both share the same folders |
+| Hole-punch coordinators (the owner's decision of 2026-11-08) | That two devices are connecting, when, their public addresses and libp2p peer IDs, which devices keep reservations with it, and at most 64 KiB of their encrypted set-up a circuit; no folder, key or file | Nothing; forwards only a punch's set-up, never file data, since neither side runs the sync protocol through it, within its limits (TM-25) | Any computer whose person turned coordinating on, theirs or a stranger's, never a phone (the owner's decision of 2026-11-10, "Computers only"), needing no key to any folder; used only as each folder's settings allow, and reaching a device only for a requester that device knows from a shared folder or that proves a key to one of its folders (TM-25) |
 | The LAN | Beacons (salted folder hashes, salted announcer hash, port), multicast, every unencrypted byte | Nothing: a café network is the model | The network interface |
 | The internet | Addresses, timing, volume, QUIC and TLS handshakes | Nothing | Same |
 | The Mainline DHT | Daily discovery hashes with the addresses announcing them; signed address records (BEP 44) under a stable per-device key | Nothing; off by default, and seeing a peer grants no access | UDP to strangers; client mode by default |
@@ -173,15 +186,21 @@ anything, because every peer rejects a record the folder key did not sign (TM-9)
 write key or the signing key (`keys.md` §1.2); raise its tier.
 
 **Sealed key.** Can: hold a complete copy, verify ciphertext against the hashes the signed records
-name, serve it, relay for others, give out sealed keys. Cannot: read contents, names or structure;
-see plaintext chunk hashes; test whether the folder holds a known file (TM-14), short of the
-chunk-length residual of section 5; sign; do anything in 3.3.
+name, serve it, forward it for others, give out sealed keys. Cannot: read contents, names or
+structure; see plaintext chunk hashes; test whether the folder holds a known file (TM-14), short of
+the chunk-length residual of section 5; sign; do anything in 3.3.
 
 ### 3.3 A sealed peer or a relay
 
 A storage or forwarding party that handles ciphertext only. Every cloud break the plan's hardening
 review cites (Nextcloud 2024, MEGA 2022, pCloud, Icedrive and Seafile 2024) relied on a storage
-party that the client trusted too much. Here the storage party is untrusted by construction.
+party that the client trusted too much. Here the storage party is untrusted by construction. A
+relay forwards the encrypted bytes of a connection whose channel runs end to end between the two
+peers (TM-25), so it sees no record at all, only what section 5 lists for a relay: it can drop,
+delay or cut a connection, at a moment it chooses, midway through a reconciliation say, which can
+bring about the arrival order that a reconciliation's own order can by chance, and with it the tree
+delete of "Why it is safe" 8a below (`protocol.md` §4.4); the rest of this subsection, the sealed
+peer's, is not in its reach.
 
 Can: see what the owner's decision of 2026-10-25 ("sealed peers see almost nothing") leaves visible,
 stated here in full (section 5 lists it): of every record, its file ID (the keyed path tag), so how
@@ -226,14 +245,19 @@ was forgotten and is live at the read and write holders, until a write holder me
 names the replayed deletion (`protocol.md` §4.4, "Stale copies at a sealed peer"); **bring back a
 forgotten deletion**: offer again, whenever it likes, a version it kept whose tombstone or tree
 delete has been forgotten after the deletion horizon, which then becomes live again on every peer,
-beside any file created at that path since, as a conflict copy (`protocol.md` §4.4, "Expiry"); and
-**make a tree delete take a file its writer never saw**, by withholding, or delivering late, the new
-version of a file renamed within a directory while delivering the tombstone of its old name, so that
-a device that deletes the directory meanwhile deletes the renamed file too, which goes to the
-archive where it was held (`protocol.md` §4.4, "Why it is safe" 8a; a reconciliation's delivery
-order can do the same by chance). It relays records from the future that read and write holders
-refuse (the clock rule), since it cannot read counters, and so keeps them in circulation until real
-time comes within a year of them, when read and write holders accept them as concurrent versions.
+beside any file created at that path since, as a conflict copy (`protocol.md` §4.4, "Expiry"), and
+then, by replaying a record that every release judges a fault, or one of a kind no release knows,
+that named that version, have each device that put it back on its disk move its copy to the archive
+again and keep it there past the archive's retention until a save covers it (section 3.6, "keep
+copies past the retention"; the re-confirm review of 2026-11-10), bounded, as the rest, by the
+folder's history; and **make a tree delete take a file its writer never saw**, by withholding, or
+delivering late, the new version of a file renamed within a directory while delivering the tombstone
+of its old name, so that a device that deletes the directory meanwhile deletes the renamed file too,
+which goes to the archive where it was held (`protocol.md` §4.4, "Why it is safe" 8a; a
+reconciliation's delivery order can do the same by chance). It relays records from the future that
+read and write holders refuse (the clock rule), since it cannot read counters, and so keeps them in
+circulation until real time comes within a year of them, when read and write holders accept them as
+concurrent versions.
 
 Cannot: see a path, a directory's contents, a kind, a true size, a time, a mode, a device ID inside
 a record, a counter, a vector, or whether a record is a tombstone, short of the old deletions and
@@ -341,7 +365,17 @@ its disk ("Why it is safe" 8a). It gains the forger nothing it lacks: a forged v
 `mtime_ns` becomes the base, its vector joined as much, with no twin at all; and a write holder can
 sign any tree delete, with any vector, itself; **issue cleanups**: name any record in a signed
 cleanup, so that every peer forgets it, the same power over sealed peers that writing over a file or
-deleting it gives over everyone (`protocol.md` §4.4, "Cleanup"); **exhaust counters**: sign a record
+deleting it gives over everyone (`protocol.md` §4.4, "Cleanup"); **keep copies past the
+retention**: sign records that every release judges faults, or of a kind no release knows, naming
+the versions at paths, so that each device that had one of those versions on its disk moves its copy
+to the archive and keeps it there, past the archive's retention and with versioning off, until a
+save covers that version (TM-35; `protocol.md` §4.4, "A path with no heads"; a stated residual of
+the confirm review of 2026-11-10): bounded as flooding heads is, since each copy kept is a version
+the device downloaded and had on its disk, which the write holder could as well keep there as a
+conflict copy, so nothing is amplified, and the index remembers one archived version for each; a
+sealed peer that kept such a record can replay it later, to have a version that came back after its
+deletion was forgotten archived and kept so again, bounded by the folder's history (section 3.3);
+**exhaust counters**: sign a record
 whose counter is near `MAX_COUNTER`, after which no device can write in the folder until it is
 shared again, or one whose counter lies far in the future, which the Lamport rule carries to every
 later record until real time catches up and which moves the folder's own time forward by as much, so
@@ -407,7 +441,9 @@ announcements, or use the DHT as an amplifier.
 Can: see which addresses announce a given day's discovery hash, if they know the folder ID, and the
 stable identifiers each announcing device publishes (the BEP 44 key its address record is signed
 with, its DHT node ID; the record carries no libp2p peer ID, the DeviceProof binds identity at the
-handshake instead); serve an old signed address record to a reader that holds no newer one, which is
+handshake instead, and no list of the hole-punch coordinators the device uses, which travels only
+to its folders' peers and in invites: the owner's decision of 2026-11-10, TM-25); serve an old
+signed address record to a reader that holds no newer one, which is
 harmless because the address is only a dial hint and the handshake decides the rest; eclipse a
 device so that its lookups return only the attacker's nodes, denying discovery through the DHT;
 enumerate announcing addresses by crawling.
@@ -415,14 +451,16 @@ enumerate announcing addresses by crawling.
 Cannot: turn a discovery hash back into the folder ID or any key; gain access to a folder by seeing
 or impersonating its peers, since access needs a key (TM-32); link a folder's announcements across
 days from the hashes alone, since the hash rotates daily (TM-24), though anyone who ever held the
-folder ID (a sealed peer, a relay, anyone who saw a key string) can compute every day's hash, and a
+folder ID (any key holder, anyone who saw a key string) can compute every day's hash, and a
 device is linkable across days by a stable address or by a stable identifier it publishes with the
 announcement (BEP 44 key, persisted node ID); use the device as a `get_peers` amplifier or exhaust it,
 since the DHT runs in client mode unless the person turns on server mode, which adds a per-source
 rate limit and bounded responses (TM-24, Adamsky 2015); replay an old BEP 44 address record over a
 newer one a reader already holds, since the sequence number is persisted and never reused (TM-24);
 affect anyone who has not turned the DHT on (it is off by default). Eclipse denies one discovery
-method; LAN, direct addresses, own-device relays and peer exchange remain.
+method; LAN, direct addresses and peer exchange remain, and so do public relays where the person
+turned them on and learned of them other than through the DHT (from peer exchange or a list the
+person adds, TM-25).
 
 ### 3.10 A resource-exhaustion attacker
 
@@ -434,26 +472,41 @@ requests and relay reservations; declare absurd lengths; send malformed input to
 
 Cannot: make the device allocate before a length limit is checked (TM-2); grow any per-peer table
 without bound, because every table is bounded, none grows with the number of writers in a folder,
-and each dies with its connection (TM-22, go-libp2p and rust-libp2p 2022); make the device verify
-anything for a folder proof without holding a key to the folder (TM-22); make it verify a record's
-signature except to store a record it lacked, drop records it replaces, refuse a record from the
-future with an issue, note a stale copy it will name, or close the connection (TM-22); hold
-unlimited relay circuits or reserve a relay through a relayed connection (TM-25); amplify through
-QUIC, whose three-to-one anti-amplification limit stays at its default (TM-22), or through the DHT
-(TM-24). A panic on malformed input is made unlikely and caught before merge rather than made
-impossible: every decoder is fuzzed, `unwrap`, `expect` and `panic` are denied, and indexing on
-untrusted data warns and the gate treats warnings as errors (TM-3, TM-23, rust-libp2p 2026 QUIC
-panic). What it can still do to the transport as phase 0 builds it, each a phase 1 item required
-before 1.0 (TM-22's residuals (a) to (c); owner, 2026-11-03): cost the device a QUIC connection and
-a TLS server handshake per Initial it sends, whatever the limits, at its own send rate, so that
-memory and CPU follow that rate and connections are refused while they last; hold every pending
-slot with connections that never finish their handshake, locking every inbound peer out for the
-handshake timeout (10 s) at a time; and, as one TCP peer that delays its yamux pings, grow its
-connection's receive window toward yamux's 1 GiB ceiling. On iOS it can do nothing to the
-transport, because there is none yet: `net` has no memory limit there and refuses to start until it
-has one (TM-22's residual (d); the owner's answer of 2026-11-03 on the iOS gap: required before 1.0,
-fixed in phase 4). Denial of service by sheer traffic volume is out of scope (3.12); a write
-holder's flood is section 3.6's.
+and each dies with its connection or, if it outlives one, holds a fixed number of entries (TM-22,
+go-libp2p and rust-libp2p 2022); make the device verify anything for a folder proof without holding
+a key to the folder (TM-22); make it verify a record's signature except to store a record it lacked,
+drop records it replaces, refuse a record from the future with an issue, note a stale copy it will
+name, or close the connection (TM-22); hold unlimited relay circuits or reservations, reserve a
+relay or a coordinator, or ask a coordinator for a punch, through a relayed connection, make a
+hole-punch coordinator carry more than a punch's set-up or more punches than its limits allow, aim a
+punch at more than a few public addresses or at any private one, or have a device take a punch
+without being a peer of one of its folders whose settings allow that punch or proving a key to one
+(TM-25), though one with many addresses can hold a relay's or a coordinator's places from others, a
+requester that a device refuses but that has its coordinators can use up the device's caps through
+them, and a punch can reach a private address through a translator on its network whose prefix or
+mapping the side cannot learn, or through a non-default route to a publicly numbered network
+(TM-25's stated residuals);
+amplify through QUIC, whose three-to-one anti-amplification
+limit stays at its default (TM-22), or through the DHT (TM-24). A panic on malformed input is made
+unlikely and caught before merge rather than made impossible: every decoder is fuzzed, `unwrap`,
+`expect` and `panic` are denied, and indexing on untrusted data warns and the gate treats warnings
+as errors (TM-3, TM-23, rust-libp2p 2026 QUIC panic). What it can still do to the transport as phase
+0 builds it, each a phase 1 item required before 1.0 (TM-22's residuals (a) to (c), owner,
+2026-11-03, and (h), owner, 2026-11-08): cost the device a QUIC connection and a TLS server
+handshake per Initial it sends, whatever the limits, at its own send rate, so that memory and CPU
+follow that rate and connections are refused while they last; hold every pending slot with
+connections that never finish their handshake, locking every inbound peer out for the handshake
+timeout (10 s) at a time; as one TCP peer that delays its yamux pings, grow its connection's receive
+window toward yamux's 1 GiB ceiling; and, as one QUIC peer that sends its stream data as small
+datagrams back to back, which the device's GRO coalesces into one read each whether or not the
+sender used GSO, keep alive far more memory than its connection's 4 MiB window counts, about 2 GiB
+at the 64 KiB a read that is the realistic bound, by reading the code, not measured; (h) concerns
+the native program, whose QUIC connections, those it accepts and those it dials, run on quinn, not
+the browser client, whose QUIC is the browser's own. On iOS it can do nothing to the transport,
+because there is none yet: `net` has no memory limit there and refuses to start until it has one
+(TM-22's residual (d); the owner's answer of 2026-11-03 on the iOS gap: required before 1.0, fixed
+in phase 4). Denial of service by sheer traffic volume is out of scope (3.12); a write holder's
+flood is section 3.6's.
 
 ### 3.11 Supply-chain and update attackers
 
@@ -516,7 +569,13 @@ change cites every number that applies.
 **TM-1. The protocol has no plaintext mode.** A peer that cannot complete the encrypted handshake is
 dropped, on a LAN exactly as over the internet, and no setting turns this off; and each transport
 offers exactly one security protocol (TLS on QUIC and TCP; Noise only inside WebSocket, WebTransport
-and WebRTC), so nothing weaker can be negotiated before authentication either. What this does not
+and WebRTC), so nothing weaker can be negotiated before authentication either. A relay's or a
+coordinator's circuit (TM-25) carries an end-to-end channel of its own: TLS 1.3 with X25519MLKEM768
+first, as on QUIC and TCP, between two native ends, and Noise only where a browser client is one
+end, since libp2p TLS does not build there; a native dialer offers exactly one of them, so a device
+in the middle that rewrites the negotiation gets a failed handshake, never a weaker one between two
+native ends, and a native listener accepts Noise on a circuit only from phase 6, for browser
+clients (`suites.md` §2.6; the spec author's choice, for the owner's review). What this does not
 stop is stated: an attacker who blocks UDP and raw TCP steers a dialer onto the WebSocket path,
 which is classical end to end as `libp2p-websocket` ships it (its outer TLS is rustls on `ring`; a
 recorded deviation with a phase 2 item, `suites.md`, transport); that path is still encrypted and
@@ -605,7 +664,7 @@ as a stale copy to name); a record whose vector covers held versions drops them 
 signature has verified; read and sealed holders cannot sign, so every peer rejects a change they
 make. Nothing a peer sends can add, replace or change a folder's keys, because no record carries key
 material: keys move only as key strings outside the protocol and, between a person's linked devices,
-over an authenticated channel (`keys.md` §8.3); a record handed over by a sealed peer or relay is
+over an authenticated channel (`keys.md` §8.3); a record handed over by a sealed peer is
 data to be verified, never a reason to act. A device's own index store, and any backup of it
 restored into it, is trusted to keep its records but not for their authenticity (the owner's
 decision of 2026-10-25): a record is verified before it is stored and again every time its folder
@@ -654,15 +713,15 @@ then repairs. An issue names the record (by hash, and by path where its seal ope
 since nothing proves which device wrote it, ruling S-4), the record is kept opaque or the chunk
 marked corrupt, applied by no one, and the connection kept, for a failure inside what the folder key
 signed (a seal that will not open, a chunk that fails its plaintext hash), because the body is what
-a write holder signed and the sender, perhaps an honest relay, merely carried it. A record in the
-device's own index store that fails step 1 or its signature when its folder opens involves no
+a write holder signed and the sender, perhaps an honest sealed peer, merely forwarded it. A record
+in the device's own index store that fails step 1 or its signature when its folder opens involves no
 connection: it is dropped and reported, never applied or served (TM-9; `protocol.md` §5, "Stored
 record fails its check"). One refusal is deliberately uninformative: a folder proof that fails for
 any reason gets the same uniform REJECTED and the connection is kept, so that a probe learns nothing
 about which folders a device holds. Nothing is skipped, defaulted or retried with weaker checks, and
 no key has a default value; `protocol.md`'s rules table is the complete record of which cause has
 which outcome (decision 2026-10-15: refines the plan's "drops the connection": a failure inside a
-validly signed body keeps the connection, because the sender may be an honest relay). Stops the
+validly signed body keeps the connection, because the sender may be an honest forwarder). Stops the
 "ghost key", where a missing key became an all-zero default and failures were skipped silently
 (Nextcloud 2024). Enforced by `keys`, `protocol`, `index` and `engine`: every verifying function
 returns a typed error and every caller propagates it to the connection; `clippy::unwrap_used` and
@@ -701,7 +760,7 @@ each chunk against the verified record before it writes.
 
 **TM-14. Keyed BLAKE3 per folder for chunk hashes; have-queries answered only inside the folder.**
 Plaintext chunk hashes use BLAKE3 in keyed mode with a key derived from the folder's data key, so a
-chunk hash is a fingerprint only to read and write holders; sealed peers and relays see hashes of
+chunk hash is a fingerprint only to read and write holders; sealed peers (not relays) see hashes of
 ciphertext only; a path appears in a record's clear fields only as a path tag, a keyed hash under a
 key derived from the data key, so a sealed peer cannot test whether a guessed path is in the folder
 either (`keys.md` §3.5); chunk boundaries come, from phase 1, from a FastCDC gear table keyed from
@@ -746,7 +805,7 @@ only while the record it was issued for is held, so that a sealed peer never dro
 signed record or cleanup names (11). Besides, a read or write holder forgets a tombstone, tree
 delete or cleanup once the folder's own time has passed it by its horizon, and a device's own store
 can lose or corrupt records at rest (TM-9, and index sync fetches them again). Nothing is dropped on
-another peer's say-so, a sealed peer's or relay's included. A stale snapshot offers versions that
+another peer's say-so, a sealed peer's included. A stale snapshot offers versions that
 what a read or write holder holds replaces, so they are obsolete and ignored, and a peer that offers
 them is simply behind; a sealed peer keeps them as stale copies until a write holder names them. The
 limit is stated: a peer with nothing persisted for a path, as on a first sync, trusts what the first
@@ -795,18 +854,24 @@ which a peer that lies about its digests can keep filled while its pass lasts, u
 `REPLY_PAGE_TIMEOUT` after its last answer, `protocol.md` §5) has a fixed maximum, counts against
 the Hello's agreed limits, and is dropped with its connection; no table grows with the number of
 writers or records in a folder, since an index request carries one cursor and a reconcile request
-one prefix, and the one table that outlives a connection, per-peer state, holds at most
-`MAX_PEER_STATES` entries per folder (`protocol.md` §4.5); libp2p's connection, stream and transient
-connection limits are set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is
-residual (a) below); QUIC's three-to-one anti-amplification limit stays at its default; and the
-advisory feed in CI (cargo-audit, daily) catches the next such
-advisory in a dependency. Seven residuals of the transport as phase 0 builds it (`net` on
+one prefix, and the tables that outlive a connection are of a fixed size: per-peer state, at most
+`MAX_PEER_STATES` entries per folder (`protocol.md` §4.5), with, from phase 2, its lookup by libp2p
+peer ID, one entry per state, by which hole punching tells a peer of a shared folder (TM-25); at a
+public relay or a hole-punch coordinator, its per-requester counters, in tables of a fixed number of
+peer IDs and source addresses, sized above its caps in all, whose entries with a live circuit or
+reservation are never evicted (TM-25); and a device's own punch counters, per coordinator in a table
+of a fixed size and in all (TM-25); libp2p's connection, stream and transient connection limits are
+set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is residual (a) below); QUIC's
+three-to-one anti-amplification limit stays at its default; and the advisory feed in CI
+(cargo-audit, daily) catches the next such advisory in a dependency. Eight residuals of the
+transport as phase 0 builds it (`net` on
 `libp2p-quic` 0.14, `libp2p-yamux` 0.48 and `libp2p-memory-connection-limits` 0.6), each required
 before 1.0: (a) to (c), from the security review of 2026-11-03, each a phase 1 item ("I want safety
 limits in version 1.0, no matter what. It is fine to pass until phase 1, but it must not get
 lost.", owner, 2026-11-03), and (d), from the iOS build of the same day, a phase 4 item by the
 owner's separate answer on it, below, and (e) to (g), of spike B's WebTransport listener, each a
-phase 6 item: (a) **QUIC Initials cost per Initial, not per limit.**
+phase 6 item, and (h), from spike B's follow-ups, a phase 1 item beside (a) to (c) (owner,
+2026-11-08): (a) **QUIC Initials cost per Initial, not per limit.**
 `libp2p-quic` accepts every Initial quinn hands it before the swarm's limits are asked, so each
 one, from an attacker who never answers, costs a QUIC connection and a TLS
 server handshake (the X25519MLKEM768 encapsulation and the certificate's signature) whatever
@@ -859,20 +924,27 @@ still holds a slice), and the one in `wtransport`'s channel can keep a whole rea
 184 MiB a connection (about 2.9 MiB on macOS and iOS). And quinn's check of a stream's
 over-allocation takes each frame's allocation to be its packet's payload, not the read the packet
 shares, and otherwise compacts a stream only above 2 048 chunks, so each stream's data may keep up
-to about 184 MiB alive, about 5.75 GiB a connection across its 32 streams. But the listener takes
-every connection quinn hands it, with no count of sessions per listener or per address and outside
-the swarm's connection and memory limits, so the total grows with the number of dialers at their own
-rate, and an Initial costs what residual (a) says. Phase 6 item "WebTransport limits": sessions
-counted with the swarm's limits (or a transport the swarm's limits govern), per-address limits, the
-memory limit, and quinn's Retry (`IncomingSession::retry`) under load; the memory a connection keeps
-alive bounded, not only its unread bytes: datagrams, which `net` does not use, read and dropped or
-copied as they arrive, or their buffer made small, and stream receive buffers that share a read
-counted or copied, upstream in quinn or in `net`, with a test that measures a connection's memory
-against one-byte frames sent in large UDP datagrams and in GRO batches; and, since a step that fails
-before Noise (the session request's deadline, a wrong path, a failed accept) drops the session
-without closing its QUIC connection, which the tasks `wtransport` spawns for the dialer's streams
-then keep open while the dialer keeps it from idling, that connection closed explicitly on every
-failure path, and QUIC connections counted, not sessions. (f) **No certificate rotation.** The
+to about 184 MiB alive, about 5.75 GiB a connection across its 32 streams. (These are upper bounds,
+from quinn's 94 208-byte buffer. The realistic bound is a read of 64 KiB, Linux's GRO and UDP limit,
+since quinn 0.11.12 copies only the bytes a read brought (`endpoint.rs`, line 798):
+about 128 MiB a connection for its datagrams (2 049 × 65 536 bytes), 128 MiB a stream (2 048 ×
+65 536 bytes) and 4 GiB a connection across its 32 streams, and (h)'s 2.9 GiB becomes 2 GiB across
+16 streams. GRO coalesces datagrams that arrive back to back, so the sender needs no GSO. Neither
+set is measured.) But the listener takes every connection quinn hands it, with
+no count of sessions per listener or per address and outside the swarm's connection and memory
+limits, so the total grows with the number of dialers at their own rate, and an Initial costs what
+residual (a) says. Phase 6 item "WebTransport limits": sessions counted with the swarm's limits (or
+a transport the swarm's limits govern), per-address limits, the memory limit, and quinn's Retry
+(`IncomingSession::retry`) under load; the memory a connection keeps alive bounded, not only its
+unread bytes: datagrams, which `net` does not use, read and dropped or copied as they arrive, or
+their buffer made small, and stream receive buffers that share a read counted or copied, upstream in
+quinn or in `net`, with a test that measures a connection's memory against one-byte frames sent in
+large UDP datagrams and in datagrams sent back to back, which the listener's GRO coalesces; and,
+since a step that fails before Noise (the session request's deadline, a wrong path, a failed accept)
+drops the session without closing its QUIC connection (and so do a panic in the contained handshake
+task, TM-23, and an aborted handshake future), which the tasks `wtransport` spawns for the dialer's
+streams then keep open while the dialer keeps it from idling, that connection closed explicitly on
+every failure path, and QUIC connections counted, not sessions. (f) **No certificate rotation.** The
 listener's certificate is made when it binds and is valid for at most 14 days, the longest a browser
 accepts for a hash; once it expires no browser can dial until the listener binds again with a new
 certificate whose hash is handed out again, and an invite carrying the old hash (`keys.md`'s `c`)
@@ -882,16 +954,20 @@ reporting the current and the next hash, the certificate swapped in without drop
 transports keep none.** The outer key-exchange group a WebTransport handshake chose is recorded
 process-wide, the last handshake's, so with handshakes at the same time it can name another
 session's; QUIC and TCP record no such facts. Phase 6 item "handshake facts": per-connection facts
-shared by the three transports, as TM-33's evidence. QUIC's windows are set (`net`'s limits, 4 MiB a
-connection, for the swarm's QUIC and for the WebTransport listener alike), and they bound bytes, not
-memory: by reading quinn 0.11.12 and quinn-proto 0.11.19 (not measured), residual (e)'s stream
-effect applies to the swarm's QUIC too (`libp2p-quic` 0.14: datagrams off, 16 bidirectional
-streams), whose stream data, sent in GRO batches, may keep up to about 2.9 GiB alive a connection,
-against the 1 GiB process limit, which only refuses new connections. Phase 1 item "QUIC stream
-memory", beside residuals (a) to (c), proposed (the coordinator's routing of 2026-11-08, pending the
-owner's word; the owner set (a) to (c) on 2026-11-03): confirm it with a raw quinn client that sends
-GSO batches, then bound it. Stops resource exhaustion through unbounded streams, connections and
-registrations, and amplification through QUIC (go-libp2p and rust-libp2p 2022; rendezvous 2026). The
+shared by the three transports, as TM-33's evidence. (h) **QUIC's windows bound bytes, not memory.**
+QUIC's windows are set (`net`'s limits, 4 MiB a connection, for the swarm's QUIC and for the
+WebTransport listener alike), and they bound bytes, not memory: by reading quinn 0.11.12 and
+quinn-proto 0.11.19 (not measured), residual (e)'s stream effect applies to the swarm's QUIC too
+(`libp2p-quic` 0.14: datagrams off, 16 bidirectional streams), whose stream data, sent as small
+datagrams back to back, which the device's GRO coalesces into one read whether or not the sender
+used GSO, may keep about 2 GiB alive a connection at the realistic 64 KiB a read, (e), and at most
+about 2.9 GiB by quinn's buffer, against the 1 GiB process limit, which only refuses new
+connections. It concerns the native program, whose QUIC connections, those it accepts and those it
+dials, run on quinn, not the browser client, whose QUIC is the browser's own. **Required before 1.0
+(owner, 2026-11-08)**; phase 1 item "QUIC stream memory", beside residuals (a) to (c): confirm it
+with a raw quinn peer that sends such datagrams, with GSO and without, then bound it. Stops resource
+exhaustion through unbounded streams, connections and registrations, and amplification through QUIC
+(go-libp2p and rust-libp2p 2022; rendezvous 2026). The
 stated costs: any Hello that passes its checks costs one Ed25519 signature (the DeviceProof sent in
 answer) and one verification; a FolderProof from a peer with no key to the folder costs a lookup in
 the connection's hint table and nothing else, so an outsider cannot make a device verify anything;
@@ -1006,13 +1082,324 @@ stable identifier the device publishes (section 5); the DHT is off until a folde
 Sybil and eclipse attacks learning more than one day's peers, announcement enumeration by crawlers,
 and `get_peers` amplification (Wang and Kangasharju; BEP 42; Adamsky 2015). Enforced by `net`.
 
-**TM-25. Relays refuse reservations over relayed connections, bound circuits per requester, carry
-ciphertext only, and Private mode relays only for peers that share a folder.** A relay accepts a
-reservation only on a direct connection, limits circuits and bytes per requester, schedules by
-deficit round-robin so no client starves, never terminates the end-to-end channel, and in Private
-mode serves only peers whose handshake proved a key, at any tier, to a folder it also holds. Stops a
-relay learning identities or being used as free bandwidth (Syncthing relay spec; libp2p circuit relay
-v2). Enforced by `net`.
+**TM-25. Relays and hole-punch coordinators serve only where their persons turned them on; relays
+are used only where turned on, and punches only as each folder's settings allow; a relay is public,
+carries ciphertext only and enforces its person's limits with bounded state; a coordinator carries
+only a punch's set-up; and a device takes a punch only from a requester it knows or that proves a
+key.** No device relays or coordinates hole punches for others, and no device uses a relay, unless
+its person turned that on (the owner's answers of 2026-11-02, "Only relay when configured to do so",
+and of 2026-11-03, "drop the private/protected relay idea and only work with public relays"; for
+hole punches, the owner's decision of 2026-11-08, below). Asking for punches, and being reached
+through them, is on unless turned off, through peers of a shared folder, as each folder's settings
+allow (the owner's decision of 2026-11-08, "Those defaults are fine, go ahead"). Serving as a relay
+is a setting of each device, off by default and
+offered on computers only, never on a phone (the plan's "Role in a folder": a phone is a leaf, never
+a relay); using relays is each folder's public-relays switch, off by default. Every relay serves
+whoever reaches it and is a stranger to the peers it carries: there are no own-device, private or
+protected relays, since a device cannot tell its person's machines from a friend's when both share
+the same folders.
+
+**Connectivity settings** (the owner's decision of 2026-11-10: "Both must allow. Folders should be
+able to be individually configured for hole punch, plus there should be global configuration for
+allowing direct connect, DHT, etc. global settings set defaults. Folders can override."). Every
+connectivity switch has a device-wide default that each folder may override: LAN discovery, direct
+connections, the DHT, public relays, Tor, and the hole-punch level (below); the plan's "Connectivity
+per folder" lists the first five, with their device-wide defaults under Settings → Connectivity.
+Offering to relay and offering to coordinate stay device-wide. A connection serves a folder only as
+that folder's own settings, or the defaults it keeps, allow, and on a connection they do not allow
+the folder is treated as paused (`protocol.md` §3.1, §3.5).
+
+A relay:
+
+- accepts a reservation only on a direct connection, never on a relayed one, so relays do not chain;
+- never receives Hello as a relay: devices run `/licketysync/sync/1` end to end through it, never
+  to it over the circuit or with it as their relay (`protocol.md` §3.1; a relay that is also a peer
+  of a shared folder runs the protocol with them as any peer does, over a connection of its own),
+  and relay control, the plan's Reserve, Granted, Busy, Pause, Resume and Load
+  messages, is the relay protocol's own and versioned with it (the plan's "Volunteer relay
+  scheduling"): a libp2p protocol of its own beside circuit relay v2, which phase 7 designs, and no
+  part of the sync protocol;
+- is told no folder: a reservation and a circuit name the two peers only, so it learns their libp2p
+  peer IDs and addresses, the timing and volume and the sizes of the encrypted frames, and never a
+  folder ID (section 5; the owner's decision of 2026-11-04, "All three (Recommended)", since a
+  folder ID would let a stranger compute the folder's DHT announcements and confirm its LAN beacons,
+  `keys.md` §2.1);
+- never terminates the end-to-end channel: the peers' encrypted channel (TLS 1.3 with X25519MLKEM768
+  between native ends, Noise only where a browser client is one end, TM-1, `suites.md`
+  §2.6) and the protocol's handshake (`protocol.md` §3) run inside the circuit, so the relay carries
+  ciphertext only, and can drop, delay or cut a circuit, at a moment it chooses (§3.3), and nothing
+  else;
+- enforces, as requirements, the limits its person sets (the owner's list of 2026-11-03): (1) a
+  **rate schedule**, a byte rate each way for each period of the week by time of day and day of
+  week, which all its circuits together never pass, the periods read in the relay's own local time
+  (the spec author's choice, for the owner's review); (2) a **cap on open connections**, past which
+  it answers a new request busy, with a time to retry and its place in a queue, as the plan's
+  "Volunteer relay scheduling" has it, the queue of a fixed length past which a request is answered
+  busy with a time to retry only (that the cap counts the circuits it holds at once, reservations
+  having a cap of their own, below, and the queue's bound, are the spec author's choices, for the
+  owner's review; the first replaces an earlier choice that counted reservations too, by which, the
+  security review of 2026-11-10 found, idle reservations could hold every place); (3) a
+  **minimum transfer rate**: a circuit whose rate, averaged over a fixed window, stays below it is
+  closed when another requester is waiting for room, and in any case once it has stayed below it for
+  a longer idle time, so that idle circuits make room for others (the owner's decision of
+  2026-11-04, "All three"; the lengths of the window and of the idle time are set with the relay
+  messages); (4) **per requester**, a cap on its reservations, circuits and bytes per period,
+  counted both by the libp2p peer ID the transport authenticated and by its source address, since
+  peer IDs cost nothing to make (the owner's decision of 2026-11-04, "All three"; a source address
+  counted as an IPv4 address or an IPv6 /64, the spec author's choice, for the owner's review); and
+  (5) a fair share among active circuits, by deficit round-robin on bytes, a circuit that has used
+  its turn yielding when others wait (the plan's "Volunteer relay scheduling": by default after 64
+  MB or two minutes, then Pause, the front of the queue and Resume);
+- caps **reservations** apart from circuits: besides (4)'s cap for each requester, by default 2 by
+  peer ID and 8 by source address, at most 256 in all; when that is reached and others wait, it
+  drops the reservation that has gone longest without a circuit; and reservations expire unless
+  renewed (the numbers and the drop are the spec author's choices, for the owner's review, after the
+  security review of 2026-11-10);
+- keeps **bounded state per requester**: a fixed set of counters for each (its reservations,
+  circuits, bytes in the current period and window, and its place in the queue), in tables of a
+  fixed number of peer IDs and of source addresses (by default 4 096 each) that outlive its
+  connections, sized above the caps in all, so that an entry with a live circuit or reservation,
+  which is never evicted, always leaves room: of the other entries the least recently active is
+  evicted to admit another (the spec author's choice, for the owner's review); and everything a
+  circuit holds is freed when it closes (TM-22). The stated residual, of eviction and of denial of
+  service: a requester with many source addresses, which IPv6 makes cheap, can push its own idle
+  entries out and start again with fresh per-requester caps, and can hold every reservation and
+  circuit place, active enough not to be the first dropped, so that others wait or are refused; the
+  rate schedule, the caps in all and the minimum rate still bound what the relay carries, so what it
+  costs is the relay's service to others, not the limits its person set, and its person can turn
+  relaying off;
+- announces itself only through methods its person turned on (the DHT under the relay hash, a list
+  the person adds), and a client learns of relays only from those and from peer exchange, so no
+  relay is contacted that the person did not turn on (TM-31).
+  The load a relay announces (the plan's Load) is its own claim, which a client cannot check, so one
+  that announces a low load draws circuits and sees more traffic; how a client weighs the claim is a
+  phase 7 item (the security review of 2026-11-10).
+
+**Hole-punch coordinators** (the owner's decision of 2026-11-08, which replaces their decision of
+2026-11-04, "Folder peers time punches", and its requirement that the device timing a punch prove a
+key to the folder; in part, verbatim: "Hole punching can now use any known client. Prefer ones that
+we've connected to, but you can fall back to public relays. We no longer need to prove that we have
+a key to the same folder.", and "The load there should be minimal (much less than a relay) and it
+doesn't leak more than what others are willing to give up, so go for it."). Hole punching, by which
+two devices behind ordinary home routers reach each other directly, needs a third device that both
+can reach, the **coordinator**, to carry their first messages over a short relayed connection, by
+which each learns the other's public address and the two time a simultaneous open (libp2p's DCUtR
+over circuit relay v2). From phase 2 (the owner's answer to Q4 of 2026-11-04):
+
+- **Who coordinates.** A device coordinates punches only if its person turned "allow acting as a
+  hole-punch coordinator" on: a setting of each device, off unless turned on (the owner's decision
+  of 2026-11-08, "Those defaults are fine, go ahead"), offered on computers only, desktops, laptops
+  and NAS boxes, never on a phone, which can be helped but never helps (the owner's decision of
+  2026-11-10, "Computers only (Recommended)"). A coordinator announces itself by registering the
+  punch's relay protocol with libp2p, whose identify lists it to every device it connects to, and a
+  device uses as a coordinator only a device that lists it (the spec author's choice, for the
+  owner's review).
+- **Each folder's hole-punch level.** A folder's level, its own or the device-wide default, says
+  which coordinators a punch for it may use, at one of four levels, the owner's: **never**;
+  **through peers of a shared folder**, the default unless changed (the owner's decision of
+  2026-11-08); **through devices it is connected to directly**; or **through any device it knows and
+  any public relay its person turned on**. The names of the levels are the spec author's, for the
+  owner's review, and so are these meanings, which the reviews of 2026-11-10 asked for:
+  - the levels are cumulative: each allows the coordinators of the levels before it;
+  - a **peer of a shared folder** is a device that has opened a folder with this device, any folder
+    this device still holds, as that folder's per-peer state shows by the libp2p peer ID the
+    device's DeviceProof bound (`protocol.md` §4.5): a lookup by peer ID over the per-peer states,
+    one entry per state, so at most `MAX_PEER_STATES` entries per folder, each going with its state
+    (90 days without a round, eviction, or the folder unlinked; TM-22);
+  - a device this device is **connected to directly** is one with which it has a direct, not
+    relayed, connection open now that this device dialed, or on which a folder is open; a device
+    that dialed in and opened nothing does not count, and at this level a device does not dial a
+    coordinator only to punch through it;
+  - a device this device **knows** is one whose peer ID and addresses it learned from a source its
+    settings allow: the peer exchange of a peer of a shared folder (a device's coordinators among
+    it), an invite, or a list its person added; a public relay counts once its person turned it on,
+    through the methods of TM-31;
+  - a public relay is a coordinator only for a folder at the fourth level whose public-relays switch
+    is on, and its reservation counts among the device's coordinators.
+- **Both must allow** (the owner's decision of 2026-11-10). A punch serves a folder only when that
+  folder's direct-connections switch is on and its level allows the coordinator that timed the
+  punch, on each side: each side applies its own folders' settings when a folder opens on the
+  connection the punch brought, and treats a folder whose settings do not allow it as paused there
+  (`protocol.md` §3.1). A device asks for a punch, and keeps a reservation, only through a
+  coordinator that some folder's settings allow. At admission (below) only the folders whose own
+  settings allow a punch through the coordinator in the middle count, for the lookup of a known peer
+  as for a key proof: every other folder is treated as paused in the admission handshake, and the
+  public-relays switches play no part on a punch-only circuit (the coordinator's ruling of
+  2026-11-10 on the confirm review).
+- **The device to be reached chooses its coordinators in advance; nothing is picked at random.** A
+  device whose settings allow punches and that cannot be reached directly keeps a reservation, a
+  small standing connection, with up to three coordinators its settings allow: devices it is
+  connected to that announce themselves as coordinators first, then public relays its person turned
+  on. It lists them as an address through each ("reach me through X"), and the list, which names its
+  own libp2p peer ID, goes only to known peers, each coordinator only for a folder whose own
+  settings allow a punch through it: by peer exchange, over connections on which such a folder is
+  open, and in the addresses of an invite to such a folder, where the sender adds them (`keys.md`
+  §6.3; the coordinator's ruling of 2026-11-10 on the confirm review). Its address record in the DHT
+  carries neither its peer ID nor the list (the owner's decision of 2026-11-10, "Peers now, alias
+  later"; `keys.md` §2.2), so a device found only through the DHT, and reachable only through
+  punches, is not reached that way. **Phase 2 item** (the same decision): a rotating alias that
+  coordinators accept in place of the device's peer ID, so that the DHT can carry the list without
+  the peer ID. A device that wants to reach it reads at most three coordinators of its list,
+  connects to those its own folders' settings allow, at most two at once, and the coordinator joins
+  the two over a set-up circuit (below) to time the punch; if that fails, it tries the next. A
+  device prefers coordinators it is already connected to and falls back to public relays acting as
+  coordinators, only those its person turned on. How many reservations a device keeps, that it
+  renews each before it expires and replaces one whose coordinator goes away, and how many
+  coordinators a requester reads and tries at once, are the spec author's choices, for the owner's
+  review.
+- **Known peers or key holders** (the owner's decision of 2026-11-10, "Known peers or key holders
+  (Recommended)"). The device to be reached takes a punch only from a requester that is a peer of a
+  folder whose settings allow the punch (above), or one that first proves, over the coordinator's
+  circuit, that it holds a key to such a folder: the sync protocol's handshake up to the folder
+  proof, on a stream that only the device to be reached opens, and only for a requester it does not
+  know, a few small messages and no record, within the circuit's bounds and the punch attempt's 10 s
+  (`protocol.md` §3.1). It knows the requester by the circuit relay v2 STOP message, which names the
+  initiator's peer ID, and by the end-to-end channel inside the circuit, which authenticates it; a
+  requester whose authenticated peer ID differs from the STOP's is refused. Until the requester is
+  admitted, the device sends it no address on the circuit and does not start DCUtR, which, as the
+  side the circuit reached, it starts. A coordinator answers a requester whose punch the device
+  refused as it answers one asking for a device that holds no reservation with it (circuit relay
+  v2's NO_RESERVATION), so its answer tells nothing. A requester that is neither learns at most that
+  the device is online, and what any connection to it shows before a folder opens (its device ID and
+  Hello, section 5), from the set-up and handshake inside the circuit, and only if it already had
+  the device's peer ID and coordinators, which travel only to its folders' peers and in invites; a
+  removed person (TM-42), once no peer of a folder the device still holds and holding no key to one,
+  learns nothing more through a punch: no address, no folder, no punch.
+- **No proof for the coordinator, and nothing more to learn.** Coordinating needs no key to any
+  folder. The coordinator learns that the two devices are connecting, when, both their public
+  addresses and libp2p peer IDs, and which devices keep reservations with it, which both devices'
+  settings let it learn; a punch exposes nothing else: no folder, no key, no file, and nothing to
+  the internet beyond each side's address to the other, toward which each side's router opens a
+  mapping.
+- **Set-up only, never file data.** A circuit through a device a side reserved with, or dialed
+  through, only for a punch, and any circuit whose stated circuit relay v2 limit is at most 60 s or
+  64 KiB, is punch-only, whatever its folders' public-relays switches say and whatever the device in
+  the middle says it is, since what that device says can turn sync off, never on (`protocol.md`
+  §3.1; the coordinator's rulings of 2026-11-08, the first confirmed by the owner that day: "I don't
+  want random connected clients used as relays without the operator's consent", and of 2026-11-10).
+  After its security and muxer set-up, a punch-only circuit accepts only identify and DCUtR streams
+  and, at the requester, the `/licketysync/sync/1` stream on which the device to be reached asks for
+  the admission handshake above, and refuses every other stream.
+  The coordinator, which cannot read what passes, states 60 s and 64 KiB as the circuit's limit and
+  closes the circuit once it has carried 64 KiB in all or lasted 60 s, whichever comes first.
+- **Direct connections only.** A coordinator accepts a reservation, and a request for a punch
+  (circuit relay v2's CONNECT), only on a direct connection, never on a relayed one, so coordinators
+  do not chain and a punch's 64 KiB bound is not multiplied (the reviews of 2026-11-10).
+- **Rate limits whose state outlives a connection.** At most 4 punch circuits at once and 10 in any
+  minute for each requester, counted both by libp2p peer ID and by source address, as a relay
+  counts; at most 4 at once and 10 in any minute to one reserved device, however many requesters
+  ask; and at most 64 at once and 120 in any minute in all; past any of them it answers busy. It
+  accepts at most 2 reservations for each requester by peer ID and 8 by source address, and 128 in
+  all; when the cap in all is reached and others wait, it drops the reservation that has gone
+  longest without a circuit, and it keeps a device that is a peer of one of its folders before one
+  that is not. The counters are kept in tables of a fixed number of peer IDs and of source addresses
+  (by default 4 096 each) that outlive the requester's connections, sized above the caps in all: an
+  entry with a live circuit or reservation is never evicted, and of the others the least recently
+  active is evicted to admit another, with the relay's residual of that eviction and of denial of
+  service (above), which the limits in all still bound. So a coordinator carries at most 64 circuits
+  of at most 64 KiB at once, and opens at most 120 in any minute: about 7.5 MiB a minute over a long
+  run, and at most about 11.5 MiB in any one minute (the 120 opened in it and up to 64 still open
+  from before it), against the few kilobytes a punch needs: much less than a relay, which
+  carries whole transfers.
+- **What a punch may be aimed at** (the security review of 2026-11-10, and the confirm and
+  re-confirm reviews of that day). Each side of a punch, the device to be reached and the requester
+  alike, takes at most 8 addresses from the other side's DCUtR messages, and only global unicast
+  ones with a non-zero port. Global unicast is judged by the IANA IPv4 and IPv6 Special-Purpose
+  Address Registries: an address is refused when the most specific block of those registries that
+  holds it is not marked globally reachable, and when it is multicast (224/4, ff00::/8). Three
+  blocks are refused whole, whatever a more specific entry says: 192.0.0.0/24, 192.88.99.0/24 and
+  2001::/23, whose anycast addresses (PCP's and TURN's among them) reach a service near the sender,
+  its own router say (the spec author's choice, for the owner's review). An IPv6 address must also
+  lie in global unicast space, 2000::/3, unless it is under the NAT64 prefix 64:ff9b::/96 (below),
+  so that addresses that no block of the registry holds are refused too: site-local (fec0::/10,
+  deprecated), IPv4-compatible (::/96, ::192.168.1.1 say) and the rest of ::/8. So never this
+  network (0/8), loopback (127/8, ::1), private (10/8, 172.16/12, 192.168/16), shared (100.64/10),
+  link-local (169.254/16, fe80::/10), unique local (fc00::/7), reserved (240/4), limited broadcast,
+  unspecified (0.0.0.0, ::), documentation or benchmarking addresses. An IPv6 address that carries
+  an IPv4 address is refused, or judged by that IPv4 address too, so that a dual-stack socket cannot
+  be steered into a private network: an IPv4-mapped address (::ffff:0:0/96) is refused whatever it
+  maps, since a side that means an IPv4 address sends it as one (the spec author's choice, for the
+  owner's review); one under 64:ff9b::/96, which the registry marks globally reachable, passes only
+  if the IPv4 address in its last 32 bits passes; 64:ff9b:1::/48, 6to4 (2002::/16) and Teredo
+  (2001::/32), which the registry does not mark globally reachable, are refused whatever they carry;
+  and one under a NAT64 prefix of the side's own network that the side knows, from its network's
+  announcement (PREF64, RFC 8781) or its system, never by a DNS lookup (RFC 7050's), which would
+  contact a host `spec/allowed-hosts.txt` does not list (TM-31), passes only if the IPv4 address
+  that RFC 6052 §2.2 places in it passes, its last 32 bits under a /96 prefix (the spec author's
+  choice, for the owner's review). A side also refuses its own addresses, so that a punch cannot be
+  aimed at itself or its link: any global IPv6 or public IPv4 address of its own interfaces, and in
+  each of its own IPv6 /64s the subnet-router anycast address (interface identifier 0, RFC 4291
+  §2.6.1) and the reserved anycast identifiers (the last 128 of the /64, RFC 2526), the subnet-wide
+  ones that reach a router (the spec author's choice, for the owner's review, on the check of
+  2026-11-11). `net` never sets SO_BROADCAST on a socket a punch uses, so that no packet goes to a
+  directed broadcast address (the same choice). Stated residuals: behind a translator on its network
+  whose prefix or mapping the side cannot learn, since its network announces none or the mapping is
+  not a prefix, an address passes as global unicast, and a punch's packets to it reach what the
+  translator maps it to, a private IPv4 address included; and an address in a publicly numbered
+  network that the side reaches only by a route other than its default, a split-tunnel VPN's say,
+  passes, so the punch's packets reach that network; and the public address that its NAT maps it to,
+  which is not one of its own addresses, so a punch can be aimed back at its own router through it
+  (all three stated, not refused, for the owner's review); all within the caps below. `net` tests
+  one address in each refused block and in each range that carries an IPv4 address, with an embedded
+  address that passes and one that does not, the side's own addresses and anycast addresses, and
+  that no punch socket has SO_BROADCAST (these rules, and the registries as their source, are the
+  spec author's choice, for the owner's review). A device takes part in at most 2 punches at once
+  and 6 in any minute through one coordinator, and in at most 4 at once and 20 in any minute in all,
+  the caps in all checked at the moment of admission and counting the attempts already admitted, so
+  a requester whose admission would bring them above is refused with `Close(NO_COMMON_FOLDER)` (when
+  the handshake's stream is open), and that refusal counts toward the caps through its coordinator
+  only (the spec author's choice, for the owner's review, on the check of 2026-11-11); an attempt
+  runs from the circuit's opening, admission included, to the punch's end or the requester's
+  refusal, and ends within 10 s; its counters per coordinator are kept in a table of at most 64
+  coordinators, the least recently used evicted, which the counts in all still bound (TM-22). A
+  circuit still in admission is not counted in the caps in all, so circuits in admission are bounded
+  only by the per-coordinator caps times the table's 64 entries, up to 128 handshakes at once (a
+  stated residual, for the owner's review). These numbers are the spec author's starting values, for
+  the owner's review. At the device to be reached, an attempt counts toward its caps through the
+  coordinator from the circuit's opening, and toward its caps in all only once it admits the
+  requester, so a circuit that it refuses at admission counts toward its caps through that
+  coordinator and never toward those in all (the spec author's answer to the confirm review of
+  2026-11-10, for the owner's review); and it takes a circuit (circuit relay v2's STOP) only from a
+  device in the middle that it holds a reservation with, answering any other circuit relay v2's
+  NO_RESERVATION and counting it toward no cap (the re-confirm review of 2026-11-10). So a
+  coordinator that ignores its own caps can make the device run at most 6 admission handshakes a
+  minute through it, and at most 18 through its three. The cost, stated: a requester the device
+  refuses that has its peer ID and coordinators, a former peer or anyone an invite reached, can keep
+  the device from being reached by punches through each coordinator for as long as it keeps asking,
+  as the coordinator's cap for each reserved device already lets it; the device's own punches
+  through other coordinators, and its direct, LAN and relay connections, are unaffected. The other
+  answer, refused circuits outside the caps, would bound the handshakes a device runs only by the
+  caps its coordinators keep. The stated residual of the addresses: a requester that the device to
+  be reached admits, a peer of a shared folder or a key holder, can still make it send a punch
+  attempt's few packets to up to 8 public addresses of its choosing, its own network's among them
+  (the global IPv6 address of a device on its link, or its router's public IPv4 address, which the
+  router may pass on to a port it forwards), at most 20 attempts a minute, so at most 160 short
+  bursts a minute toward third parties, and the device to be reached can do the same to a requester;
+  a coordinator that lies about an address adds nothing beyond that, since each side filters what it
+  receives. - **Abuse, and its bounds.** A coordinator flooded with requests answers busy past the
+  limits above, and its tables do not grow. A requester cannot aim a punch at a device that did not
+  ask for one: the coordinator opens a circuit only to a device that holds a reservation with it,
+  which a device makes only as its own settings allow, and that device takes the punch only from a
+  requester it knows or that proves a key. A coordinator that lies about an address, or withholds or
+  delays the set-up, costs a failed punch and nothing else: the connection a punch makes is
+  authenticated by the transport's peer ID, and nothing of a folder crosses it before both sides'
+  folder proofs (TM-32); the device then tries another coordinator, or stays unconnected.
+
+The byte, time and count bounds, the coordinators' included, are the spec author's starting values,
+fixed in phase 2 with the code that applies them. A public relay, when its person turns relaying on,
+also coordinates punches, within its own limits above (the spec author's reading of the owner's "you
+can fall back to public relays", for the owner's review), and the device to be reached admits a
+requester through it as through any coordinator.
+
+The defaults of a relay's limits are fixed with the relay protocol, in phase 7. Stops a relay or a
+coordinator being used as free bandwidth beyond what its person allows, one requester, or many
+identities from one address, taking a relay's capacity, a relay or a coordinator learning contents
+or which folder a connection is for, a punch aimed at a third party or into a private network
+beyond the residuals stated, a stranger or a removed person reaching a device through a punch, and
+a device relaying or coordinating, a folder taking a punch its settings do not allow, or a folder's
+traffic leaving through a relay, without its person's consent (Syncthing relay spec; libp2p circuit
+relay v2 and DCUtR). Enforced by `net`: hole-punch coordinators from phase 2, public relays in
+phase 7 (the owner's decision of 2026-11-04).
 
 **TM-26. Port mapping maps one port for this device, with a bounded lease, removed at exit.** UPnP,
 NAT-PMP and PCP requests name only this device's single listening port and a lease of bounded length,
@@ -1069,7 +1456,7 @@ folder's access key, which every tier holds and nobody else does, with a hint ke
 key, both bound to the session's transcript and the prover's role, so it cannot be replayed into
 another connection or reflected to its sender (`keys.md` §4). The tier the payload names is the
 prover's report, shown and never relied on, since records and chunks are verified by signature and
-hash whoever sends them. Knowing a folder ID from a LAN beacon, the DHT or a relay is not enough to
+hash whoever sends them. Knowing a folder ID from a LAN beacon or the DHT is not enough to
 connect, to open a proof or to learn whether a device holds the folder; and a device ID is the hash
 of the device's public key, canonically encoded, which it proves in the same handshake. Stops
 impersonation, uninvited connection and probing for folders. Enforced by `protocol` and `keys`.
@@ -1095,8 +1482,13 @@ and section 3.6 says what that leaves.
 
 **TM-35. Writes are atomic beneath the root, and destruction is reversible by default.** A file is
 downloaded to a temporary file beneath the folder root (resolved by TM-4), verified against its
-record, then renamed into place; replaced and deleted files go to the archive (Trash can, 30 days by
-default, phones included); a scan that finds the marker gone, the path unmounted, or more than the
+record, then renamed into place; replaced and deleted files go to the archive (Trash can, phones
+included), which keeps them 30 days by default, a setting (the owner's decision of 2026-11-10, "30
+days should be configurable"); the copies a device moves there because a path's records became
+unreadable stay, past that retention and with versioning off, with a warning, until a version the
+device reads covers theirs, a head that does not cover it leaving them there (the owner's decision
+of 2026-11-10, "Until fixed"; `protocol.md` §4.4, "A path with no heads"); a scan that finds the
+marker gone, the path unmounted, or more than the
 threshold of files missing at once pauses the folder and announces no deletions until the person
 confirms (the deletion brake). Deletions that arrive from peers are applied without a brake, however
 many (the owner's answer of 2026-10-22): the archive is what keeps them. This is what limits a write
@@ -1201,7 +1593,9 @@ minute is far from the listener's; no key expires. Everything else the local clo
 advisory: lease lengths, the daily discovery hash (looked up for the neighbouring days too),
 protocol timeouts, per-peer state's age, the window that bounds the names a write holder issues for
 one peer, and the informational `written_at` field. Stops clock-skew attacks from a peer or a stolen
-device with a changed clock. Enforced by `index`, `protocol` (the Hello check) and `engine`.
+device with a changed clock. Enforced by `index`, `protocol` (the Hello check) and `engine`. Expiry
+by the folder's own time and the clock rule are to be replaced by a signed watermark (the owner's
+decision of 2026-11-08; a later change).
 
 **TM-41. Concurrent versions are kept, peers that exchange converge, and sealed peers lose
 nothing.** At a read or write holder every validly signed index record is kept until a held record,
@@ -1240,7 +1634,7 @@ they hold plus the stale copies a write holder has not yet named, less, for a wh
 came back after its deletion was forgotten and that a replay of that genuine deletion took away
 again, and holds the same once a write holder has met it and the rounds its cleanups owe have run,
 short of records from the future and of stale copies that wait for the write holder to forget the
-cleanup that named them. A sealed peer or relay can still withhold records from a peer that meets no
+cleanup that named them. A sealed peer can still withhold records from a peer that meets no
 one else; it cannot make two read or write holders that meet disagree, nor make a read or write
 holder drop a version. Pruning and expiry may cost spurious conflicts or reappearance, never silent
 loss (TM-43). A local edit or delete is built only from the versions on the writing device's disk
@@ -1255,11 +1649,25 @@ that changed only the mode say, and one the engine has yet to put at the path st
 writer-fault record that every release judges a fault goes when its path is next written, and the
 issue about it says that saving the file again clears it; the stated residual is that one at a file
 ID nobody writes again, and a cleanup that is itself a writer fault, stay on every tier
-(`protocol.md` §4.4, "Heads"). The stated residuals, each of which replaces a version as a later
-edit would and moves its file to the archive (TM-35): a tree delete also covers a version beneath
-its directory that its writer never held, or held but had not yet on its disk, when that version's
+(`protocol.md` §4.4, "Heads"). A path all of whose live records a device cannot read (writer faults,
+or a newer release's version) follows the rule for a path with no heads, so the device's outdated
+copy leaves its disk for the archive, and every device on the same release that holds the same
+records keeps the same disk there, whatever the order they came in (the owner's decision of
+2026-11-03, "Yes, remove the old copy"; `protocol.md` §4.4, "A path with no heads"). The device
+remembers the versions it so archived, and, on a device with the write key, its next write there
+covers them, so that a device that missed the unreadable record does not bring the old version back
+beside that write (the owner's decision of 2026-11-10, "Also what was archived"); only a version it
+never had, an edit made elsewhere meanwhile, stays beside the write as a conflict. The archived
+copies stay until a version the device reads covers theirs (TM-35). The stated residuals of such a
+path (`protocol.md` §4.4): the archive holds the only copy on each device that had it; a record of a
+kind no release knows takes the file off those disks until someone saves it, and stays beside it for
+good; and a read holder cannot clear a fault.
+The
+stated residuals, each of which replaces a version as a later edit would and moves its file to the
+archive (TM-35): a tree delete also covers a version beneath its directory that its writer never
+held, held but had not yet on its disk, or held but could not read, when that version's
 device later wrote another record there that the writer had on its disk, as a base or a twin, or
-knew of through one, which a relay or the order of a reconciliation can bring about for a file
+knew of through one, which a sealed peer or the order of a reconciliation can bring about for a file
 renamed within the directory (§3.3), and a folder linked on two devices can for a file still
 arriving when the folder is deleted (the owner's decision of 2026-11-08); two devices under one
 device ID (a cloned disk image) can replace each other's concurrent edits of a path one of them had
@@ -1285,7 +1693,13 @@ folder, so that nothing more arrives from the person being removed, and restorin
 whatever that person changed or deleted, since deletions from peers are not braked (TM-35); unlinking
 keeps the archive as ordinary files, so this can still be done afterwards (`keys.md` §7.3). It also
 states that the removed person keeps the old folder, its key and every copy they had; that a device
-still on the old key keeps syncing with them; and that sealed peers store the new folder afresh.
+still on the old key keeps syncing with them; and that sealed peers store the new folder afresh. A
+removed person learns nothing through hole punches once the old folder is unlinked, unless they
+still share another folder with the device: a device takes a punch only from a peer of a folder it
+still holds whose settings allow the punch, or a requester that proves a key to such a folder
+(TM-25), and the removed person is neither, so it gets no punch and no address, and learns at most
+that the
+device is online, with its device ID, which it knew, as a dial to an address it kept would tell it.
 Nothing in the protocol moves a key or a folder's history between folders. Stops the false belief
 that removing someone took something away, the over-promise the plan's hardening review found more
 harmful than an honest leak, and the loss of what they destroyed on the way out. Enforced by `app`
@@ -1345,20 +1759,44 @@ same from a successful proof. Not its name: the self-reported device name is sen
 folder has opened on the connection, in the first Status after the first folder opens, so only a
 peer that has opened a folder with the device learns its name.
 
-**To the DHT and anyone crawling it.** Which addresses announce a given day's discovery hash; a signed
-address record under the device's DHT key. The hash does not reveal the folder ID and changes daily,
-but anyone who ever held the folder ID (any key holder, a relay the folder uses) can compute every
-day's hash and watch who announces it, and a device is linkable across days by a stable address alone
-or by any stable identifier it publishes with the announcement: the BEP 44 signing key its address
-record is signed with, or a persisted DHT node ID. The record carries no libp2p peer ID; the
-DeviceProof binds identity at the handshake. The libp2p identity key still gives every device a stable
-peer ID, which is a cross-folder tracking handle for anyone the device connects to: they can tell it
-is the same device whatever folder, day or address is involved; `suites.md` (the libp2p identity key)
-records the per-folder or rotating identity that would remove the handle as a considered alternative.
+**To the DHT and anyone crawling it.** Which addresses announce a given day's discovery hash; a
+signed address record under the device's DHT key. The hash does not reveal the folder ID and changes
+daily, but anyone who ever held the folder ID (any key holder, anyone who saw a key string) can
+compute every day's hash and watch who announces it, and a device is linkable across days by a
+stable address alone or by any stable identifier it publishes with the announcement: the BEP 44
+signing key its address record is signed with, or a persisted DHT node ID. The record carries no
+libp2p peer ID, and no list of the hole-punch coordinators the device keeps reservations with,
+whose addresses would name that peer ID (the owner's decision of 2026-11-10, "Peers now, alias
+later"; TM-25); the DeviceProof binds identity at the handshake. The libp2p identity key still gives
+every device a stable peer ID, which is a cross-folder tracking handle for anyone the device
+connects to: they can tell it is the same device whatever folder, day or address is involved;
+`suites.md` (the libp2p identity key) records the per-folder or rotating identity that would remove
+the handle as a considered alternative.
 
-**To a relay.** Both endpoints' addresses, the folder a reservation names (as its ID), timing and
-volume, and the sizes and number of encrypted frames, which approximate padded chunk sizes and counts.
-Not contents, names or keys: the end-to-end channel runs inside the relayed connection.
+**To a relay** (public only, TM-25). Both endpoints' addresses and libp2p peer IDs, timing and
+volume, and the sizes and number of encrypted frames, which approximate padded chunk sizes and
+counts. Not the folder, since a reservation and a circuit name peers, never a folder; not contents,
+names, keys or any record: the end-to-end channel runs inside the relayed connection. A relay is
+anyone's device whose person turned relaying on, so whatever it sees, a stranger may see.
+
+**To a hole-punch coordinator** (any computer whose person turned coordinating on, theirs or a
+stranger's, never a phone, TM-25; the owner's decisions of 2026-11-08 and 2026-11-10). What both
+devices' settings let it learn: that the two are connecting, when, both their public addresses and
+libp2p peer IDs, and at most 64 KiB of their encrypted set-up a circuit; and, of a device that keeps
+a reservation with it, its peer ID and that it does. Not the folder, not a key, not a file: neither
+runs the sync protocol through it beyond the admission handshake, whose folder proof it cannot open
+(TM-32), and it needs no key to any folder. A folder at the default level, through peers of a
+shared folder, gives this only to such peers.
+
+**To the peers of a device's folders, and an invite's recipient.** Beyond what a key holder sees
+(below), by peer exchange over connections on which a folder is open, and in an invite that carries
+addresses: the device's addresses, its libp2p peer ID, and the coordinators it keeps reservations
+with, by their peer IDs, each only to the peers of a folder whose settings allow a punch through it
+and in an invite to such a folder (TM-25; the owner's decision of 2026-11-10, "Peers now, alias
+later"). Not
+the DHT: a crawler learns none of these from it. A requester that is no peer of the device's folders
+and proves no key learns from a punch at most that the device is online, and what any connection to
+it shows before a folder opens (TM-25).
 
 **To a sealed peer** (stated in full; the owner's decision of 2026-10-25, "sealed peers see almost
 nothing"). Everything a relay sees, and: the folder ID and verification key (its key carries both);
@@ -1445,7 +1883,11 @@ identities, Hello contents, folder proofs, record envelopes, chunk ciphertext. T
 WebSocket session, and so any session an attacker forced onto that path by blocking UDP and raw TCP
 (section 3.1): as `libp2p-websocket` ships, its outer TLS is rustls on `ring` and the Noise inside is
 classical, so both layers fall (`suites.md`, transport, records the deviation and the phase 2 change
-that gives the outer TLS the post-quantum group). Content, names and structure are encrypted under the
+that gives the outer TLS the post-quantum group). It also includes a relay's or a coordinator's
+circuit with a browser client at one end, whose end-to-end channel is Noise, classical, so a relay
+that records one could later read in it the folder ID that TM-25 keeps from it today; between two
+native ends a circuit runs TLS 1.3 with X25519MLKEM768 first (TM-1, `suites.md`, transport), whose
+recording a quantum computer does not open. Content, names and structure are encrypted under the
 folder's symmetric keys before transport, and no folder key crosses a transport session in the
 protocol, so the recovered session reveals what a sealed peer sees, less the verification key, and
 nothing more. A quantum computer that can break Ed25519 is a forger, not a reader (TM-33).

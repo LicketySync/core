@@ -1,8 +1,11 @@
 # Lickety-Sync sync protocol, major version 1
 
 Status: draft for phase 0, rewritten 2026-10-22 for the shared-key model (`keys.md`) and the
-coordinator's rulings R-K1 to R-K6 and S-1 to S-4 of that day, and its index (4.4, 4.5) rewritten
-2026-10-25 for the owner's decision of that day. This file is what
+coordinator's rulings R-K1 to R-K6 and S-1 to S-4 of that day, its index (4.4, 4.5) rewritten
+2026-10-25 for the owner's decision of that day, and amended 2026-11-08 for the owner's answers of
+2026-11-03 to 2026-11-08 (4.4's paths with no heads; 3.1's relayed connections and hole punches)
+and 2026-11-10 for the reviews of that amendment and the owner's decisions of that day.
+This file is what
 `licketysync-protocol`, `licketysync-index` and `licketysync-engine` implement on the wire, and
 what reviewers check them against. `keys.md` defines every key, record and derivation this file
 uses; `suites.md` the algorithms; `threat-model.md` the adversaries. Each section says in plain
@@ -47,6 +50,35 @@ the signed cleanup record (4.4); the expiry of deletions by the folder's own tim
 rule, with a clock reading in Hello (3.2, 4.4); per-peer local sequences with an index epoch, set
 digests and reconciliation (4.5); what the engine needs (4.7); and the index in plain words (9).
 Nothing was released, so the protocol stays major 1.
+
+**What changed on 2026-11-08** (the owner's answers of 2026-11-03 to the phase 0 report and its
+follow-up questions, and their decisions of 2026-11-04 and 2026-11-08). A path whose live records
+are all opaque now follows the rule for a path with no heads, so the device's outdated copy leaves
+its disk ("Yes, remove the old copy"; 4.4, "Heads, display order and conflicts"); the stated
+residual of an earlier ruling (S3-A), that such a path kept whatever its disk had and two devices
+could differ there, is gone. Relays are public only and used or served only when turned on; hole
+punches are coordinated only by devices whose persons turned that on, and a device takes part in
+one only as its folders' settings allow; neither side syncs on a circuit through a device it
+reserved with, or dialed through, only for a punch (`threat-model.md` TM-25; 3.1 here). No message
+changes. Relay control is the relay protocol's own, versioned with it, and not this protocol's
+(TM-25), so 4.1 reserves no range for it. Nothing on the wire changes, so the protocol stays
+major 1.
+
+**What changed on 2026-11-10** (the reviews of the 2026-11-08 amendment and the owner's decisions of
+2026-11-10). A device remembers the versions it moved to the archive because a path's records became
+unreadable, and its next write there covers them, so that a device that missed the unreadable record
+no longer brings the old version back beside that write (the owner's "Also what was archived"; 4.4,
+"A path with no heads"); such copies stay in the archive until a version this device reads covers
+them (the owner's "Until fixed"). A conflict copy that has become a version at its own path stays on
+the disk. On relayed connections (3.1): a circuit whose stated limit is at most a coordinator's
+bounds is punch-only whatever the device in the middle says; that device, as relay or coordinator,
+never receives Hello; only the side a circuit reached opens this protocol's stream on it; a punch
+admits only a requester the device knows from a shared folder, or one
+that proves a key to one of its folders with this protocol's handshake up to the folder proof
+("Known peers or key holders"), and only the folders whose own settings allow a punch through that
+coordinator count; and each folder's own connectivity settings decide whether it opens on a
+connection a punch brought ("Both must allow"). Per-peer state keeps the peer's libp2p peer ID
+(4.5). Nothing on the wire changes.
 
 ## 1. Protocol identifier and major versions
 
@@ -166,18 +198,20 @@ Limits:
 
 Seven steps, as the plan draws them. Steps 1 and 2 belong to libp2p: the encrypted channel, with
 exactly one security protocol per transport so that nothing is chosen before either side is
-authenticated (TLS 1.3 on QUIC and on TCP; Noise inside WebSocket, WebRTC and WebTransport, where
-TLS is not offered; `suites.md` §2.6), then protocol negotiation; phase 0 simulates them. Steps 3 to
-7 are this protocol. The folder proof in step 4 is the heart of it: each side shows it holds a key
-to the folder (any of the three, since each holds the folder's access key) without sending the key,
-in a way that only a holder of a key to that folder can even open, and that cannot be replayed into
-another connection. Nothing about a folder leaves a device until the peer has proven it holds a key
-to that folder, and a failed proof is answered with the same result whether the folder is unknown
-here or the proof was bad.
+authenticated (TLS 1.3 on QUIC and on TCP, and inside a relay's circuit between native ends; Noise
+inside WebSocket, WebRTC and WebTransport, where TLS is not offered, and inside a circuit with a
+browser client at one end; `suites.md` §2.6), then protocol negotiation; phase 0 simulates them.
+Steps 3 to 7 are this protocol. The folder proof in step 4 is the heart of it: each side shows it
+holds a key to the folder (any of the three, since each holds the folder's access key) without
+sending the key, in a way that only a holder of a key to that folder can even open, and that cannot
+be replayed into another connection. Nothing about a folder leaves a device until the peer has
+proven it holds a key to that folder, and a failed proof is answered with the same result whether
+the folder is unknown here or the proof was bad.
 
 ```
 A (role 0x01)                                            B (role 0x02)
  1. encrypted channel  ──────────────── (libp2p: TLS on QUIC or TCP; Noise inside WebSocket, WebRTC, WebTransport)
+                       (inside a circuit, 3.1: TLS between native ends; Noise with a browser end)
  2. identify           ─── /licketysync/sync/1 ──────▶ newest common major
  3. Hello ───────────────────────────────────────────▶
     ◀──────────────────────────────────────────── Hello     roles are now known (3.2)
@@ -218,6 +252,117 @@ While unsent bytes remain, a connection whose delivered bytes (bytes sent minus 
 have not grown for `IDLE_TIMEOUT` is closed with `TIMEOUT`, and the next connection's exchange
 fetches what was waiting; that bounds what waits without cutting a long transfer whose paced queue
 never empties.
+
+**Relayed connections and hole punches** (`threat-model.md` TM-25). A **relayed connection** is one
+the transport reports as passing through a circuit (libp2p's circuit relay v2). The device in the
+middle, a public relay or a hole-punch coordinator, is never a party to this protocol in that role:
+a side runs `/licketysync/sync/1` only end to end through a circuit, never to the device in the
+middle, over the circuit or with it as relay or coordinator, so that in that role it receives no
+Hello and learns no device key from one (relay control is the relay protocol's own, TM-25); a device
+in the middle that is also a peer of a shared folder runs this protocol with each side as any peer
+does, over a connection of its own (the confirm review of 2026-11-10). A side runs this protocol
+over a relayed connection to sync only when all of these hold, each judged by the side itself:
+
+1. It reserved with, or dialed through, the device in the middle as a public relay its person turned
+   on, and the protocol serves only the folders whose public-relays switch is on (the folder's own
+   setting, or the device-wide default, TM-25): there it treats every other folder as paused (3.5,
+   step 2) and sends no FolderProof for one, and with no such folder it does not run the protocol
+   over that connection at all (the coordinator's ruling of 2026-11-08, a reading for the owner's
+   review).
+2. The circuit is not **punch-only**. A circuit through a device it reserved with, or dialed
+   through, only for a hole punch is punch-only, whatever the switches say (the coordinator's ruling
+   of 2026-11-08, confirmed by the owner that day: "I don't want random connected clients used as
+   relays without the operator's consent"); so is any circuit whose stated limit (circuit relay v2's
+   `Limit`, in the reservation or in the status that opens the circuit) is a duration of at most 60
+   s or data of at most 64 KiB, a coordinator's bounds (TM-25), whatever the device in the middle
+   says it is (the coordinator's ruling of 2026-11-10).
+3. Nothing the device in the middle says of itself marks the circuit punch-only: what it says can
+   turn sync off, never on.
+
+So a coordinator never carries file data, even when both sides would take it for a public relay. On
+every circuit, whatever either side takes it for, only the side the circuit reached, the one that
+holds the reservation and to which circuit relay v2's STOP came, opens a stream of this protocol,
+and it refuses one that the side that dialed through the device in the middle opens (the spec
+author's choice, for the owner's review, on the re-confirm review of 2026-11-10): on a circuit it
+takes for a public relay's, it opens one when it has a folder whose public-relays switch is on (the
+first condition above), and on a punch-only one only for the admission handshake (below). On a
+circuit that the side that dialed through the device in the middle takes for a public relay's, it
+closes the circuit, with no Close, when no stream of this protocol has come within `HELLO_TIMEOUT`
+of the channel's set-up, and counts the session as refused for the backoff below (the spec author's
+choice, for the owner's review, on the check of 2026-11-11): the side the circuit reached may take
+it for punch-only or have no folder to prove, and the dialing side opens none. On a
+punch-only circuit a side runs this protocol only for the admission handshake (below), whatever its
+folders' public-relays switches say; the circuit carries nothing else but the two sides' channel
+set-up, libp2p's identify and the punch's own messages (DCUtR), within the coordinator's bounds of
+64 KiB and 60 s, and the two sync once the direct connection the punch brings exists. While a
+relayed connection lasts (the coordinator's rulings of 2026-11-10; the backoff's lengths are the
+spec author's choice, for the owner's review):
+
+- a side whose person turns a folder's public-relays switch off while that folder is open on the
+  connection closes the connection with `Close(SHUTDOWN)`, as for a paused folder, and may connect
+  again through the relay for the folders whose switch is still on;
+- a side whose relayed session to a peer is refused (no folder opened) or cut (the connection ended
+  before a round with the peer completed) opens no new relayed session to that peer for a backoff:
+  1 minute, doubled after each refused or cut session up to 1 hour, and back to 1 minute after a
+  session that completed a round;
+- once a direct connection to the same peer is open, brought by a punch or found otherwise, and the
+  relayed connection's folders are open on it, the side closes the relayed connection with
+  `Close(SHUTDOWN)`.
+
+**Admitting a punch's requester** (the owner's decision of 2026-11-10, "Known peers or key
+holders"). From phase 2 (the owner's answer to Q4 of 2026-11-04), by the owner's decision of
+2026-11-08, a device coordinates punches for others only if its person turned that on, and takes
+part in one only as its folders' settings allow (TM-25). At admission only the folders whose own
+settings allow a punch through the coordinator in the middle count, on each side: the folder's
+direct-connections switch on and its hole-punch level allowing that coordinator ("Both must allow",
+the owner's decision of 2026-11-10; the coordinator's ruling of that day on the confirm review). The
+device to be reached takes a punch only from a requester that is a **peer of** such a folder (a
+device that has opened that folder with it, as the folder's per-peer state shows by the requester's
+libp2p peer ID, 4.5), or from one that first proves, over the coordinator's circuit, that it holds a
+key to such a folder; in that proof every other folder is treated as paused (3.5, step 2), and the
+public-relays switches play no part in it. The proof is this protocol's handshake up to the folder
+proof, as 3.2 to 3.5 define it, on a stream that only the device to be reached opens, and only for a
+requester it does not know (the spec author's choice, for the owner's review): Hello and DeviceProof
+each way, then the requester's FolderProofs, of which the device to be reached, on a circuit it
+takes for punch-only, looks at 4 and answers each one past the fourth REJECTED, unexamined and up to
+`MAX_PROOFS_PER_CONNECTION` as on any connection, so that a requester that takes the circuit for a
+public relay's and proves more folders is not closed for it (the spec author's choice, for the
+owner's review, on the check of 2026-11-11), and the answering ProofResults. One ACCEPTED admits the
+requester. No folder opens on the circuit: the device to be reached sends no FolderProof of its own
+there (3.5, step 6); the requester answers any FolderProof there REJECTED, up to
+`MAX_PROOFS_PER_CONNECTION` as on any connection, treating every folder as paused for the other
+side's proofs (3.5, step 2); any message that names a folder is `Close(PROTOCOL_ERROR)` (3.5); the
+clock rule's check, which waits for an open folder, does not run (3.2); and `PROOF_TIMEOUT` does not
+apply there, the punch attempt's 10 s bounding the admission and the punch together (TM-25), so that
+a requester not admitted within them is refused. These are a few small messages and no record,
+within the circuit's bounds. The requester, which dialed through the device in the middle, opens no
+stream of this protocol on the circuit (above), so it runs Hello there, before the punch, only when
+the device to be reached opens that stream, and it proves only folders whose own settings allow the
+punch through that coordinator; a requester the device to be reached knows runs no handshake, the
+punch starting at once. The device to be reached knows who asks: the circuit relay v2 STOP message
+by which the coordinator opens the circuit names the initiator's peer ID, and the channel inside the
+circuit authenticates it; a requester whose authenticated peer ID differs from the one the STOP
+named is refused. Until the requester is admitted, the device to be reached sends it no address (its
+identify on the circuit lists none) and does not start the punch, which, as the side the circuit
+reached, it starts (DCUtR). A requester that it refuses once it has opened the stream for the
+handshake gets `Close(NO_COMMON_FOLDER)`, as on a connection where nothing opened, before the
+circuit is closed; one refused before that (its peer ID not the STOP's, or past the caps of TM-25)
+gets no Close, its circuit closed. The caps in all (TM-25) are checked at the moment of admission,
+counting the attempts already admitted: a requester whose admission, by an ACCEPTED proof or as a
+known peer, would bring them above 4 at once or 20 in the minute is refused, so that attempts that
+began below the caps cannot all finish above them, and it gets `Close(NO_COMMON_FOLDER)` if the
+stream is open and no Close if not; that refusal counts toward the caps through its coordinator only
+(the spec author's choice, for the owner's review, on the check of 2026-11-11). It takes a STOP only
+from a device in the middle that it holds a reservation with, and answers any other circuit relay
+v2's NO_RESERVATION (TM-25). On the direct connection a punch brings, this protocol starts afresh
+from Hello, and each side treats as paused (3.5, step 2), sending no FolderProof for it, every
+folder whose own settings do not allow that punch: its direct-connections switch off, or its
+hole-punch level not allowing the coordinator that timed it ("Both must allow", the owner's decision
+of 2026-11-10, TM-25). Coordinating needs no proof of a key to any folder, and the direct connection
+a punch brings is like any other: nothing of a folder crosses it before both sides' folder proofs
+(3.5). `threat-model.md` TM-25 has the details, with the spec author's choices marked (the levels'
+names and meanings, how a coordinator announces itself, how many reservations a device keeps, which
+addresses a punch accepts, and the bounds).
 
 **Identity.** The transport authenticates each side's **libp2p identity**, the separate Ed25519 key
 of `keys.md` §8.1. Each Hello carries that key (`libp2p_identity`), and the transcript (3.3) covers
@@ -338,9 +483,13 @@ Verification by the receiver, for each FolderProof, in order:
    the `MAX_PROOFS_PER_CONNECTION`th (256th) FolderProof on the connection. Otherwise
    `Close(PROTOCOL_ERROR)` (malformed, the sender's doing). Every failure from step 2 on is answered
    REJECTED.
-2. For every folder this device holds and has not paused, compute `hint` with the peer's role; no
-   match → `ProofResult { hint, REJECTED }` and stop. (A device with many folders caches the
-   per-folder hints once per connection.)
+2. For every folder this device holds and has not paused, nor treats as paused on this connection
+   (3.1: on a relayed connection through a public relay, each folder whose public-relays switch is
+   off; on a punch-only circuit, at the device to be reached each folder whose own settings do not
+   allow a punch through the coordinator in the middle, and at the requester every folder; on a
+   direct connection a punch brought, each folder whose own settings do not allow that punch),
+   compute `hint` with the peer's role; no match → `ProofResult { hint, REJECTED }` and stop. (A
+   device with many folders caches the per-folder hints once per connection.)
 3. Derive `proof_key`, open `sealed` with the message's `nonce` and `aad = hint`; failure →
    REJECTED.
 4. Parse `ProofPayload`: `tier` is 1, 2 or 3; failure → REJECTED. Nothing checks the tier: it is the
@@ -348,16 +497,19 @@ Verification by the receiver, for each FolderProof, in order:
 5. The peer's Hello `suites` includes the folder's suite; otherwise REJECTED.
 6. A proof that would open more than `MAX_OPEN_FOLDERS_PER_CONNECTION` (64) folders on this
    connection is answered REJECTED (the prover opens the rest on another connection). Otherwise
-   `ProofResult { hint, ACCEPTED }`. Record the peer's device ID and reported tier for this folder on
-   this connection; the tier is shown marked "reported", like a device name. If this side has not yet sent its own FolderProof for the folder, send it now.
+   `ProofResult { hint, ACCEPTED }`. Record the peer's device ID and reported tier for this folder
+   on this connection; the tier is shown marked "reported", like a device name. If this side has not
+   yet sent its own FolderProof for the folder, send it now, except on a punch-only circuit, where
+   the device to be reached sends none (3.1).
 
 A folder is **open** on a connection when both sides have sent ACCEPTED for each other's proof. Only
 then do any of the folder's records, chunks or status cross the connection, and when the first
 folder opens on a connection the clock rule's check of the two Hellos runs before any of them does
 (3.2); a message that names a folder not open on the connection is `Close(PROTOCOL_ERROR)`. A
 connection on which no folder is open within `PROOF_TIMEOUT` (30 s) of the DeviceProofs is closed
-with `NO_COMMON_FOLDER`. A ProofResult that answers no FolderProof this side sent and has not yet
-had answered (a stray one), a second ProofResult for one proof, or a `status` other than 1 or 2, is
+with `NO_COMMON_FOLDER` (on a punch-only circuit, where no folder opens, the punch attempt's bound
+applies instead, 3.1). A ProofResult that answers no FolderProof this side sent and has not yet had
+answered (a stray one), a second ProofResult for one proof, or a `status` other than 1 or 2, is
 `Close(PROTOCOL_ERROR)`.
 
 What each side learns on failure: a `REJECTED` result says only that this proof did not open this
@@ -399,7 +551,7 @@ Section 4 defines each message; section 4.5 the exchange.
 | 0x0002 | no | Unsupported | both | "I do not know that non-critical type" |
 | 0x0003–0x000F, 0x8006, 0x800D–0x800F | | reserved | | Major 1 additions (0x8006 carried key records in the drafts, 0x800D a `Covered` message in an earlier draft of 2026-10-25) |
 | 0x8010–0x801F | | reserved | | Linked-device channel (phase 5) |
-| 0x0010–0x001F | | reserved | | Chunk availability for selective sync (phase 5), relay control (phase 7) |
+| 0x0010–0x001F | | reserved | | Chunk availability for selective sync (phase 5); relay control is not here: it is the relay protocol's own (`threat-model.md` TM-25) |
 
 Types 0x0000 and 0x8000 are never used. Every v1 message a v1 peer must understand is critical except
 Status and Unsupported, which a peer may lack without harm.
@@ -438,7 +590,7 @@ enum CloseReason {
   NO_COMMON_SUITE              = 5;
   LIMIT_TOO_SMALL              = 6;
   PROOF_REJECTED               = 7;   // the DeviceProof did not verify
-  NO_COMMON_FOLDER             = 8;   // nothing opened within PROOF_TIMEOUT
+  NO_COMMON_FOLDER             = 8;   // nothing opened within PROOF_TIMEOUT, or a punch's requester refused after the admission handshake started (3.1)
   VERIFICATION_FAILED          = 9;   // this peer forwarded a record whose signature fails or a chunk whose ciphertext hash fails: forged or corrupted in its hands
   TOO_MANY_CONNECTIONS         = 10;  // this device's connection limit is reached (libp2p limits, phase 1)
   TIMEOUT                      = 11;  // HELLO_TIMEOUT, IDLE_TIMEOUT or REPLY_PAGE_TIMEOUT (4.5) elapsed, or, while unsent bytes remained, none was delivered for IDLE_TIMEOUT (3.1); PROOF_TIMEOUT closes with NO_COMMON_FOLDER
@@ -497,9 +649,10 @@ owner's decision of 2026-10-25, "sealed peers see almost nothing"):
 - **Read and write holders** open the record's sealed part and order versions by the **version
   vector** inside it (below): they find which version replaces which, keep concurrent versions as a
   conflict, apply deletions and forget them after the deletion horizon.
-- **Sealed peers and relays** read only four things: the path's opaque **file ID** (its keyed path
-  tag), the **fingerprints** (record hashes) of the versions the record names as replaced, the
-  chunk IDs with their padded sizes, and the signature. A sealed peer replaces a version only when
+- **Sealed peers** read only four things: the path's opaque **file ID** (its keyed path tag), the
+  **fingerprints** (record hashes) of the versions the record names as replaced, the chunk IDs with
+  their padded sizes, and the signature. (A relay forwards a connection's encrypted bytes and reads
+  no record at all, `threat-model.md` TM-25, §5.) A sealed peer replaces a version only when
   a signed record or a signed cleanup (below) names it; otherwise it keeps both. The index is
   read-only to it: it resolves no conflict and changes nothing ("sealed peers should not be allowed
   to resolve conflicts nor modify anything", the owner).
@@ -638,6 +791,8 @@ than a year out of date"; its record check, below, is the coordinator's reading 
 shown to the owner on 2026-10-25). It is a different thing from the deletion horizon below, though
 both are 365 days: the deletion horizon decides when a deletion is forgotten, and the clock rule
 which devices and records are too far out of step with this device's clock to be synced with at all.
+The clock rule, and expiry by the folder's own time (below), are to be replaced by a signed
+watermark (the owner's decision of 2026-11-08; a later change).
 
 - **Peers.** Each Hello carries the sender's wall clock in whole days since the Unix epoch
   (`clock_days`, 4.2; days, not finer, so that the Hello does not hand out a fine clock reading to
@@ -734,10 +889,10 @@ on another: whether such a record arrives before or after any other changes noth
 **Names.** A record **names** the records whose fingerprints its `replaces` lists, and a cleanup
 names the records its groups list (below). Names are in the clear and signed, so every tier reads
 them. A write holder names only records whose signatures it has verified and that it has judged
-replaced by vectors or forgotten: the bases and twins its write replaces, stale copies its write
-covers, and, in cleanups, what the cleanup cases list (below). So for read and write holders a name
-says no more than coverage and expiry already do ("Why it is safe" 10); for sealed peers it is the
-only thing that replaces a version.
+replaced by vectors or forgotten: the bases, twins and archived versions its write replaces, stale
+copies its write covers, and, in cleanups, what the cleanup cases list (below). So for read and
+write holders a name says no more than coverage and expiry already do ("Why it is safe" 10); for
+sealed peers it is the only thing that replaces a version.
 
 **Bases.** A read or write holder that puts versions on its disk keeps, for each path, its
 **bases**: the records whose content it has on disk there, that is the version the file at the path
@@ -759,7 +914,14 @@ conflict copy counts once it is on the disk: the engine names, as a base of the 
 record whose content it wrote beside the path as that copy, beside the base at the path itself; when
 a write over the conflict turns the copy into a version at its own path ("What becomes of a conflict
 copy"), that version becomes the base of the copy's own path, and the copy is no longer a base of
-the original one. Sealed holders put nothing on disk and keep no bases.
+the original one. When a path loses its heads to records this release cannot read and the engine
+moves its file and conflict copies to the archive, the index keeps the bases it had there as
+**archived versions** of the path, in the slots they held ("A path with no heads"), beside the base
+each slot takes later: so a slot can hold a base and archived versions, more of them each time
+records this release cannot read take the path's heads again, a number bounded by such records that
+write holders sign (`threat-model.md` §3.6). No record is both a base and an archived version: an
+archived version is dropped when the same record is held again or becomes a base again. Sealed
+holders put nothing on disk and keep no bases.
 
 A base's **twins** are the other live heads at its path that hold its content and are concurrent
 with it: their content does not differ from the base's (below, "Heads": two directories, two files
@@ -789,12 +951,17 @@ conflict, 4.7 item 6).
 **The vector and names of a new record.**
 
 - **A version or a tombstone** that device `d` writes at path `p`, from what it finds on its disk:
-  let `S` be `d`'s bases at `p` (above) and their twins there, never a tree delete, at most
-  `MAX_VECTOR_ENTRIES` (32) of them: the bases first, then the twins, its own records first within
-  each, then the first in display order (below) when there are more (decision: so a twin never takes
-  a place a base would have had, and records signed under `d`'s own device ID, "Why it is safe"
-  8b, cannot push its base out). `S` is built from what is on `d`'s disk and never from what it
-  holds: a version `d` holds whose content is not yet on its disk is not in `S`, so the write does
+  let `S` be `d`'s bases at `p` (above), their twins there and the versions `d` archived at `p`
+  ("A path with no heads"), never a tree delete, a set in which each record counts once, at most
+  `MAX_VECTOR_ENTRIES` (32) of them: the
+  bases first, then the twins, then the archived versions, its own records first within each, then
+  the first in display order (below) when there are more (decision: so a twin never takes a place a
+  base would have had, and records signed under `d`'s own device ID, "Why it is safe" 8b, cannot
+  push its base out; that the archived versions come last, ranked among themselves by the display
+  order's rule, is the spec author's choice, for the owner's review). `S` is built from what is on
+  `d`'s disk, or, for the archived versions, what was on it until records this release cannot read
+  took the path's heads, and never from what it holds: a version `d` holds whose content is not yet
+  on its disk is not in `S`, so the write does
   not cover it, and it stays a head beside the write, a conflict (the owner's rule that an edit is
   never silently replaced; "Why it is safe" 9). A twin's content is a base's, on the disk, and a
   time or mode in which a twin differs from its base was never there, the base's being shown in its
@@ -802,7 +969,8 @@ conflict, 4.7 item 6).
   is not in `S` stays a head until a later write covers it. So do the twins past 32, the last in
   that order: beside the write they are conflict copies of the old content after an edit, or the old
   file back after a delete, until the next write there, made with them on the disk, covers them (40
-  twins take two writes). The vector is the **join** of the dots and vectors
+  twins take two writes); archived versions past 32 stay archived versions, for the next write
+  there. The vector is the **join** of the dots and vectors
   of `S` (for each device, the greatest counter that any record of `S` gives it, in its vector or as
   its own dot), then pruned. A write therefore covers every record in `S`, and every record that
   those covered, unless pruning took that record's entry out. An edit, a delete and a write that
@@ -845,10 +1013,12 @@ conflict, 4.7 item 6).
   new path.
 - **A tree delete** of directory `P` that `d` writes when its disk no longer holds `P`: its vector
   is the join of the dots and vectors of every base `d` keeps at or beneath `P` (the versions on its
-  disk there, and the tombstones and tree deletes it applied there) and of their twins, pruned with
-  the devices of the records it names at `P`'s own tag mandatory; its `replaces` names, first, the
-  bases at `P`'s own tag and their twins there, at most 32 of them, in `S`'s order (above), then the
-  shared writer faults held there (as above). So its vector covers every record it names ("Names"),
+  disk there, and the tombstones and tree deletes it applied there), of their twins and of the
+  versions it archived there ("A path with no heads"; that a tree delete takes them too is the spec
+  author's choice, for the owner's review), pruned with the devices of the records it names at `P`'s
+  own tag mandatory; its `replaces` names, first, the bases at `P`'s own tag, their twins and the
+  versions it archived there, at most 32 of them, in `S`'s order (above), then the shared writer
+  faults held there (as above). So its vector covers every record it names ("Names"),
   and its names stay within `MAX_REPLACES` however many conflict copies sit at `P`'s own path
   (decision of 2026-11-08: before, it named every base there, and with 64 or more the write was
   refused, so `d` could not delete the directory). A record at `P`'s own tag past those 32 goes if
@@ -861,9 +1031,16 @@ conflict, 4.7 item 6).
   pruned vector leaves some base or twin beneath `P` uncovered, `d` then writes a tombstone at its
   path (as above, `S` holding that path's bases and twins), after the tree delete, so that `d` holds
   nothing of its own beneath `P` but tombstones; this happens when more than 32 device IDs wrote at
-  or beneath `P`, and the files of the devices pruned out each get a tombstone. In the same commit
-  `d` writes a cleanup, `because` the tree delete, naming every record beneath `P` that it held or
-  kept as a base and that the tree delete covers (below), so that sealed peers forget them. The
+  or beneath `P`, and the files of the devices pruned out each get a tombstone. An archived version
+  beneath `P` that the pruned vector leaves uncovered gets no such tombstone, no version of it being
+  held here to write over: the tree delete does not take it, the cleanup does not name it, and it
+  stays an archived version, for the next write at its path, with its copy kept (a stated residual
+  of the confirm review of 2026-11-10, which needs more than 32 device IDs at or beneath `P`; the
+  record this release cannot read that took it, which no tree delete names below its own directory's
+  path, goes on replacing that version on every device that holds it). In the same commit
+  `d` writes a cleanup, `because` the tree delete, naming every record beneath `P` that it held,
+  kept as a base or kept as an archived version and that the tree delete covers (below), so that
+  sealed peers forget them. The
   vector is that of the tree `d` deletes, not of the whole folder (decision: a folder-wide vector
   would cover more versions that `d` never held, "Why it is safe", and would fill its 32 places with
   devices that never wrote beneath `P`).
@@ -928,7 +1105,8 @@ the cleanup its writer issues with it.
 - **An edit beats a delete.** A version written beneath `P` by a device that had not seen the
   delete, nor anything the delete's writer had seen of that version, keeps a dot the delete's vector
   does not cover, and stays live ("Why it is safe"). Its directories have no version any more; the
-  engine creates on disk the directories a live record needs (phase 1).
+  engine creates on disk the directories an applied live record needs (phase 1), and none for a
+  record this release cannot read ("A path with no heads").
 - **Nested deletes.** A tree delete of `P` covers every earlier tree delete at or beneath `P` whose
   dot its vector covers, since its writer's join includes the tree deletes it applied there: so a
   directory deleted again and again (a build directory) keeps one tree delete, not one per deletion.
@@ -1021,9 +1199,10 @@ message CleanupMeta {
   are exact fingerprints, never file IDs: a cleanup replayed at any later time can remove only the
   very records it named, never a later version of the same file.
 - **When a write holder issues one.** (a) With every tree delete, in the same commit, `because` the
-  tree delete, naming every record at or beneath its directory that it held or kept as a base and
-  that the tree delete covers; and with every write whose shared writer faults do not fit its
-  `replaces`, in the same commit, `because` that write, naming the rest. (b) At the end of a round
+  tree delete, naming every record at or beneath its directory that it held, kept as a base or kept
+  as an archived version ("A path with no heads") and that the tree delete covers; and with every
+  write whose shared writer faults do not fit its `replaces`, in the same commit, `because` that
+  write, naming the rest. (b) At the end of a round
   with a peer, for the stale copies it has noted (4.5, "Stale copies") that no write of its has
   named yet: each judged again when the cleanup is written, since the record noted with it may have
   been dropped since, and named in a group `because` the held record that replaces it then, a record
@@ -1048,7 +1227,7 @@ message CleanupMeta {
   for the next window, with a log line (4.5, "Stale copies"). Read holders cannot sign, so they
   issue none; they hold and relay cleanups like any record. A write holder issues at most one
   cleanup per tree delete, one per write whose faults do not fit, and one per round per connection,
-  each paged into as many records as `MAX_CLEANUP_ENTRIES` requires.
+  each paged into as many records as `MAX_CLEANUP_ENTRIES` and `MAX_CLEANUP_GROUPS` require.
 - **How it travels.** A cleanup is a record: pushed when held, served in replies and reconciled by
   the set digests like any other, held by read, write and sealed holders alike. A sealed peer that
   missed one gets it from any peer that still holds it. Once the read and write holders have
@@ -1139,7 +1318,8 @@ and a cleanup once `G` exceeds its counter by more than `CLEANUP_HORIZON` (30 da
 checked whenever `G` rises, in the commit of the record that raised it, at every open, and for a
 record that arrives (step 3). An expired record is dropped, with any base that is that deletion (so
 that the bases of removed paths do not pile up), and one that arrives is ignored without verifying
-it. Live versions never expire.
+it. Live versions never expire. Expiry by the folder's own time is to be replaced by a signed
+watermark (the owner's decision of 2026-11-08; a later change).
 
 - `G` depends only on the records a device holds. It does not fall when records are replaced by
   coverage, since only a record with a greater counter covers another, nor by expiry, which never
@@ -1148,9 +1328,10 @@ it. Live versions never expire.
   holders that hold the same records have expired the same ones, whatever their clocks: expiry no
   longer depends on any device's clock, and exchanges converge with it (4.5, "Why it converges").
   Cleanups are records with counters and move `G` too, but a write holder issues one only with a
-  tree delete or for stale copies and forgotten records that a peer offers, so a folder in which
-  nobody writes forgets nothing, since its time stands still. A cleanup that a peer's stale copies
-  prompt brings the folder's time up to the issuing write holder's clock, as a write would.
+  tree delete or a write whose faults do not fit, or for stale copies and forgotten records that a
+  peer offers, so a folder in which nobody writes forgets nothing, since its time stands still. A
+  cleanup that a peer's stale copies prompt brings the folder's time up to the issuing write
+  holder's clock, as a write would.
 - Sealed peers forget a deletion only when a write holder's cleanup names it (case (c) above).
 - The deletion horizon is a protocol constant, 365 days on every device (the owner's decision of
   2026-10-25, in place of the plan's "configurable, zero meaning never"): two devices with different
@@ -1170,7 +1351,7 @@ it. Live versions never expire.
   passed it by the horizon arrives expired and is ignored, and the deleted file, which peers still
   hold, comes back to the device that deleted it. Offline deletions older than the horizon are
   undone.
-- A sealed peer or relay that kept a version a deletion replaced can bring it back at will once the
+- A sealed peer that kept a version a deletion replaced can bring it back at will once the
   deletion has been forgotten, by offering it again; a path re-created since then gets the old
   version beside its new one, as a conflict copy, since a version written after the deletion was
   forgotten names nothing of the old path (`threat-model.md` §3.3).
@@ -1180,13 +1361,100 @@ verification below.
 
 - A **version** of a path is an applied record (step 7) live at the path's tag. The **heads** of a
   path are its versions. Opaque records (writer faults, step 7) are held, and replaced only by a
-  name (above), but they are no versions and never bases; a path whose live records are all opaque
-  shows no version, and the engine leaves the path on disk as it is and raises the issue that names
-  the records, saying that saving the file again clears those that are shared writer faults (phase
-  1). The stated residual: a shared writer fault at a file ID that nobody writes again, and a
-  cleanup that is itself a writer fault, stay on every tier. Where live records are listed or
-  ordered together (the views, 4.7), opaque ones come after every head, by ascending record hash
-  (decision: a reader can compare nothing else of them).
+  name (above), but they are no versions and never bases. Where live records are listed or ordered
+  together (the views, 4.7), opaque ones come after every head, by ascending record hash (decision:
+  a reader can compare nothing else of them).
+- **A path with no heads**: one whose versions a tree delete took, the tree delete's own directory,
+  or a path all of whose live records are opaque (the owner's decision of 2026-11-03: "Yes, remove
+  the old copy"). Its one base is at the path itself: the greatest, by record hash, of the tree
+  deletes held at its tag, or none; it has no conflict copies. That is a function of the records
+  held, so every device on one release that holds the same records keeps the same disk there, in
+  whatever order they came (a release that reads a record this one cannot shows its version). So a
+  device that held a version at the path, and then a record it cannot read that replaces it (a
+  newer release's version, which names the version it was written over, or a shared writer fault
+  whose writer named it), takes its outdated copy off its disk, with each conflict copy of it that
+  has not become a version at its own path (one still a base of the path, "Bases"), to the archive
+  (TM-35, phase 1), rather than show a version that every holder of those records has replaced. A
+  twin that the record does not name is still a live head, and so is a head of a conflict that it
+  does not name: then the path has heads and keeps its file. The file comes back when the device
+  can read the record (a release that knows its `kind`), or when someone writes the path again.
+  Directories that applied live records beneath the path need stay, as beneath a tree delete (4.7
+  item 6); a record this release cannot read is put on no disk and keeps no directory, so a
+  directory that the person deleted, or that such a record replaced, stays off the disk (the spec
+  author's choice, for the owner's review).
+- **What a device remembers of a path whose heads it lost** (the owner's decision of 2026-11-10,
+  "Also what was archived"). When the engine moves those copies to the archive, the index keeps each
+  base it had at the path, the version at the path and the version of each conflict copy moved, as
+  an **archived version** of the path, in the slot that base held ("Bases"): its signed envelope,
+  dot and vector, as a base is kept (local state, never held, served, counted in a digest or pushed;
+  persisted with the index store and checked again when the folder opens, "Opening a folder"). This
+  device's next write at the path covers them: they join `S`, after the bases and twins ("The vector
+  and names of a new record"), so the write's vector covers them and its `replaces` names them, and
+  a tree delete it writes at or above the path takes them too. The device had them on its disk, so
+  "Why it is safe" 9 holds, and the write names nothing it does not cover (10). An archived version
+  is dropped once a write of this device covers it; once an applied record held at the path covers
+  or names it (someone saved over it with it in view, or this release came to read the record that
+  took the path's heads), or an applied tree delete held at or above it covers it; or once the same
+  record is held here again or becomes a base again. A head that does not cover it, a concurrent
+  edit made elsewhere say, leaves it in place. When each is dropped is the spec author's choice, for
+  the owner's review; it replaces an earlier choice that also dropped one once the folder's time had
+  passed its archiving by `TOMBSTONE_HORIZON`, which, since the confirm review of 2026-11-10 tied
+  the keep of its copy to its being covered (below), would have left that copy kept after the save
+  meant to end the keep. Archived versions stay beside the base their slot takes later, so a second
+  loss of the path's heads adds the versions then on the disk beside the earlier ones: their number
+  at a path is bounded by the records this release cannot read that write holders sign
+  (`threat-model.md` §3.6). So a device that missed the unreadable record and kept the old version,
+  a sealed peer among them, meets that write and drops the old version as replaced, rather than
+  bring it back beside the write. The remaining residual, by design: a version this device never
+  had, an edit made elsewhere while it was off say, is no archived version of it, and stays a head
+  beside the write, a conflict copy, as any version a write was not made from does ("Why it is safe"
+  9).
+- **The archived copies and the warning** (the owner's decision of 2026-11-10: "Until fixed. Warning
+  notification. On desktops with a gui, a status bar indication and a system message. 30 days should
+  be configurable."). The copies the engine moves to the archive because a path's records became
+  unreadable are kept past the archive's retention (a setting, 30 days by default, TM-35), and on a
+  device whose versioning is off too, each until the fault is fixed for it: until a record this
+  release reads, held here, covers or names its version (this device's own next save at the path,
+  which covers it as an archived version; a save made elsewhere over it; the record that took it,
+  once a release here reads it), until that version is a base here again, its content back on the
+  disk, or, for a copy whose archived version failed its check at open ("Opening a folder"), until
+  this device next saves at the path. That the fault is fixed for a copy only so, and not by just
+  any head, is the coordinator's ruling on the confirm review of 2026-11-10; that a tree delete held
+  at or above the path that covers the version ends the keep too is the spec author's reading, for
+  the owner's review. A head that does not cover the version, a concurrent edit made elsewhere say,
+  goes on the disk and leaves the copy and the warning in place; a device that still holds that
+  version as a head shows the two as a conflict, as usual, and this device's next save there covers
+  both. Once the keep ends, the
+  copy is kept as any file the archive takes at that moment, for its retention, or not at all with
+  versioning off (the spec author's choice, for the owner's review). While a copy is kept so, the
+  engine raises a **warning** issue for the path (how a warning shows is the plan's: on a desktop
+  with a graphical interface, a status-bar indication and a system notification) that names the
+  records this release cannot read held at the path and says what this device can and cannot do:
+  that its copy is in the archive, kept until a save covers it; on a write holder, that saving a
+  file at the path again clears the shared writer faults, since every write there names them ("Its
+  names"), and ends the keep of each copy the save covers, which then goes as the archive's
+  retention says, at once with versioning off, so that whatever the person wants of the old file is
+  to be restored from the archive before that save; on a read holder, that this device cannot save,
+  since it holds the read key, and that a device with the write key must save the file again; and,
+  for a record opaque only for its `kind`, that this release cannot read it, which a newer release
+  may (updating then shows it) or no release may (a faulty record), and that saving the file again
+  on a device with the write key puts beside it a version this release reads (phase 1). Once no
+  record this release cannot read is held at the path, as after a save made elsewhere that names the
+  fault without covering the version, the warning names none and says that the copy in the archive
+  is a version that the file now at the path was not made from, kept until a save covers it, so
+  restore first (the re-confirm review of 2026-11-10).
+- The stated residuals of a path with no heads: (i) the archived copy is the only copy, on each
+  device that had the version on its disk: sealed peers drop the version, and free its chunks, once
+  the record that names it arrives, and nothing else keeps it; it stays in the archive until a save
+  covers it (above), and goes only if its person removes it by hand or the device is lost. (ii) A
+  record of a `kind` that no release knows looks here like a newer release's version: it takes the
+  file off the disk of every device that held the version it names, until someone saves the file
+  again, and stays for good, shown as an update this release cannot read, beside any later version;
+  the issue says it may be either. (iii) A read holder cannot clear a fault: its copy stays in its
+  archive until a device with the write key saves over that version, which one that had it on its
+  disk does with its next save there, and for good if none does. And a
+  shared writer fault at a file ID that nobody writes again, and a cleanup that is itself a writer
+  fault, stay on every tier.
 - One head is the path's current version; a tombstone head means the path is deleted. Two or more
   heads are a **conflict**, and every head is kept until a write covers them; a write covers every
   head whose content is on its writer's disk, at the path, as a conflict copy, or as a twin of
@@ -1285,7 +1553,8 @@ holder can do anyway by writing over it.
    that a stale peer still holds can come back, and nothing is deleted that `D`'s join did not
    reach.
 8. *Stated residuals.* (a) By 3's second case, a tree delete also covers a version beneath its
-   directory that its writer never held, or held but had not yet on its disk, when its join reached
+   directory that its writer never held, held but had not yet on its disk, or held but could not
+   read (a newer release's version, judged at a release that reads it), when its join reached
    a later record that the version's device wrote at or beneath that directory, as the dot of a
    base or twin there or through one's vector: the version's device wrote it, then wrote something
    else in the same tree, and only the second reached the deleter's disk before the delete. The
@@ -1295,7 +1564,7 @@ holder can do anyway by writing over it.
    the other had is still arriving there, when a file the other wrote after it beneath the folder
    holds what one of the deleter's holds, a twin or the base there (the owner's decision of
    2026-11-08: a folder delete takes what is inside it, a file still on its way included). Arrival
-   order makes it, so a relay that withholds the version, or a reconciliation that happens to
+   order makes it, so a sealed peer that withholds the version, or a reconciliation that happens to
    deliver the tombstone's subtree first, can bring it about (`threat-model.md` §3.3). That version
    was written before the delete in the order the folder's devices saw events (Lamport 1978); it is
    deleted, and the engine moves it to the archive wherever it was on a disk. A tombstone per file
@@ -1318,15 +1587,18 @@ holder can do anyway by writing over it.
    adding the folder again leaves"), where the later counters can return only once real time has
    come within a year of them.
 9. *A local write never replaces a version whose content its device has not had on its disk,
-   short of 8a for a tree delete.* `S`, and a tree delete's join, are built from bases and their
-   twins alone (above), and a twin's content is its base's: the display order showed the two as one
-   file, and the person changed or deleted what they saw. A twin is concurrent with its base, never
+   short of 8a for a tree delete.* `S`, and a tree delete's join, are built from bases, their twins
+   and archived versions alone (above), and a twin's content is its base's: the display order showed
+   the two as one file, and the person changed or deleted what they saw. An archived version's
+   content was on the disk until records this release cannot read took the path's heads, and it is
+   in the archive since ("A path with no heads"). A twin is concurrent with its base, never
    the first head at its path and, at the path, comes after its base, so neither a later version of
    the base still arriving, whatever its content, nor a version the engine has yet to put at the
    path is one. A held version `V` outside them is covered by the write only through an entry that
    some record `B` in them brings: `B`
    covers `V`, or `B` is a later record of `V`'s own device at that path; either way, by 3, the disk
-   already held the content of a version that came after `V`. For a tree delete, `B` can also be a
+   held the content of a version that came after `V` (for an archived version, until the path lost
+   its heads). For a tree delete, `B` can also be a
    later record of `V`'s device at another path beneath its directory, and then `V` goes though its
    content never reached the disk: the residual of 8a. Its names are the fingerprints of `S` (for a
    tree delete, of records at its own path that its vector covers) and of stale copies the new
@@ -1335,25 +1607,37 @@ holder can do anyway by writing over it.
    against a delete, a file that comes back. The old file stays on disk until the new content is in
    place (4.7), so the base and the disk agree. This needs A1 and A2, as 3 does: two records under
    one dot are covered together by a write made from either (13), so a write made from the one on
-   the disk also replaces the other, which never reached it.
+   the disk also replaces the other, which never reached it. A record this release cannot read
+   covers nothing here, whoever wrote it, this device included (under a newer release, before a
+   downgrade); it drops a version only by a name, which a write holder gives only to a record whose
+   signature it has verified (10). A path then has no heads only when no live version is left there,
+   twins and the other heads of a conflict included (one that the record does not name is a head, so
+   the path has heads and keeps its file), so
+   what leaves the disk, to the archive ("A path with no heads"), is a copy whose version, and
+   every live version beside it, a signed name has replaced; and this device's next write there
+   covers that version as an archived version, one it had on its disk.
 10. *A name says no more than coverage.* A write holder names only records whose signatures it has
-    verified: in `replaces`, the bases and twins its write covers (a tree delete's at its own path
-    among them, their devices mandatory in its prune) and stale copies its new vector covers; in a
-    cleanup, records that a held record at their file ID covers or a held tree delete covers
-    (`because` that record), or tombstones, tree deletes and cleanups that the folder's time has
-    passed by their horizon (`because` empty). A group applies only while its `because` record is
-    held, or is empty, and then every applied record it names is covered by that `because` record,
-    or has expired at every device that holds the cleanup, since the cleanup's own counter lies
-    above its issuer's folder time (the writer's rule) and so lifts the folder's time past the named
-    record's horizon wherever the cleanup is held. So at read and write holders a name or a cleanup
-    drops no applied record that coverage or expiry would not drop at the same moment, and by 3
-    every record named was written before the record that names or explains it. An opaque record,
-    which nothing covers, goes only by a name. The one name that coverage does not explain is that
-    of a shared writer fault, which every write at its path names ("Its names"): every release
-    judges it a fault and none applies it, so the name drops nothing any device shows as a version;
-    and a record opaque only for its `kind` is never named this way ("A newer release's version").
-    Only a dishonest write holder can name more, which it could do as well by writing over the file
-    (`threat-model.md` §3.6).
+    verified: in `replaces`, the bases, twins and archived versions its write covers (a tree
+    delete's at its own path among them, their devices mandatory in its prune) and stale copies its
+    new vector covers; in a cleanup, records that a held record at their file ID covers or a held
+    tree delete covers (`because` that record), or tombstones, tree deletes and cleanups that the
+    folder's time has passed by their horizon (`because` empty). A group applies only while its
+    `because` record is held, or is empty, and then every applied record it names is covered by that
+    `because` record, or has expired at every device that holds the cleanup, since the cleanup's own
+    counter lies above its issuer's folder time (the writer's rule) and so lifts the folder's time
+    past the named record's horizon wherever the cleanup is held. So at read and write holders a
+    name or a cleanup drops no applied record that coverage or expiry would not drop at the same
+    moment, and by 3 every record named was written before the record that names or explains it. An
+    opaque record, which nothing covers, goes only by a name. The one name that coverage does not
+    explain is that of a shared writer fault, which every write at its path names ("Its names"):
+    every release judges it a fault and none applies it, so the name drops nothing any device shows
+    as a version; and a record opaque only for its `kind` is never named this way ("A newer
+    release's version"). The names that a record this release cannot read gives are judged by the
+    release that can: a newer release's version names what its write covers there, by these same
+    rules, and a writer fault's names are its signer's doing, as below; here such a name drops the
+    version it names all the same (step 6), which then leaves the disk if no head is left ("A path
+    with no heads"). Only a dishonest write holder can name more, which it could do as well by
+    writing over the file (`threat-model.md` §3.6).
 11. *A sealed peer loses nothing silently.* It drops a record only when a record it holds at that
     file ID names it, or a cleanup it holds names it in a group whose `because` it holds or is
     empty. In the first two cases it holds what replaced the dropped record, and by 10 that is a
@@ -1397,8 +1681,9 @@ holder can do anyway by writing over it.
   can fetch, verify and deduplicate by it, and `plain_hash` under the seal, so that only key holders
   can tell which plaintext a chunk is. A key holder maps between them by computing both when it
   writes (encryption is deterministic) and by decrypting when it reads; a sealed peer never can.
-- **What a sealed peer or relay sees** (the owner's decision of 2026-10-25, "sealed peers see almost
-  nothing", stated here in full; `threat-model.md` §5, TM-15): of a record, its file ID, so that it
+- **What a sealed peer sees** (the owner's decision of 2026-10-25, "sealed peers see almost
+  nothing", stated here in full; `threat-model.md` §5, TM-15; a relay sees no record, only what
+  `threat-model.md` §5 lists for it): of a record, its file ID, so that it
   can group the versions of a file and count how often each file changes; the fingerprints it names,
   which show where a file's history forked into concurrent versions and joined again; its chunk IDs
   with their padded sizes, so that it can tell which chunks are identical across files and versions
@@ -1523,7 +1808,9 @@ its cause; the causes are named here in **bold**.
    name, covering nothing, and applied by no one; the next write at its path names it, unless its
    only fault is a `kind` this release does not know, "Its names"), and an issue names the record by
    its hash, never a device (ruling S-4), and, unless its only fault is an unknown `kind`, says that
-   saving the file again clears it. Otherwise the record is **applied**. NFC is the writer's duty
+   saving the file again on a device with the write key clears it (on a read holder, that this
+   device cannot; "A path with no heads" gives the warning for a path left with no heads).
+   Otherwise the record is **applied**. NFC is the writer's duty
    only: readers check the rest of the path grammar and not normalisation, so no difference between
    releases' Unicode tables can split peers. The stated residual: a write holder can write a name
    that is not NFC, which is then a path distinct from its NFC form, with a tag of its own (a
@@ -1541,7 +1828,7 @@ its cause; the causes are named here in **bold**.
 **Nothing moves backwards.** A device drops a record only as steps 6 and 8 say, by a held record,
 tree delete or cleanup that the folder key signed, or, at a read or write holder, when the folder's
 own time passes a tombstone, tree delete or cleanup by its horizon; nothing a peer says without such
-a record drops anything. A stale snapshot from a sealed peer or relay offers versions that what a
+a record drops anything. A stale snapshot from a sealed peer offers versions that what a
 read or write holder holds covers: they are obsolete (step 3), and a peer that offers them is simply
 behind. A sealed peer that receives a stale snapshot keeps the stale copies until a write holder
 names them, and loses nothing it held, short of a version that came back after its deletion was
@@ -1569,30 +1856,38 @@ across the processor's cores, and the result does not depend on how many.
   holding a record and dropping what it replaces) is dropped as step 6 says, and, at a read or write
   holder, an expired record as expiry says, both without a report; the clock rule judges records on
   arrival only (step 4), so a stored record is held whatever its counter and this device's clock
-  now: nothing is removed for it, and the high-water mark never falls. Bases kept only as bases get
+  now: nothing is removed for it, and the high-water mark never falls. Bases kept only as bases, and
+  archived versions ("A path with no heads"), get
   the same two checks as records and are dropped and reported alike; a path that loses its base has
   none until the engine applies a version there again, so that its next local write covers nothing
-  and makes a conflict rather than a guess. Applying the tree deletes uses the index of "Judging a
+  and makes a conflict rather than a guess, and an archived version that fails is one that the next
+  write there does not cover, its copy kept until that write ("A path with no heads"). Applying the
+  tree deletes uses the index of "Judging a
   tree delete without a walk", at open as on arrival, and builds it as the records are held again.
-- **A clock set back.** When the greatest counter of an applied record in the store (bases included)
-  is more than `CLOCK_RULE_LIMIT` ahead of this device's clock, the folder does not open: the device
-  raises the clock-rule issue, worded as "records here are dated more than a year ahead of this
-  device's clock: it was set back, or was ahead when they arrived", with the remedy, since with that
+- **A clock set back.** When the greatest counter of an applied record in the store (bases and
+  archived versions included, the re-confirm review of 2026-11-10) is more than `CLOCK_RULE_LIMIT`
+  ahead of this device's clock, the folder does not open: the device raises the clock-rule issue,
+  worded as "records here are dated more than a year ahead of this device's clock: it was set back,
+  or was ahead when they arrived", with the remedy, since with that
   clock it could sync with none of the peers that wrote those records anyway. Removing those records
   instead could undo the device's own edit that no peer has yet, whose record would then survive
   only as a base and lose to an older version from the peers (the coordinator's ruling of
   2026-10-25, for the owner's review). The folder opens once this device's clock is within
-  `CLOCK_RULE_LIMIT` of the store's newest applied record, or after the folder is added again (the
+  `CLOCK_RULE_LIMIT` of that greatest counter, or after the folder is added again (the
   clock rule's remedy). The device checks again when its clock passes that time, through the clock
   trait, not only at the next open, and opens the folder then. While it is kept closed, the folder
   counts as a paused folder for folder proofs (3.5, step 2): it is not proven to peers, and their
-  proofs for it are answered REJECTED, so it receives nothing while it waits.
+  proofs for it are answered REJECTED, so it receives nothing while it waits. This case goes with
+  the clock rule, which a signed watermark is to replace (the owner's decision of 2026-11-08; a
+  later change).
 - The **high-water mark** stored is accepted only up to the greater of the greatest counter held
-  (bases included) and the clock floor, plus `CLOCK_AHEAD_WARNING` (one day); a stored mark above
-  that, or at or above `MAX_COUNTER`, is reported as corrupt and replaced by that greater value, so
-  that a mark changed at rest can neither lock the folder nor carry the device's counters far into
-  the future. A mark below the greatest counter held is raised to it. Sealed peers keep no mark,
-  since they write nothing.
+  (bases and archived versions included) and the clock floor, plus `CLOCK_AHEAD_WARNING` (one day);
+  a stored mark above that, or at or above `MAX_COUNTER`, is reported as corrupt and replaced by
+  that greater value, so that a mark changed at rest can neither lock the folder nor carry the
+  device's counters far into the future. A mark below the greatest counter held is raised to it. So
+  this device's next write takes a counter above that of every archived version, whose dots its
+  vector carries: a dot at or above its own counter would make that write a writer fault on every
+  device (step 7). Sealed peers keep no mark, since they write nothing.
 - So a dropped record is one this device lacks, and index sync fetches every genuine one again from
   any peer that holds it: the device draws a new index epoch (4.5), at most once per open, whenever
   the open dropped anything, so every peer reconciles with it, and the digests of the subtrees that
@@ -1727,10 +2022,16 @@ message FolderStatus {
   a device keeps the peer's epoch, its **cursor** (the peer's local sequence through which this
   device holds what the peer held, or a record covering it), when the two last ended a round, caught
   up or not, and, at a write holder, how many of the peer's records it has named in the current
-  window of `MAX_PEER_NAMES` (Stale copies, below); persisted. It drops a peer's state after
+  window of `MAX_PEER_NAMES` (Stale copies, below); and, from phase 2, the libp2p peer ID that the
+  peer's DeviceProof bound to that device ID (3.3, 3.4), the latest seen, by which hole punching
+  tells a peer of a shared folder from a stranger (3.1; `threat-model.md` TM-25: a lookup by peer
+  ID across the folders' per-peer states, one entry per state, the spec author's choice, for the
+  owner's review); persisted. It drops a peer's state after
   `PEER_STATE_HORIZON` (90 days) without a round that ended, and, when the folder already holds
   `MAX_PEER_STATES` (4 096) of them, the one longest without a round, to admit another. Without
-  state for a peer a round starts by reconciling; that is the whole cost of dropping it.
+  state for a peer a round starts by reconciling, and, from phase 2, a punch through a coordinator
+  no longer knows the peer by its peer ID, so it is admitted only once it proves a key (3.1); that
+  is the whole cost of dropping it.
 - **Rounds.** A side sends a round when a folder opens on the connection and when it owes one
   (below); no round of a folder paused for a store failure starts, and resuming owes one on every
   connection where the folder is open (section 5). A round is, in order:
@@ -2026,7 +2327,7 @@ message FolderStatus {
     and dropped, or, past 32 writers on one path or past the deletion horizon, kept as heads (4.4,
     "Why it is safe", 5 and 7). A device whose clock is more than a year off is refused by the clock
     rule until its clock is fixed and the folder added again (4.4).
-  - *Through sealed relays.* A sealed peer holds and digests records by their fingerprints and
+  - *Through sealed peers.* A sealed peer holds and digests records by their fingerprints and
     judges them by names alone. It can withhold records from a device that meets no one else, and it
     can offer stale copies and old versions whose deletion has been forgotten; it cannot make two
     read or write holders that exchange with each other disagree, nor make a read or write holder
@@ -2231,13 +2532,19 @@ not the only way to build it.
      when it puts a version's content in place or removes the path, each conflict copy's record when
      it writes the copy's content beside the path, and the record the index writes from the disk.
      The index keeps a base it has dropped from the live set until the engine names a newer one.
+     When the engine moves a path's file and conflict copies to the archive because the path's live
+     records are all opaque, it tells the index so, and the index keeps those bases as the path's
+     archived versions until a write covers them, an applied record covers or names them or an
+     applied tree delete covers them, or the same record is held again or becomes a base again (4.4,
+     "A path with no heads").
      Before the engine applies a record from a peer to a path, it compares the disk with that path's
      base and, if the person changed the file meanwhile, writes that change first; the record from
      the peer and the new write are then concurrent, a conflict, never one over the other.
    - *The current version.* The engine does not build vectors: it hands the index a change found on
-     the disk and the index builds the vector from `S`, the path's bases and their twins (the heads
+     the disk and the index builds the vector from `S`, the path's bases, their twins (the heads
      of a base's content, concurrent with it and, at the path, after it in display order, never the
-     first head), never from records it holds whose content is not on the disk, nor from a later
+     first head) and its archived versions, never from records it holds whose content is not on the
+     disk, nor from a later
      version of a base or one the engine has yet to put at the path (4.4, "Bases", "The vector and
      names of a new record"; "Why it is safe" 9). What the engine still
      needs of the current version, for a rename's content, is the base at the path (`Current`:
@@ -2254,26 +2561,33 @@ not the only way to build it.
    - *Conflicts.* A path's heads are its applied live records in display order; the views list them
      by record hash, the first sitting at the path and every other head whose content differs being
      a conflict copy (4.4), and `read_file` reads any head by its record hash, as today; opaque live
-     records come last, by record hash, marked as an update this release cannot read. A write over a
-     conflict first writes each conflict copy on the disk as a version at its own path, in the same
-     commit, so that it becomes an ordinary live file the person deletes when they no longer want it
-     (4.4, "What becomes of a conflict copy"). The state digest the simulator compares becomes the
-     root set digest (4.5), equal on every tier for equal records, followed, for a key holder, by
-     each path's heads by hash in display order.
+     records come last, by record hash, marked as an update this release cannot read; a path with
+     only such records has no heads, and the engine moves its file, and each conflict copy that is
+     still a base of the path rather than a version at its own path, to the archive, keeps each
+     there until a record it reads covers or names its version or that version is a base again, a
+     head that does not cover it leaving it there, and raises the warning while it does (4.4, "A
+     path with no heads"). A write over a conflict first writes each conflict copy on the disk as a
+     version at its own path, in the same commit, so that it becomes an ordinary live file the
+     person deletes when they no longer want it (4.4, "What becomes of a conflict copy"). The state
+     digest the simulator compares becomes the root set digest (4.5), equal on every tier for equal
+     records, followed, for a key holder, by each path's heads by hash in display order.
    - *Tree deletes.* A scan that finds a directory gone, with everything beneath it, writes one tree
      delete of that directory (after the deletion brake, as today), its vector the join of the bases
-     beneath it and their twins, its names the first 32 of those at the directory's own path (4.4,
-     "The vector and names of a new record"); the index then writes a tombstone for each base or
-     twin beneath it that the pruned vector leaves uncovered, and the cleanup that names, `because`
-     the tree delete, every record beneath it that it covers, paged by `MAX_CLEANUP_ENTRIES`, all in
-     one commit. Files that vanished from
-     a directory that remains get a tombstone each. A directory renamed with what it holds is a put
+     beneath it, their twins and the archived versions there, its names the first 32 of those at the
+     directory's own path (4.4, "The vector and names of a new record"); the index then writes a
+     tombstone for each base or twin beneath it that the pruned vector leaves uncovered (an archived
+     version left uncovered gets none, a stated residual, 4.4 "A tree delete"), and the
+     cleanup that names, `because` the tree delete, every record beneath it that it covers, paged by
+     `MAX_CLEANUP_ENTRIES` and `MAX_CLEANUP_GROUPS`, all in one commit. Files that vanished from a
+     directory that remains get a tombstone each. A directory renamed with what it holds is a put
      at every new path, then a tree delete of the old directory, in one commit. A tree delete
      received makes the engine move to the archive every file beneath it that has no live version
-     left, and remove each directory beneath it with no live record left beneath it; a file that a
+     left, and remove each directory beneath it with no applied live record left beneath it (a
+     record this release cannot read keeps no directory, 4.4 "A path with no heads"); a file that a
      tree delete did not cover stays, with the directories it needs.
-   - *Names and cleanups.* The index fills a record's `replaces` (`S`, its bases and their twins,
-     then the shared writer faults held at the path, then the stale copies noted for that path, the
+   - *Names and cleanups.* The index fills a record's `replaces` (`S`, its bases, their twins and
+     its archived versions, then the shared writer faults held at the path, then the stale copies
+     noted for that path, the
      faults that do not fit going into a cleanup in the same commit) and writes the cleanups of 4.4
      "Cleanup" (with tree deletes, and at the end of each round for the stale copies and forgotten
      records noted, 4.5); the engine only commits and pushes them. Sealed holders and read holders
@@ -2291,8 +2605,9 @@ not the only way to build it.
    or cloned (4.5). A record whose counter is more than `CLOCK_AHEAD_WARNING` ahead of this device's
    clock raises, once its signature has verified, the issue "this folder's time is N ahead of this
    device's clock (first seen on a record claiming device X)" (4.4, "A fast clock carries forward").
-8. **The open-time report.** Every stored record, and every base kept only as a base, is still
-   verified at open (step 1 and the signature, at every tier, across the processor's cores). The
+8. **The open-time report.** Every stored record, every base kept only as a base and every archived
+   version is still verified at open (step 1 and the signature, at every tier, across the
+   processor's cores). The
    report gives the record hashes dropped (ascending, each once), the count of undecodable entries a
    phase 1 store found, whether the folder was kept closed because its records are dated more than a
    year ahead of the clock (4.4, "Opening a folder"), and whether the stored high-water mark was
@@ -2333,7 +2648,8 @@ not the only way to build it.
   per folder, resync timers, reply-page deadlines, rate-limit state) is bounded by the constants in
   this file and is freed when the connection closes. What outlives a connection is bounded too,
   though not by a constant: the per-peer state of 4.5 holds at most `MAX_PEER_STATES` entries per
-  folder, each with its count of names against `MAX_PEER_NAMES`, and a write holder's notes of stale
+  folder, each with its count of names against `MAX_PEER_NAMES` and, from phase 2, its peer ID,
+  looked up by peer ID with one entry per state (3.1), and a write holder's notes of stale
   copies at most `MAX_STALE_KNOWN`; a read or write holder's index of held records by device and
   path, one entry per record held, through which judging an arriving tree delete costs at most two
   queries per entry of its vector whatever lies beneath its directory, and holding it `O(log n)`
@@ -2382,10 +2698,10 @@ not the only way to build it.
 | Unknown non-critical type | `Unsupported`, at most once per type per connection (later frames of that type ignored with a log line); continue |
 | No common suite; `max_message_size` below the floor | `Close(NO_COMMON_SUITE)`; `Close(LIMIT_TOO_SMALL)` |
 | DeviceProof does not verify | `Close(PROOF_REJECTED)` |
-| `HELLO_TIMEOUT`, `IDLE_TIMEOUT` or `REPLY_PAGE_TIMEOUT` (an outstanding reply brought nothing, 4.5) elapsed; `PROOF_TIMEOUT` elapsed with nothing opened | `Close(TIMEOUT)`; `Close(NO_COMMON_FOLDER)` |
+| `HELLO_TIMEOUT`, `IDLE_TIMEOUT` or `REPLY_PAGE_TIMEOUT` (an outstanding reply brought nothing, 4.5) elapsed; `PROOF_TIMEOUT` elapsed with nothing opened, or, on a punch-only circuit, a requester refused after the admission handshake started (3.1) | `Close(TIMEOUT)`; `Close(NO_COMMON_FOLDER)` |
 | **Forged**: an index record or cleanup that is neither a duplicate, nor expired, nor obsolete, or that a write holder verifies before noting it as a stale copy or forgotten record, and whose signature does not verify under the folder key with its record type's label (4.4 steps 3 to 5); a chunk whose ciphertext hash fails | `Close(VERIFICATION_FAILED)`; issue naming the peer |
 | **Sender violation**: a record in a `RECORDS` reply whose key in the set digests (its path tag and record hash, or a cleanup's record hash twice) does not begin with the request's prefix; a `CHILDREN` reply for a 128-nibble prefix or to a request whose digest was 32 zero bytes; a `RECORDS` reply carrying more than `RECONCILE_LEAF_MAX` records for a prefix shorter than 128 nibbles to a request whose digest was not zero (4.5, "Serving a `ReconcileRequest`") | `Close(PROTOCOL_ERROR)`, before and whatever the signature |
-| FolderProof fails for any reason (hint, seal, payload, the folder's suite missing from the peer's Hello, the open-folder bound) | `ProofResult(REJECTED)`, keep; nothing of any folder is sent before it is open |
+| FolderProof fails for any reason (hint, seal, payload, the folder's suite missing from the peer's Hello, the open-folder bound; at a device to be reached that takes the circuit for punch-only, any proof past the fourth, unexamined, 3.1) | `ProofResult(REJECTED)`, keep; nothing of any folder is sent before it is open |
 | **Duplicate** (an index record whose `record_hash` is already held) | Ignore without verifying, keep |
 | **Expired** (at a read or write holder, a tombstone or tree delete that the folder's own time has passed by `TOMBSTONE_HORIZON`, or a cleanup it has passed by `CLEANUP_HORIZON`, 4.4) | Ignore without verifying, keep; a log line; a write holder that would note it as a forgotten record (no note of it, nothing it holds names it, the peer within `MAX_PEER_NAMES`, the connection within `MAX_NOTE_VERIFICATIONS`) verifies it first, notes it if it verifies, and names it in its cleanup at the round's end (4.5, "Stale copies") |
 | **Obsolete** (a record that something held replaces, by a name or a cleanup group that applies on every tier, by coverage or a tree delete above it at a read or write holder, and that replaces nothing held, 4.4 step 3) | Ignore without verifying, keep; a write holder that would note it as a stale copy (no note of it, nothing it holds names it, the peer within `MAX_PEER_NAMES`, the connection within `MAX_NOTE_VERIFICATIONS`) verifies it first, notes it if it verifies, and names it in its next write of the path or its cleanup at the round's end (4.5, "Stale copies") |
@@ -2418,7 +2734,7 @@ not the only way to build it.
 | Constant | Default |
 | --- | --- |
 | `HELLO_TIMEOUT` (channel up → peer's Hello and DeviceProof) | 10 s |
-| `PROOF_TIMEOUT` (DeviceProofs → first open folder) | 30 s |
+| `PROOF_TIMEOUT` (DeviceProofs → first open folder; not on a punch-only circuit, where the punch attempt's 10 s bounds the admission handshake, 3.1) | 30 s |
 | `IDLE_TIMEOUT` (no frame in either direction, Status counting; also, while unsent bytes remain, the longest a connection may go without delivering one, 3.1) | 5 min |
 | `STATUS_INTERVAL` | 30 s |
 | `REPLY_PAGE_TIMEOUT` (the longest a requester waits for the next part of the reply to its outstanding request, counted from when the request left its send queue and restarted by every part of a reply to its own requests, every `CHUNK_OK` reply to its own chunk requests and every push that brings a record it holds; past it, `Close(TIMEOUT)`, 4.5) | 10 min |
@@ -2547,14 +2863,16 @@ frames, message bodies and its handshake state machine: items 1 to 5 and 10, and
 of items 6, 8, 9, 11, 12 and 13. The **index** crate checks what a record does to a store: in item 6
 each record's outcome (duplicate, expired, obsolete, held, replacing, opaque, from the future, a
 record under the device's own ID); item 7 (latest only, coverage, tree deletes, expiry, heads and
-the property tests) whole; in item 8 the set digests, their cache and serving; and in item 12 the
-sealed-peer rule and every cleanup outcome. The **engine** crate checks what a connection then does:
-the connection vectors of items 6 (closes, issues), 8 (rounds, epochs and resets, the descent,
-cursors and counting, the round owed, pushes, pages, per-peer state, intervals and timeouts), 9
-(busy answers, the backoff, passes, serving and attribution), 11 (`chunks_stored` and how often it
-is sent), 12 (when a cleanup is written and sent) and 13 (the clock rule at the handshake); item 14
-runs in the integration suite's compatibility matrix. The **keys** crate checks what `keys.md` §9
-lists, the shared inputs included.
+the property tests), but for its cases marked for the engine; in item 8 the set digests, their cache
+and serving; and in item 12 the sealed-peer rule and every cleanup outcome. The **engine** crate
+checks what a connection then does: the connection vectors of items 6 (closes, issues), 8 (rounds,
+epochs and resets, the descent, cursors and counting, the round owed, pushes, pages, per-peer state,
+intervals and timeouts), 9 (busy answers, the backoff, passes, serving and attribution), 11
+(`chunks_stored` and how often it is sent), 12 (when a cleanup is written and sent) and 13 (the
+clock rule at the handshake); the cases of item 7 marked for it (the archive's copies and the
+warning, phase 1); and, with `net` from phase 2, item 15 (relayed connections); item 14 runs in the
+integration suite's compatibility matrix. The **keys** crate checks what `keys.md` §9 lists, the
+shared inputs included.
 
 **Two shapes.** A **decoder vector** is a frame or body and its expected outcome (accepted, with the
 decoded value, or the row that refuses it). A **connection vector** is a scenario run against one
@@ -2698,8 +3016,67 @@ interval in section 5's constants is a vector.
    says the records are dated more than a year ahead of the clock, nothing is removed, the
    high-water mark kept), the clock then passing the time it needs while the device runs (the folder
    opens then, without a restart, nothing lost), and the same store opened after the clock is right
-   (opens); a base that fails its check at open (dropped and reported, the next write covers
-   nothing, a conflict); a rename (the old path's only head a tombstone, the new path one version)
+   (opens); **an archived version from a fast clock** (the re-confirm review of 2026-11-10): V,
+   written on a device whose clock was more than a day fast, its counter more than
+   `CLOCK_AHEAD_WARNING` above every other counter held and the clock floor, archived on a fault F
+   (at open the stored mark, at V's counter, is accepted, not reported corrupt; the next write's
+   counter is above V's, so it covers and names V and names F, and every device holds it, no writer
+   fault), and a store whose only counter more than `CLOCK_RULE_LIMIT` ahead of the clock is an
+   archived version's (the folder does not open); **no heads from opaque records**: a version V on
+   the disk, then a record N of an unknown `kind` that names V (V dropped, the path's base none, the
+   file off the disk, to the archive, and V kept as an archived version) and the same two records in
+   the other order (the same disk); a shared writer fault F that names V (the same, and the next
+   write at the path, with `S` V's archived version, covers and names V and names F, which every
+   tier then drops); a tree delete held at that path besides (the base is the greatest tree delete
+   held there, by record hash); N naming V but not V's twin T (T a head: the file stays, nothing
+   archived or remembered); N naming one head of a conflict, V1 at the path with V2 as its conflict
+   copy (V2 the one head, at the path, no copy, V1's file to the archive as a replaced version,
+   nothing remembered); N naming both heads, V1 at the path and V2, whose conflict copy a write over
+   the conflict elsewhere has made a version Q at the copy's own path, delivered Q then N (the copy
+   on the disk is Q's base at its own path and stays; only V1's file goes to the archive) and N then
+   Q (the copy goes to the archive with V1's file, then Q is put at its own path: the same disk at
+   the end of both orders); **the returning device** (the owner's decision of 2026-11-10): D
+   archives V on F, E missed F and holds V on its disk, and D's person restores V from the archive
+   and saves it unchanged (D's write W covers and names V and names F; E, receiving W, drops V as
+   covered and keeps W's content, with no conflict copy, and a sealed peer that held V drops it by
+   W's name), the same with F reaching E before W (E archives V and keeps it as an archived version,
+   its copy kept with the warning; W then covers V, which drops E's archived version and ends the
+   keep: the same disk at the end), the same saved with changed content (the same, E's old file
+   going to its archive), and E's own edit V2 of V, made while it was off (V2 a head beside W, a
+   conflict copy: the stated residual); an archived version dropped when a version this release
+   reads arrives at the path and covers it, when one arrives that names it, when this release comes
+   to read N (a newer release reopening the store), and when an applied tree delete above the path
+   covers it, and one that the folder's time does not drop (past `TOMBSTONE_HORIZON` after its
+   archiving, the next write there still covers it); **an archived version held again** (the confirm
+   review of 2026-11-10): F dropped by a write Y made elsewhere that names F and does not cover V,
+   then V offered again (V held, its archived version dropped, its copy kept until V is back on the
+   disk as a base; the next write's `S` holds V once and its `replaces` names V once); **a second
+   loss of heads**: after F took V, a concurrent version X that does not cover V arrives (X on the
+   disk, V's copy and the warning kept, V still an archived version), then a fault F2 that names X
+   (X archived beside V; the next write covers and names both, ending both keeps); a tree delete
+   written over a directory with V's archived version beneath it (its vector covers V and its
+   cleanup names V; V's archived version dropped and the keep ended; E, which missed F, drops V on
+   receiving it, and a sealed peer by the cleanup), and the same with more than 32 device IDs
+   beneath the directory, the pruned vector leaving V uncovered (no tombstone at V's path, no
+   cleanup naming V, V still an archived version with its copy kept: the stated residual); an
+   archived version that fails its check at open (dropped and reported; the next write at the path
+   does not cover V, so E keeps V beside it, a conflict; the copy kept until that write); 40
+   archived versions under one write (32 covered and named, the eight left for the next write); an
+   old release's tree delete over a directory beneath which one path holds only N (the tree delete
+   neither covers nor names N, nor does its cleanup; on the old release the directory leaves the
+   disk, kept by no opaque record, and N stays opaque; on a release that knows the kind, N is a head
+   and its file comes back with the directories it needs, unless the tree delete's join reached a
+   later record of N's device beneath the directory, 4.4 "Why it is safe" 8a); for the engine (phase
+   1): the copies archived on a fault, kept past the archive's retention, and with versioning off,
+   while a head that does not cover their version is held at the path, until this device saves at
+   the path (the keep ended, the copy then under the archive's retention, or gone at once with
+   versioning off), until a version from elsewhere that covers theirs arrives, until this release
+   reads N, or until their version is a base again; and the warning's text on a write holder (saving
+   ends the keep, so restore first), on a read holder, for an unknown `kind`, and with no record
+   this release cannot read left at the path (F named by a write Y made elsewhere that does not
+   cover V: the warning names no record, and V's copy and the warning stay until a save covers V); a
+   base that fails its check at open (dropped and reported, the next write covers nothing, a
+   conflict); a rename (the old path's only head a tombstone, the new path one version)
    and the same two records delivered in the other order; an opaque record beside the one head (both
    kept; the next write at the path names it, a shared writer fault, and every tier drops it), 70
    shared writer faults at one path (the next write names its bases and as many as fit 64 names, and
@@ -2753,15 +3130,16 @@ interval in section 5's constants is a vector.
    it (12); (i) two records with one dot are both held on every tier, and two devices that hold one
    each find the difference and end holding both (13); (j) a reopen of the store gives the same
    index; (k) no local write or scan's tree delete covers a held version whose content was not on
-   the writing device's disk (a base there, or a twin of one), unless a base or twin there covered
+   the writing device's disk (a base there, a twin of one, or an archived version), unless a base or
+   twin there covered
    it or is a later record of its device there, for a tree delete at or beneath its directory (4.4
    "Why it is safe" 9 and 8a); (l) for every tree delete, the index of 4.4 "Judging a tree delete
    without a walk" finds the same held records covered as a walk over every record held beneath its
    directory does, nested tree deletes included (the author's model: 135 470 tree deletes over paths
    that share prefixes, all alike); (m) a device's set digests equal those computed afresh from the
    records it holds, after any sequence of changes; and, at open, a stored high-water mark above the
-   greatest counter held and the clock floor by more than `CLOCK_AHEAD_WARNING` is reported corrupt
-   and replaced (a connection-free vector).
+   greatest counter held (bases and archived versions included) and the clock floor by more than
+   `CLOCK_AHEAD_WARNING` is reported corrupt and replaced (a connection-free vector).
 8. **Exchange** (index for digests and serving, protocol for the decoder vectors, engine for the
    rest; connection vectors unless noted): set digests of an empty subtree (zeros), a leaf of one
    and of 64 records, a node over 65, 65 records at one tag (node form at its 64-nibble prefix, its
@@ -2893,14 +3271,81 @@ interval in section 5's constants is a vector.
     build, section 6): a record of a `kind` the older binary does not know, written by the newer
     (the older holds it opaque, shows it as an update it cannot read, and its writes at that path
     neither name nor cover it; the newer holds both as a conflict, or drops the older's write's
-    predecessor as usual); a shared writer fault at a path, met by both binaries (each binary's next
+    predecessor as usual); the same record written over a version the older had on its disk (the
+    older archives its copy and keeps the version as an archived version, which its next write
+    there covers; the newer holds that write and its own record as a conflict), and the older's
+    tree delete over the directory holding that path (the newer keeps the record, with its
+    directories); a shared writer fault at a path, met by both binaries (each binary's next
     write at the path names it, and both drop it); and every check of step 7 but the one on `kind`,
     run on the same fixed records by both binaries (the same verdicts).
+15. **Relayed connections** (engine with `net`'s transport, from phase 2; connection vectors; 3.1):
+    on a circuit through a public relay, a folder whose public-relays switch is on opens and syncs,
+    on the stream the side the circuit reached opens, and one whose switch is off is not proven (no
+    FolderProof sent) and its proof is answered REJECTED; with no folder's switch on, no Hello is
+    sent; a stream of this protocol opened by the side that dialed through the device in the middle,
+    on a circuit either side takes for a public relay's or for punch-only (refused); a circuit
+    through a device reserved with only for a punch, and one whose stated limit is 60 s or 64 KiB
+    though the device in the middle presents itself as a public relay, are punch-only (the admission
+    handshake only); the two sides judging one circuit differently, the device to be reached taking
+    it for punch-only and the requester for a public relay's (the requester opening no stream, the
+    admission handshake on the stream the device to be reached opens, no folder open on the circuit,
+    then the punch), and the other way round (the requester opens no stream and answers the other
+    side's FolderProofs REJECTED, so no folder opens on the circuit, and an ACCEPTED proof of its
+    own admits it to the punch); on a punch-only circuit, with every public-relays switch off, as by
+    default: a requester that is a peer of a folder whose settings allow a punch through that
+    coordinator (no handshake: the punch starts at once), one that is a peer only of folders whose
+    settings do not (at never, or at a level that does not allow that coordinator: not known, so the
+    handshake, in which those folders are paused and its proofs for them REJECTED), an unknown one
+    whose FolderProof is ACCEPTED (admitted: no FolderProof sent back, no folder open, and an
+    `IndexRequest` after it `Close(PROTOCOL_ERROR)`), one whose proofs are all REJECTED (not
+    admitted, no address sent, `Close(NO_COMMON_FOLDER)`, the circuit closed), one still not
+    admitted when the attempt's 10 s run out (refused alike), a fifth and a sixth FolderProof from
+    the requester (each answered REJECTED, the connection kept, the 257th `Close(PROTOCOL_ERROR)`),
+    a requester that takes the circuit for a public relay's and proves five folders at a device to
+    be reached that takes it for punch-only (the first four examined, the fifth REJECTED), more than
+    four from a device to be reached that takes the circuit for a public relay's, at a requester
+    that takes it for punch-only (each answered REJECTED, the connection kept), six requesters
+    admitted at once against a cap of 4 in all (the first four admitted, the fifth and sixth refused
+    with `Close(NO_COMMON_FOLDER)`, counted toward the caps through their coordinators only), the
+    21st admission in a minute likewise, and, on a circuit the side that dialed takes for a public
+    relay's, no stream within `HELLO_TIMEOUT` of the channel's set-up (the circuit closed with no
+    Close, the session counted as refused: no new one for 1 minute), a requester whose channel's
+    peer ID differs from the one the STOP named (refused, no Close), and a STOP from a device in the
+    middle that the device holds no reservation with (answered NO_RESERVATION, counted toward no
+    cap); the requester's side (it opens no stream of this protocol, runs the handshake only on the
+    one the device to be reached opens, proves only folders whose settings allow the punch, and
+    answers a FolderProof sent to it REJECTED); six circuits refused at admission within a minute
+    through one coordinator (a seventh through it closed with no handshake, and one through another
+    coordinator admitted); the peer exchange of a device's coordinators (one listed on a connection
+    where a folder whose settings allow a punch through it is open, and not on one where only
+    folders that do not allow it are open); a folder's public-relays switch turned off while it is
+    open on a relayed connection (`Close(SHUTDOWN)`); a relayed session cut before a round
+    completed, twice (no new one for 1 minute, then 2), then a session that completes a round and
+    one cut after it (back to 1 minute); a direct connection to the same peer opening with the same
+    folders (the relayed one closed with `Close(SHUTDOWN)`); and, on the direct connection a punch
+    brought, a folder whose direct-connections switch is off, and one whose hole-punch level does
+    not allow the coordinator that timed it, treated as paused (not proven; the peer's proof
+    REJECTED). `net`'s own tests carry the rest of `threat-model.md` TM-25 from phase 2: the
+    addresses a punch accepts, one test for each block it refuses and for each range that carries an
+    IPv4 address, with an embedded address that passes and one that does not, among them (the
+    re-confirm review of 2026-11-10) fec0::1, ::192.168.1.1, ::808:808 and 1::1 (outside 2000::/3:
+    refused), ::ffff:8.8.8.8 and ::ffff:192.168.1.1 (mapped: both refused), 64:ff9b::808:808
+    (passes) and 64:ff9b::c0a8:101 (refused), 192.0.0.9, 192.0.0.10, 192.88.99.2, 2001:1::1,
+    2001:1::2 and 2001:3::1 (refused whole with their blocks), an address under a NAT64 prefix of
+    the device's own network that it knows, a /96 and a /64 one, carrying 8.8.8.8 (passes) and
+    192.168.1.1 (refused), and the same two with no prefix known (both pass: the stated residual);
+    an address of the side's own, global IPv6 or public IPv4, and the subnet-router anycast
+    (interface identifier 0) and RFC 2526 anycast addresses in each of its own /64s (refused); no
+    SO_BROADCAST on any socket a punch uses; the caps, an attempt counted toward the caps in all
+    only once its requester is admitted (four circuits in admission at once through two
+    coordinators, and a known peer's punch through a third still starts); and a coordinator's bounds
+    and answers.
 
 ## 9. The index in plain words
 
-This section is for the owner, who does not read Rust; it explains 4.4 and 4.5 with examples and
-decides nothing. Counters are shown as small numbers; real ones are clock readings in microseconds.
+This section is for the owner, who does not read Rust; it explains 4.4 and 4.5 with examples, and
+relays and hole punching (`threat-model.md` TM-25), and decides nothing. Counters are shown as small
+numbers; real ones are clock readings in microseconds.
 
 **What a device keeps.** For each file, only its latest version, as one signed record. Each record
 has a **fingerprint**, a 32-byte hash of the whole record that identifies it; in this section the
@@ -3114,6 +3559,36 @@ keeps one entry; or let each machine write its own log file, which also avoids t
 that two machines appending at once make, at the cost of one live file per machine, 175 200 over
 five years, which the person or a cleanup job must delete.
 
+**A version this device cannot read.** A newer release of Lickety-Sync may write a kind of entry
+this release does not know, and a device with the write key may write a broken one. When such a
+version replaces every version of a file this device has (the file shown, any identical copies of it
+and any conflict copies), this device can neither show it nor tell whether it is newer, but it knows
+the versions it has were replaced: every other device on its release that holds the same entries has
+dropped them. So it takes its copy of the file off its disk, into the archive, and shows a warning
+naming the entry it cannot read (the owner's decision of 2026-11-03: "Yes, remove the old copy").
+When such a version replaces only some of them, the file stays, showing one that is left. The device
+also remembers the version it archived, so that when someone saves the file again on it, restored
+from the archive or changed, that save replaces the old version everywhere: a device that was off,
+and still has the old version, takes the save instead of keeping its old copy beside it as a
+conflict copy (the owner's decision of 2026-11-10, "Also what was archived"). Only a version this
+device never had, an edit made on another device while this one was off say, still shows as a
+conflict copy beside the save. The archived copy stays in the archive, past the archive's usual 30
+days, which are a setting, and even where versioning is off, until the problem is fixed for it:
+until a save replaces that old version (the next save of the file on this device does, and so does
+one on a device that had the old version), or this device is updated to a release that reads the
+entry. An edit made elsewhere without the old version brings the file back, but leaves the copy and
+the warning (the owner's decisions of 2026-11-10: "Until fixed" and "30 days should be
+configurable"). On a desktop the warning also shows in the status bar and as a system notification.
+Saving the file on this device ends that keep, and the copy then goes as the archive's 30 days say,
+or at once where versioning is off, so the warning says to restore from the archive first whatever
+is wanted of the old file. The file comes back when this device is updated to a release that reads
+the entry, or when someone saves the file again; a broken entry goes away when someone with the
+write key saves that file again. The warning says what this device can
+do: one with only the read key cannot save, and waits for one with the write key; and an entry of an
+unknown kind may be a newer release's, which updating shows, or a faulty one that no release reads,
+which stays beside the saved file. Every device on one release that holds the same entries shows the
+same thing there.
+
 **What can still go wrong, and how it shows.** Every case below keeps the file, as a conflict copy,
 a reappearing file or a file in the archive; the few that can let one version replace another it
 should not have, as if it were newer, say so, and the replaced file then goes to the archive:
@@ -3125,7 +3600,7 @@ should not have, as if it were newer, say so, and the replaced file then goes to
   until the next delete;
 - a device back after a delete was forgotten, or a deletion made offline more than a year before it
   arrives (the file reappears, above);
-- a sealed peer or relay that kept an old copy of a file deleted more than a year ago can bring it
+- a sealed peer that kept an old copy of a file deleted more than a year ago can bring it
   back whenever it likes, even beside a new file created at the same name since (as a conflict
   copy);
 - a clock up to a year ahead, which the clock rule lets through, makes deletions up to that much
@@ -3144,15 +3619,20 @@ should not have, as if it were newer, say so, and the replaced file then goes to
   file (above);
 - a record that a device with the write key got wrong (it cannot be read, or breaks a rule every
   release checks) stays, with its pieces on every NAS, until someone saves that file again, which
-  the warning about it says; one at a file nobody saves again, or a cleanup message that is itself
-  wrong, stays for good;
+  the warning about it says; meanwhile a device that had the version it replaced moves its copy of
+  the file to the archive, where it stays until a save replaces that version, and from where it can
+  be restored and saved; one at a file nobody saves again, or a cleanup message that is itself
+  wrong, stays for good, and so do those archived copies; a device that can only read the folder
+  cannot save, so its copy waits for one with the write key; and an entry of a kind that no release
+  knows takes the file off the disks until someone saves it again, and then stays beside it for
+  good;
 - a deleted folder that also takes a file the deleting device had not yet received, or not yet put
   on its disk, when the device that wrote that file later wrote something else in that folder that
   the deleting device had. The usual case is a rename inside the folder: the new name and the
   removal of the old name travel separately, and if only the removal had arrived when the folder
   was deleted, the renamed file goes too (to the archive). Another is a folder linked on two
   devices that already hold it, deleted on one before a file only the other had has finished
-  arriving (the owner's decision of 2026-11-08: a folder delete takes what is inside it). A relay
+  arriving (the owner's decision of 2026-11-08: a folder delete takes what is inside it). A NAS
   that holds back the new name can make it happen.
 
 And these lose nothing but limit the folder:
@@ -3171,6 +3651,70 @@ And these lose nothing but limit the folder:
 - a write-key holder who signs a record with a counter near the top of the range makes the folder
   unwritable for everyone, and it must be shared again; only a write-key holder can do this, and one
   can already delete everything.
+
+**Relays and hole punching** (`threat-model.md` TM-25). A relay passes the encrypted traffic of two
+devices that cannot reach each other. Every relay is public, which means it may be anyone's
+computer, and none is used, and none relays for anyone, unless its person turns that on. Public
+relays, which can carry whole transfers, come in phase 7.
+
+Hole punching, from phase 2, is much lighter. Two devices behind home routers ask a third device, a
+coordinator, to pass their first few messages, so that each learns the other's public address and
+both try to connect at the same moment, which most home routers then let through. By the owner's
+decision of 2026-11-08, any computer can be a coordinator, a friend's or a stranger's, once its
+person turns "allow acting as a hole-punch coordinator" on; it is off unless turned on, and a phone
+never coordinates, though it can be helped (the owner's decision of 2026-11-10, "Computers only"). A
+coordinator needs no key to the folder.
+
+The settings (the owner's decision of 2026-11-10: "Both must allow. Folders should be able to be
+individually configured for hole punch, plus there should be global configuration for allowing
+direct connect, DHT, etc. global settings set defaults. Folders can override."). Every way of
+connecting has a setting for the whole device that each folder may override: finding devices on the
+local network, direct connections (hole punching among them), the internet-wide DHT, public relays,
+Tor, and whom a folder may use to coordinate a punch: never; only devices it shares a folder with
+(the default); also devices it is directly connected to; or also any device it knows and any public
+relay its person turned on. So asking for punches is on unless turned off, through devices that
+share a folder; coordinating for others, and using or serving relays, are off unless turned on. A
+punch serves a folder only if, on both devices, that folder's direct connections are on and its
+setting allows the coordinator used; a folder whose settings do not allow it does not sync over that
+connection, and the others do.
+
+How the two find the same coordinator: the device that wants to be reachable chooses in advance, and
+nothing is picked at random. It keeps a small standing connection with one to three coordinators its
+settings allow (devices it is connected to first, then public relays its person turned on) and lists
+them as "reach me through X", each only for the devices it shares a folder with whose settings allow
+that coordinator, and in invites to such a folder that carry addresses. It never puts them, or its
+own network ID, in the public DHT (the owner's decision of 2026-11-10, "Peers now, alias later":
+phase 2 is to design a changing alias that coordinators accept, so that the DHT can carry them
+without the network ID). A device that wants to reach it picks one of those coordinators that its
+own settings allow, at most three of them and two at a time, and connects to it, and the coordinator
+joins the two just long enough to time the punch; if that one fails, it tries the next.
+
+Who may punch through to a device (the owner's decision of 2026-11-10, "Known peers or key
+holders"): only a device that has shared with it a folder whose settings allow a punch through that
+coordinator, or a new one that first proves, through the coordinator, that it holds a key to such a
+folder, with a few small messages and no files. Anyone else gets no punch and no address: a
+stranger, or a person removed from a folder, learns at most that the device is online and which
+device it is, as trying an old address would tell them. A punch tries only a few addresses, all
+public internet ones, so it cannot be aimed at a home network's private addresses, short of a
+translator on its network whose prefix or mapping the device cannot learn, or a public-looking
+network behind a non-default route, a split-tunnel VPN's (`threat-model.md` TM-25), and each device
+limits how many punches it takes part in; a device it admitted, or that admitted it, can still make
+it send a few short bursts of packets to public addresses of its choosing, its own network's public
+ones among them, at most 160 a minute, which is all a punch can be used to send at someone else.
+
+What a coordinator learns: that the two are connecting, when, their public addresses and their
+network IDs (libp2p peer IDs), which both devices' settings let it learn. It learns no folder, no
+key and no file, and a punch opens nothing to the internet beyond each side's address to the other.
+The devices a device shares folders with, and whoever gets an invite with its addresses, also learn
+which coordinators it uses. A coordinator passes at most 64 KiB and 60 seconds of set-up for each
+punch, limits how often each device may ask and how many punches reach one device, and accepts
+requests only over direct connections; the two devices never sync through it, whatever their
+settings, so it never becomes a relay (the owner, on 2026-11-08: "I don't want random connected
+clients used as relays without the operator's consent"), and a connection that states a
+coordinator's limits is treated as one, whatever the device in the middle claims to be. A
+coordinator that lies or stays silent only makes the punch fail: before anything is synced, the
+connection the punch brings still proves which device is at the other end and that it holds a key to
+the folder.
 
 **Why this design, and what was rejected.** Each choice above, with the alternatives weighed against
 it (sources read on 2026-10-25, listed in `threat-model.md`'s appendix):

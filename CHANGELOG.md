@@ -6,6 +6,346 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Spec: make relays public only, let devices whose persons turn it on coordinate hole punches, and
+  archive copies a device can no longer read (the owner's answers of 2026-11-03, "Yes, remove the
+  old copy" and "drop the private/protected relay idea and only work with public relays"; of
+  2026-11-04, to the spec author's questions on relays, "All three"; of 2026-11-08, on hole
+  punching, its defaults and relayed connections, and on TM-22's "QUIC stream memory"; and of
+  2026-11-10, on the reviews of this change). Spec text only: the engine implements the archive
+  rules in a later change, and `net` the rest (hole-punch
+  coordinators in phase 2, public relays in phase 7). Nothing on the wire changes; the protocol
+  stays major 1. TM-1, TM-22, TM-25, TM-35, TM-41 and TM-42, and TM-9, TM-10, TM-14, TM-17 and TM-32
+  for the relay wording; `suites.md` for the security protocol of a circuit.
+  - Unreadable records (`protocol.md` §4.4, "A path with no heads"). A path all of whose live
+    records are opaque (writer faults, or a newer release's version of an unknown `kind`) has, like
+    a path whose versions a tree delete took, one base, at the path: the greatest tree delete held
+    at its tag by record hash, or none. So a device that held the version such a record replaces
+    takes its outdated copy off its disk, to the archive (phase 1), with each conflict copy of it
+    that has not become a version at its own path, and every device on one release that holds the
+    same records keeps the same disk there. A twin, or a head of a conflict, that the record does
+    not name keeps the path's heads and its file. This removes the stated residual of the engine's
+    fourth review round (S3-A, recorded in the engine entry below for the owner's review): such a
+    path no longer keeps whatever its disk had, so two devices can no longer differ there. The
+    device remembers the versions it so archived, as archived versions in the slots their bases
+    held, and its next write at the path, or a tree delete above it, covers and names them, so that
+    a device or sealed peer that missed the unreadable record drops the old version instead of
+    bringing it back beside that write (the owner's decision of 2026-11-10, "Also what was
+    archived"); a version it never had still stays beside the write as a conflict, by design. The
+    copies stay in the archive until a version the device reads covers theirs, a head that does not
+    cover it leaving them, past the archive's retention, now a
+    setting (30 days by default), and with versioning off, and the engine raises a warning that says
+    what the device can and cannot do (the owner's decision of 2026-11-10, "Until fixed. Warning
+    notification. On desktops with a gui, a status bar indication and a system message. 30 days
+    should be configurable."); the residuals are stated: the archive holds the only copy on each
+    device that had it, a record of a kind no release knows takes the file off the disks until
+    someone saves it and stays beside it for good, and a read holder cannot clear a fault. TM-35,
+    TM-41 and §9 say so; §8 items 7 and 14 gain the vectors. The engine's
+    `sync/disk.rs` and its module documentation, and the documentation of the `WriterFault` issue in
+    `issues/mod.rs`, still carry the old rule until the engine change; so does the note there and in
+    `crates/sim/src/oracle.rs` that a scenario planting opaque records must make the oracle's check
+    (b′) skip such a path, which goes with the engine change, once these vectors run (the
+    coordinator's ruling of 2026-11-10).
+  - Relays (`threat-model.md` §2, §3.3, §3.9, §3.10, TM-25, §5; `keys.md` §2.1; `protocol.md` §3.1,
+    §4.1, §4.4 and §9). Only public relays exist; no device relays for others, and none uses a
+    relay, unless its person turned it on (serving per device, on computers only, never a phone;
+    using per folder). TM-25 drops Private mode and states the limits a relay enforces, as
+    requirements: a rate schedule by time of day and day of week, a cap on open circuits with a
+    bounded queue (the plan's "Volunteer relay scheduling": busy, a time to retry and a place in the
+    queue), a minimum transfer rate below which an idle circuit is closed when someone waits or
+    after an idle time, caps per requester by peer ID and by source address, fair shares by deficit
+    round-robin with the plan's yield when others wait, a cap on reservations of its own, and
+    bounded state per requester in fixed-size tables that outlive a connection and never evict a
+    live entry; reservations only on direct connections; a reservation names no folder, so a relay
+    learns no folder ID; a relay never receives Hello; and relay control is the relay protocol's
+    own, versioned with it (the plan), so `protocol.md` §4.1 reserves no range for it.
+  - Hole-punch coordinators (`threat-model.md` TM-25, §2, §5, TM-42; `protocol.md` §3.1, §4.5 and
+    §9; `keys.md` §2.2, §6.3; the owner's decision of 2026-11-08, which replaces their decision of
+    2026-11-04, "Folder peers time punches", and its requirement that the device timing a punch
+    prove a key to the folder). Any computer may coordinate punches once its person turns that on,
+    off unless turned on, and never a phone (the owner's decision of 2026-11-10, "Computers only
+    (Recommended)"). Every connectivity switch is a device-wide default that each folder may
+    override, the hole-punch level among them, and a punch serves a folder only where, on both
+    sides, its direct-connections switch is on and its level allows the coordinator (the owner's
+    decision of 2026-11-10, "Both must allow ... Folders can override."). The levels, never, through
+    peers of a shared folder (the default), through devices it is connected to directly, and through
+    any device it knows and any public relay its person turned on, are cumulative and defined. The
+    device to be reached keeps reservations with up to three coordinators and lists them only to the
+    peers of its folders and in invites, never in the DHT (the owner's decision of 2026-11-10,
+    "Peers now, alias later", with a phase 2 item for a rotating alias). Counting only the folders
+    whose settings allow a punch through that coordinator, it takes a punch only from
+    a peer of a shared folder, known by the peer ID that per-peer state now keeps, or from a
+    requester that proves a key to one of its folders over the coordinator's circuit with the
+    handshake up to the folder proof; it sends no address before that, and a removed person learns
+    nothing through a punch (the owner's decision of 2026-11-10, "Known peers or key holders").
+    Bounds: at most 64 KiB and 60 s a circuit; 4 at once and 10 in any minute for each requester and
+    to each reserved device; 64 at once and 120 in any minute in all, about 7.5 MiB a minute and at
+    most about 11.5 MiB in any one; reservations 2 for each requester by peer ID, 8 by source
+    address and 128 in all, the longest idle dropped when others wait; reservations and punch
+    requests only on direct connections; each side takes at most 8 global unicast addresses from
+    the other, judged by the IANA special-purpose registries, an IPv6 one only within 2000::/3 or
+    under 64:ff9b::/96, with the IPv4 address an IPv6 one carries judged too or the address refused,
+    and takes part in a bounded number of punches; residuals stated.
+  - Relayed connections (`protocol.md` §3.1, the coordinator's rulings of 2026-11-08 and
+    2026-11-10). A side runs the sync protocol over a relayed connection only through a public relay
+    it chose as a relay, only for the folders whose public-relays switch is on, and never on a
+    punch-only circuit: one through a device it reserved with, or dialed through, only for a punch
+    (S2-1 of the second review, confirmed by the owner on 2026-11-08: "I don't want random connected
+    clients used as relays without the operator's consent"), or one whose stated limit is at most a
+    coordinator's bounds, whatever the device in the middle says. A punch-only circuit carries only
+    the channel set-up, identify, DCUtR and the admission handshake. A side closes a relayed
+    connection when a folder's switch is turned off or a direct connection to the peer takes its
+    place, and backs off after a refused or cut relayed session.
+  - Circuits' security protocol (`suites.md` §2.6 and §3.1's rows, TM-1, §5's quantum entry;
+    `keys.md` §2.1): TLS
+    1.3 with X25519MLKEM768 between native ends, Noise only where a browser client is one end, a
+    native dialer offering exactly one.
+  - TM-22's residual (h), the owner's decision of 2026-11-08 on spike B's proposed phase 1 item
+    ("Yes go with proposal for QUIC stream memory. 2.9 GiB in memory seems like a tremendous ask,
+    especially for a browser. I'm concerned about this figure."): the sentence after (g) on QUIC's
+    windows, which bound bytes and not memory, is now residual (h), **required before 1.0**, phase 1
+    item "QUIC stream memory" beside (a) to (c), no longer proposed; TM-22 counts eight residuals,
+    and §3.10 lists (h) among what an attacker can still do to the transport. (h) concerns the
+    native program, whose QUIC connections, accepted and dialed, run on quinn, not the browser
+    client, whose QUIC is the browser's own; the datagrams need only arrive back to back for GRO to
+    coalesce them, with or without GSO. Beside (e)'s and (h)'s upper
+    bounds (from quinn's 94 208-byte buffer: about 184 MiB, 5.75 GiB and 2.9 GiB), TM-22 gives the
+    figures at 64 KiB a read as the realistic bound, since quinn copies only the bytes a read
+    brought (about 128 MiB a connection for
+    datagrams, 128 MiB a stream, 4 GiB across 32 streams and 2 GiB across 16), neither set measured;
+    and (e)'s phase 6 item notes that a panic in the contained handshake task and an aborted
+    handshake future also leave the QUIC connection open, which "closed explicitly on every failure
+    path" already covers. TM-22 and §3.10 now name the per-requester tables of relays and
+    coordinators, the lookup of per-peer state by peer ID and a device's punch counters, beside
+    per-peer state, as the tables that outlive a connection, each of a fixed
+    size. The plan's phase 1 work list and 1.0 gate are the plan scribe's to update.
+  - Relay wording. A relay sees no record, so "a sealed peer or relay" of records is now "a sealed
+    peer" (TM-9, TM-17, TM-41, `protocol.md` §4.4 and §9, where "Through sealed relays" is "Through
+    sealed peers"); TM-32 no longer says a folder ID can come from a relay; `keys.md` §1.3's sealed
+    tier and TM §3.2 forward ciphertext rather than relay it; TM-10's honest sender is a forwarder;
+    TM-14 and `keys.md` §3.2 no longer say a relay sees chunk hashes; `keys.md` §4 and `suites.md`
+    no longer say every relay knew the folder ID; the glossary's relay is used only for folders
+    whose public-relays switch is on; TM §3.3 says a relay can cut a connection at a moment it
+    chooses. The phase 0 gate record keeps what its reviewer checked, with dated notes that phase
+    2's peer relay is now hole-punch coordinators. The status lines of the four specs say what
+    changed.
+  - Two corrections of main's own text, found while reviewing the clock repair this change no longer
+    carries and kept: a write holder also issues a cleanup with a write whose faults do not fit
+    (`protocol.md` §4.4, Expiry), and a cleanup is paged by both `MAX_CLEANUP_ENTRIES` and
+    `MAX_CLEANUP_GROUPS` (Cleanup, and 4.7 item 6).
+  - The clock repair of this change's drafts is withdrawn, by the owner's decision of 2026-11-08
+    after the research on removing clock dependence: a signed watermark replaces expiry by the
+    folder's own time, and the clock rule and its repair go, in a later change, the first spec
+    change of phase 1. Until then the clock rule, "A clock set back" and expiry stay as they are,
+    each with a note saying so (`protocol.md` §4.4, `threat-model.md` TM-40).
+  - Ported onto 9a090fe (wip/spec-1103b, the owner's order of 2026-11-09: no rebase, so a
+    cherry-pick of 2b44ab0) over the identical-heads fix (ebb6a67), the download retry (598e58a) and
+    the small follow-ups (9a090fe). Conflicts: `protocol.md` §4.4 "Why it is safe" 8(a) (main's text
+    kept, with "a sealed peer that withholds" for "a relay that withholds"), §8 item 7 (main's twins
+    list kept, and the drafted "no heads from opaque records" cases added after the clock cases), §9
+    "What can still go wrong" (main's two bullets, with the drafted archive clause in the first and
+    "a NAS that holds back" in the second), `threat-model.md` TM-41 (main's residuals, with the
+    drafted sentence on unreadable paths before them), and this file (both entries kept, this one
+    first). The port's own changes, to make the two sets of rules agree: `protocol.md` "Why it is
+    safe" 9 says that a record this release cannot read drops a version only by a name and that a
+    path has no heads only when no live version is left, twins included, so an unnamed twin keeps
+    the file and the file that leaves the disk is a copy whose version a named record has replaced;
+    "A path with no heads" says that conflict copies leave with the file and that an unnamed twin
+    keeps the path's heads; 4.7 item 6 tells the engine so; the drafted text's last "sealed peer or
+    relay" in TM-41 (about withholding records) is "sealed peer", a relay reading no record;
+    `crates/net/src/limits.rs`'s module doc names TM-22's residuals (a) to (h) and calls (h), "QUIC
+    stream memory", required before 1.0 by the owner's decision of 2026-11-08, which main's TM-22
+    had still called proposed (a doc comment only).
+  - Fix round of 2026-11-10, on the three reviews of the port (correctness, fidelity, security; the
+    coordinator's rulings 1 to 28, but 19, the plan's): the owner's four decisions of that day above
+    and "Computers only", recorded as the owner's; C-1, archived versions; C-2, a conflict copy that
+    has become a version at its own path stays (vectors for both orders); C-3 and S-6, punch-only
+    circuits by stated limit, the middle's claim only turning sync off, the backoff, the SHUTDOWN on
+    a switch turned off and the close once a direct connection exists, and only identify, DCUtR and
+    the admission handshake on such a circuit; C-4, S-7 and F-8, the coordinators' list only to
+    peers and in invites, and what each party learns (§3.9, §5); C-5, the levels made implementable;
+    C-6, relay control the relay protocol's own and no Hello to a relay; C-7 and S-8, the §8 vectors
+    (twin, one head of a conflict, both heads with the copy at its own path in both orders, the
+    returning device with the same and changed content, an old release's tree delete over an
+    opaque-only subtree), and a new §8 item 15 for relayed connections; F-1, the defaults stated
+    (asking for punches on through peers of a shared folder, coordinating and relays off); F-2,
+    coordinators take reservations and punch requests only on direct connections; F-3, "a public
+    relay coordinates too" and 3.1's first ruling marked as readings; F-4, `suites.md`'s folder-ID
+    wording; F-5, line widths; F-6, "all of whose"; F-7, phase 2's timing attributed to Q4 of
+    2026-11-04; F-9, a note at "A clock set back"; S-1, the addresses a punch accepts and the caps
+    on punches, with the residual; S-2, known peers or key holders; S-3, reservations capped apart,
+    the idle dropped first, live entries pinned, the plan's yield, the denial-of-service residual;
+    S-4, circuits' security protocol; S-5, the archive and warning rules with residuals (i) to
+    (iii); and the nits of both lists (C N-1 to N-8, S N-1 to N-7): cleanup paging by both bounds in
+    4.7, "Why it is safe" 9 and 10 on names this release cannot read, 8(a) "or could not read",
+    unreadable records keeping no directory, "on one release", TM-22 (h) for dialed connections and
+    GRO without GSO, no FolderProof for folders paused on a relayed connection, a relay cutting a
+    reconciliation midway, the coordinator's view of peer IDs in §9, and a phase 7 note on relays
+    that announce a low load. The phase 0 gate record's two rewrites of what its reviewer checked
+    are back, with dated notes. The plan passages that the fidelity review found stale (old Q4, the
+    clock repair) are the plan scribe's to update.
+  - Fix round 2 of 2026-11-10, on the confirm review of the first (the coordinator's rulings on its
+    findings K-1 to K-18, all taken). K-1: the copies archived on a fault are kept, past the
+    retention and with versioning off, until a record this release reads covers or names their
+    version (this device's next save, which covers it as an archived version, a save elsewhere made
+    over it, or the record that took it, once read), until the version is a base here again, or, for
+    one whose archived version failed its check at open, until this device next saves there; a head
+    that does not cover it leaves the copy and the warning, and shows as a conflict as usual; the
+    warning says that saving ends the keep, so restore first (`protocol.md` §4.4, 4.7 item 6, §9;
+    TM-35, TM-41). K-2: a punch's addresses judged by the IANA special-purpose registries, an
+    IPv4-mapped address as its IPv4 address (superseded in fix round 3: such an address is refused
+    outright), one under 64:ff9b::/96 by the IPv4 address it carries,
+    64:ff9b:1::/48, 6to4 and Teredo refused, 0/8 and 240/4 named, and a `net` test for each block
+    and range (TM-25, §8 item 15). K-3: at admission only the folders whose own settings allow a
+    punch through that coordinator count, for the lookup of a peer as for a key proof, every other
+    folder paused in the admission handshake, and the public-relays switches play no part on a
+    punch-only circuit; each coordinator is listed only over connections where such a folder is
+    open, and in invites to such a folder (`protocol.md` §3.1, §3.5 step 2, §9; TM-25, §3.10, §5;
+    `keys.md` §6.3). K-4: archived versions stay beside the base a slot takes later, bounded by the
+    records that take a path's heads (TM §3.6), and one is dropped when the same record is held
+    again or becomes a base again; `S` is a set (`protocol.md` §4.4, "Bases" and "What a device
+    remembers"). K-5: `suites.md` §3.1's `rustls` and libp2p rows name circuits, native Noise on a
+    circuit allowed only from phase 6 with a browser end, and §2.6 counts six TLS configurations
+    from phase 2. K-6: §9 says what a punch can still send at someone else, at most 160 short bursts
+    a minute. K-7: §8 item 7 gains a tree delete taking archived versions and its cleanup naming
+    them, an archived version dropped by a name and by a tree delete, one failing its check at open,
+    the returning device in the other order, an archived version held again, a second loss of heads,
+    and the cases of K-1 and K-14; item 15 gains the two sides judging punch-only differently, the
+    backoff back to 1 minute after a completed round, and the cases of K-3, K-8 and K-15. K-8: the
+    admission handshake runs on a stream only the device to be reached opens, and only for a
+    requester it does not know; the requester pauses every folder there and answers a FolderProof
+    REJECTED; 3.5 step 6 and `PROOF_TIMEOUT` are qualified, the punch attempt's 10 s bounding
+    admission and punch. K-9: the device in the middle receives no Hello as relay or coordinator,
+    and one that is also a folder's peer syncs over a connection of its own (`protocol.md` §3.1,
+    TM-25). K-10: losing per-peer state also loses admission by peer ID (4.5). K-11: TM-42, unless
+    they still share another folder; TM-41, on a device with the write key. K-12: §8 "Who checks
+    what" gives item 7's engine cases to the engine. K-13: the §3 diagram shows circuits. K-14: a
+    stated residual, an archived version beneath a tree delete that the pruned vector leaves
+    uncovered gets no tombstone (`protocol.md` §4.4 "A tree delete", 4.7 item 6). K-15: a circuit
+    refused at admission counts toward the device's caps through its coordinator, not those in all,
+    with the cost stated (TM-25, §3.10). K-16: `suites.md` "Circuits": phase 6 takes the browser
+    mark only from sources the device in the middle cannot alter; `keys.md` §2.1 points to the
+    quantum caveat. K-17: TM §3.6, faults let a write holder keep copies past the retention,
+    bounded, nothing amplified. K-18: `keys.md` §2.2, the relays a device keeps reservations with
+    are not in the DHT either.
+  - Marked as the spec author's choices, for the owner's review (all listed): the relay's schedule
+    read in its local time; the connection cap counting circuits, with reservations capped apart (2
+    by peer ID, 8 by source address, 256 in all at a relay; 128 in all at a coordinator), the
+    idle-longest reservation dropped, and the queue's bound; a source address as an IPv4 address or
+    an IPv6 /64; least-recently-active eviction of unpinned entries, in tables of 4 096; the levels'
+    names and meanings (cumulative; a peer of a shared folder by the peer ID per-peer state keeps,
+    any folder still held; "connected directly" as dialed by this device or with a folder open;
+    "knows" by the sources a device's settings allow; a public relay as a coordinator only at the
+    fourth level, for folders whose relay switch is on); the announcement by registering the punch's
+    relay protocol, seen through identify; up to three reservations, their renewal, a requester
+    reading three coordinators and trying two at once; at most four FolderProofs on a punch-only
+    circuit, counted by the device to be reached (fix round 3); on every circuit, only the side the
+    circuit reached opening a stream of the sync protocol (fix round 3); a refused requester sent
+    `Close(NO_COMMON_FOLDER)` once the handshake's stream is open (fix round 3); in fix round 4, the
+    FolderProofs past the fourth answered REJECTED, not closed, the caps in all checked at the
+    moment of admission, the dialing side closing a public relay's circuit that brings no stream
+    within `HELLO_TIMEOUT`, and the side's own and anycast addresses refused, with no SO_BROADCAST
+    on a punch's sockets; the admission handshake on a stream that only the device to be reached
+    opens, and only for a requester it does not know, the requester pausing every folder there, the
+    punch attempt's 10 s bounding admission and punch in place of `PROOF_TIMEOUT` (fix round 2); the
+    relayed-session backoff (1 minute, doubling to an hour); the punch caps (8 addresses; 2 at once
+    and 6 a minute through one coordinator; 4 and 20 in all; 10 s an attempt; 64 coordinators'
+    counters; 4 and 10 to one reserved device) and every other bound, starting values fixed in phase
+    2; the addresses a punch accepts, judged by the IANA special-purpose registries with embedded
+    IPv4 judged too (fix round 2), IPv4-mapped addresses refused outright, an address under a NAT64
+    prefix that a side knows for its own network judged by the IPv4 address RFC 6052 places in it,
+    and 192.0.0.0/24, 192.88.99.0/24 and 2001::/23 refused whole (fix round 3); a circuit refused at
+    admission counting toward the caps through its coordinator and not those in all, with its cost
+    (fix round 2); the archived versions' order in `S` (last, by the display order's rule), their
+    being taken by a tree delete too, and when they are dropped (a write, an applied record covering
+    or naming them or an applied tree delete covering them, or the same record held again or a base
+    again; no longer at the deletion horizon after archiving, which fix round 2 removed, since a
+    copy's keep now ends only when its version is covered); the copies' retention once the keep ends
+    (the archive's retention from then, none with versioning off); a tree delete that covers an
+    archived copy's version ending its keep (a reading, fix round 2); unreadable records keeping no
+    directory; and circuits' security protocol (TLS between native ends, Noise only with a browser
+    end, a native listener taking Noise on a circuit only from phase 6). Marked as readings for the
+    owner's review: "a public relay coordinates too" and 3.1's first ruling (a folder syncs over a
+    relayed connection only where its relay switch is on, others paused there).
+  - Fix round 3 of 2026-11-10, on the re-confirm review of fix round 2 (its findings Q-1 to Q-8, all
+    taken; the coordinator's brief chose the simpler safe answer for each of Q-3's three). Q-1: at
+    open, the archived versions count with the bases, both for "A clock set back" and for the stored
+    high-water mark, so that a mark cannot be lowered below an archived version from a fast clock,
+    which would have made the next write carry that version's dot at or above its own counter, a
+    writer fault on every device (`protocol.md` §4.4 "Opening a folder"; §8 item 7's new vector, and
+    property (m)). Q-2: an IPv6 address a punch takes must also lie in 2000::/3, unless it is under
+    64:ff9b::/96, so fec0::/10, ::/96 and the rest of ::/8 are refused (TM-25; `net` test lines in
+    §8 item 15). Q-3: an IPv4-mapped address is refused outright; an address under a NAT64 prefix
+    that a side knows for its own network, from its network's announcement (PREF64) or its system
+    and never from a DNS lookup, is judged by the IPv4 address RFC 6052 places in it, and one under
+    a prefix it cannot know is a stated residual (TM-25, §3.10, `protocol.md` §9); 192.0.0.0/24,
+    192.88.99.0/24 and 2001::/23 are refused whole, their anycast addresses reaching a service near
+    the sender (the 6to4 relay block beside the review's two, by the spec author); and the residual
+    of the addresses names the device's own network's public ones. Q-4: a device takes a STOP only
+    from a device in the middle it holds a reservation with, answering any other NO_RESERVATION, and
+    an attempt counts toward its caps in all only once it admits the requester (TM-25, `protocol.md`
+    §3.1). Q-5: on every circuit only the side the circuit reached opens a stream of the sync
+    protocol, and refuses one the other side opens; the fifth FolderProof is counted by the device
+    to be reached, the requester answering the other side's proofs REJECTED up to
+    `MAX_PROOFS_PER_CONNECTION`; a requester refused once the handshake's stream is open gets
+    `Close(NO_COMMON_FOLDER)`, one refused before it no Close; `PROOF_TIMEOUT`'s constants row, the
+    Close code's comment and section 5's rows say so (`protocol.md` §3.1 and its summary of
+    2026-11-10, §4.2, section 5; §8 item 15). Q-6: once no record this release cannot read is left
+    at the path (a save made elsewhere named the fault without covering the version), the warning
+    names none and says that the file at the path was not made from the archived copy; a device that
+    still holds that version as a head shows the conflict (`protocol.md` §4.4; §8 item 7's engine
+    vector). Q-7: a sealed peer can replay a fault, or a record of an unknown kind, after the
+    version it names came back from a forgotten deletion, to have it archived and kept past the
+    retention again, bounded by the folder's history (TM §3.3 and §3.6). Q-8's two corrections are
+    to fix round 2's commit message, for the coordinator's squash message: K-4's bound is the
+    records this release cannot read that write holders sign, not only faults, and K-1's keep also
+    ends, for a copy whose archived version failed its check at open, when this device next saves at
+    the path.
+  - Fix round 4 of 2026-11-11, on the narrow check of fix round 3 (its findings R-1 to R-5 and one
+    observation, all taken; spec text only, nothing on the wire changes, protocol still major 1).
+    R-5: fix round 3's paragraph rewrapped to 100 columns. R-1: the caps in all are checked at the
+    moment of admission, counting the attempts already admitted, so attempts that began below the
+    caps cannot all finish above them (6 at once against a cap of 4): a requester whose admission
+    would exceed 4 at once or 20 in a minute gets `Close(NO_COMMON_FOLDER)` when the handshake's
+    stream is open, else no Close, and counts toward the caps through its coordinator only
+    (`protocol.md` §3.1, TM-25; the item 15 vector). R-2: (a) and (b), a side refuses its own global
+    IPv6 and public IPv4 addresses and, in each of its own /64s, the subnet-router anycast address
+    (interface identifier 0, RFC 4291) and the RFC 2526 anycast identifiers; (c) named as a stated
+    residual, a publicly numbered network behind a non-default route (a split-tunnel VPN); (d) `net`
+    never sets SO_BROADCAST on a socket a punch uses, with a test line in item 15; (e) the NAT64
+    residual reworded to "a translator on its network whose prefix or mapping the side cannot
+    learn", in TM-25, §3.10 and `protocol.md` §9. R-3: on a circuit the dialing side takes for a
+    public relay's, it closes the circuit, with no Close, when no stream of the protocol comes
+    within `HELLO_TIMEOUT` of the channel's set-up, and counts it as refused for the backoff
+    (`protocol.md` §3.1; vector). R-4: the device to be reached examines four FolderProofs on a
+    punch-only circuit and answers each one past the fourth REJECTED (up to
+    `MAX_PROOFS_PER_CONNECTION`), not `Close(PROTOCOL_ERROR)`, so that a requester that takes the
+    circuit for a relay's and proves more folders is not closed (§3.1; vector). Observation: fix
+    round 2's K-2 line says its mapped-address rule was superseded, and the rules as they stand
+    after this round are the ones TM-25's "What a punch may be aimed at" and `protocol.md` §3.1
+    state: addresses by the IANA registries with 192.0.0.0/24, 192.88.99.0/24 and 2001::/23 refused
+    whole, 2000::/3 or 64:ff9b::/96 only, mapped addresses refused, embedded and known-NAT64 IPv4
+    judged, the side's own and anycast addresses refused; four FolderProofs examined; caps in all
+    checked at admission. New choices marked for the owner's review, all listed here: the caps in
+    all checked at admission with the refusal's Close and its counting; the side's own addresses and
+    anycast addresses refused; SO_BROADCAST never set; the split-tunnel residual left stated, not
+    refused; the dialing side's close after `HELLO_TIMEOUT` and its backoff; proofs past the fourth
+    answered REJECTED.
+  - Fix round 5 of 2026-11-11, on the narrow check of round 4 (S-1, N-1 to N-3; spec text only): the
+    section 5 Malformed row no longer lists more than 4 FolderProofs at a punch-only circuit (only
+    the 257th is malformed; the REJECTED row notes that proofs past the fourth there are REJECTED
+    unexamined); TM-25 names two more stated residuals, the side's NAT-mapped public address and
+    circuits still in admission (up to 128 handshakes); stray short lines rewrapped.
+  - Reviewed 2026-11-10 and 2026-11-11 by a2f6a3d1fb7a4370e (correctness: blocked by seven, now
+    fixed), aa3ce120d36a5fcaa (second: three should-fix, now fixed) and abc8ccb900cb0c13b
+    (security: blocked by two, now fixed; the owner decided S-2 and S-5); confirm
+    a5436b306f70be84a with the security and cryptography passes: blocked by seven, now fixed;
+    re-confirm ad7e66756969c339a: blocked by two, now fixed; checks afccc6635dc19d70b and
+    af286ce2d4b5dfa87: blocked by one each, now fixed, then clean. Earlier drafts were reviewed
+    on 2026-11-08 by a32f6c9420d253990 and a88b4eaa1949166c3. Authors aad961f7ff11fbb26 and
+    a0a7654b30001d097 (drafts) and a47df1b19e6cfbd4a (port); fixes by af8722e3b7f720339,
+    a6a4a0f9a544befaa, a8e20472fabee030f, a25b6bdfddc4e195a and a08bf8f70d2be78c0. Landed as one
+    squashed commit.
+
 - Clean the stale coverage binaries inside `gate.sh`, bring the gate list in `CONTRIBUTING.md` up
   to date, and settle five small follow-ups (the coordinator's brief of 2026-11-09): three of the
   download retry's re-confirm review, one doc comment of `net`, one note on the upstream pull

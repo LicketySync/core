@@ -2,7 +2,10 @@
 
 Status: draft for phase 0, rewritten 2026-10-22 for the shared-key model the owner chose on
 2026-10-18 (plan, Decisions: "Key model simplified"), the owner's answers of 2026-10-22 and the
-coordinator's rulings R-K1 to R-K6 and S-1 to S-4 of the same day. This file is what
+coordinator's rulings R-K1 to R-K6 and S-1 to S-4 of the same day, and amended on 2026-11-08 for
+the owner's answer of 2026-11-03 that relays are public only (§2.1: a relay learns no folder ID;
+`threat-model.md` TM-25), and on 2026-11-10 for the owner's decision of that day on the list of a
+device's hole-punch coordinators (§2.2, §6.3: never in the DHT). This file is what
 `licketysync-keys` implements and what reviewers check it against. The plan ("Lickety-Sync: Project
 Plan") is the design; where this file and the plan disagree, raise it. `suites.md` fixes the
 algorithms and their crates; `threat-model.md` names the adversaries; `protocol.md` puts these keys
@@ -184,7 +187,7 @@ keys is a new folder (§7).
 | --- | --- | --- | --- | --- |
 | Write | 1 | `ws` | Derive every key in §1.2; sign index records and cleanups; verify, decrypt, change and delete anything; give out any tier | — |
 | Read | 2 | `folder_vk`, `dk` | Verify every record; decrypt contents, names and structure; derive `ak` and every key under `dk`; give out read or sealed | Sign: every peer rejects a change it makes, and its own edits are never sent (what the engine shows for them is phase 1's design) |
-| Sealed | 3 | `folder_vk`, `ak` | Verify every record and every chunk against the hashes the signed records name; store, serve and relay ciphertext; give out sealed | Decrypt anything, test whether the folder holds a known file (TM-14), sign |
+| Sealed | 3 | `folder_vk`, `ak` | Verify every record and every chunk against the hashes the signed records name; store, serve and forward ciphertext; give out sealed | Decrypt anything, test whether the folder holds a known file (TM-14), sign |
 
 Read and sealed keys both carry `folder_vk`, so every holder verifies every update and computes the
 folder ID. The two halves of a read or sealed key are not bound to each other by the key itself: a
@@ -214,7 +217,12 @@ folder_id = H("licketysync/v1/hash/id/folder", be16(suite) || folder_vk)    # 32
 ```
 
 Every protocol message after a folder has opened names it by this ID (`protocol.md` §3.5). The ID is
-known to every key holder at every tier and to every relay the folder uses. It grants no access,
+known to every key holder at every tier; a relay never learns it, since a reservation and a circuit
+name peers, never a folder, and the end-to-end channel inside the circuit carries the rest (TLS 1.3
+with X25519MLKEM768 between native ends, Noise only where a browser client is one end, `suites.md`
+§2.6; `threat-model.md` TM-25), though a relay that records a circuit with a browser client at one
+end, whose Noise is classical, could read the ID in it with a future quantum computer
+(`threat-model.md` section 5, the quantum entry). It grants no access,
 but it lets its holder confirm the folder's presence on a LAN and compute its DHT announcements
 (§2.2), and so track it; logs therefore redact it by default (`threat-model.md` TM-6), and error
 values may carry it because they are not logs (`suites.md` §4.1).
@@ -257,8 +265,14 @@ announces under `dht_id(today)` and looks up `dht_id(today - 1)`, `dht_id(today)
 is a BEP 44 mutable item signed by the device's DHT key (§8.1) and carries addresses only, never the
 libp2p peer ID, so the separate DHT key buys real unlinkability: a crawler ties announcements to a
 DHT key, not to the identity the transport will authenticate; how the item is placed under `dht_id`
-is phase 2's design. Announcements cannot be linked across days without the folder ID, except
-through the stable DHT key itself (§8.1).
+is phase 2's design. It never carries the list of hole-punch coordinators the device keeps
+reservations with either, nor the public relays it keeps reservations with (phase 7), since an
+address through a coordinator or a relay names the device's peer ID and the coordinator's or
+relay's: those go only to the peers of the device's folders and in invites (§6.3; the
+owner's decision of 2026-11-10, "Peers now, alias later"; `threat-model.md` TM-25). **Phase 2
+item** (the same decision): a rotating alias that coordinators accept in place of the device's peer
+ID, so that the address record can carry the list without the peer ID. Announcements cannot be
+linked across days without the folder ID, except through the stable DHT key itself (§8.1).
 
 ## 3. Data encryption
 
@@ -319,7 +333,7 @@ plaintext      = header || payload || zeros(L' - L)
 nonce          = BLAKE3_keyed(nk, plaintext)[0..24]
 ct             = XChaCha(ck, nonce, folder_id, plaintext)        # aad = the 32-byte folder ID
 stored         = nonce || ct                                     # L' + 40 bytes
-cipher_hash    = H("licketysync/v1/hash/chunk", stored)          # 32 bytes; what sealed peers and relays see
+cipher_hash    = H("licketysync/v1/hash/chunk", stored)          # 32 bytes; what sealed peers see
 ```
 
 - Encryption is **deterministic** for the folder and the plaintext, so identical chunks give
@@ -478,8 +492,7 @@ proof_key   = BLAKE3_keyed(payload_key, folder_id || th)                  # 32 b
 - Every tier holds `ak` (write and read holders derive it from `dk`), so every holder computes the
   hints and proof keys of its folders, and nobody without a key can: a relay, or anyone who knows
   only the folder ID, can neither open a proof nor tell which folder one is for. The drafts keyed
-  both with the folder ID, which every relay and every person who ever saw a key string knew
-  (decision).
+  both with the folder ID, which every person who ever saw a key string knew (decision).
 - `ak` itself keys nothing: it is only the parent of `hint_key` and `payload_key`, so no key is used
   raw for two purposes (§0).
 - The folder ID in the hint and the proof key binds a key's halves (§1.3): a read or sealed key made
@@ -661,7 +674,11 @@ after `#`**, never in the path or query, and the client never puts the fragment 
 referrer or log. `a` and `c` are appended only when the sender chooses, or automatically for
 browser invites and parcel links (phase 6); `c` is base64url without padding. The folder is the one
 the key string names: its ID derives from the key, and `a` is a hint for dialling, never an
-identity. The drafts' `g=` (a grant chain) is gone with grants.
+identity. From phase 2 an `a` may be an address through a hole-punch coordinator, which names the
+sender's libp2p peer ID and the coordinator's, and only one that the folder's own settings allow a
+punch through; an invite and the peer exchange of a folder's peers are the only places the sender's
+coordinators travel (`threat-model.md` TM-25). The drafts' `g=` (a
+grant chain) is gone with grants.
 
 ### 6.4 File form
 
