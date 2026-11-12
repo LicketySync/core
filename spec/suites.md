@@ -2,7 +2,8 @@
 
 Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model), amended
 2026-11-10 for the security protocol of a relay's circuit (transport, "Circuits", and the approved
-crates' rows for it). This file names
+crates' rows for it), and 2026-11-12 for why the cleanup record keeps its signature label when its
+layout gains a watermark (signatures, "Domain separation"). This file names
 every algorithm, parameter and crate that may perform cryptography in this workspace, the apps and
 the browser client. It is normative: first-party code uses nothing that is not listed here, and a
 change that needs something else adds it here first, with the reason, and is reviewed as a change to
@@ -109,7 +110,13 @@ answer of 2026-10-22) **(decision)**.
   body`, where `label` is the ASCII string `licketysync/v1/sig/<type>` and `<type>` one of the names
   `keys.md` registers (`index`, `cleanup`, `device-proof`, and any the browser bundle manifest
   adds). For a record, `body` is its canonical encoding, which already contains the suite number. A
-  label is never reused for two layouts; a layout change is a new label.
+  label is never reused for two layouts; a layout change is a new label. The cleanup record's layout
+  changed on 2026-11-12 (`protocol.md`'s signed watermark: a `forget_before` field in its sealed
+  part, and cleanups with no group) and keeps `sig/cleanup`: nothing had been released, and the
+  rule applies from the first release on (the label registry, below); a cleanup encoded before the
+  change decodes under the new layout as one with no watermark, `forget_before` being absent and so
+  0; and one with no group was malformed before, so no signed body means two things under the one
+  label (the spec author's reading, for the owner's review).
 - **Encodings.** A signature is exactly 64 bytes and a public key exactly 32, the canonical encoding
   of a point that is not of small order (decoding and re-encoding gives the same bytes), so one key
   has one ID; anything else is malformed and the record or message is rejected before any

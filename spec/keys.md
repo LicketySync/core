@@ -5,13 +5,14 @@ Status: draft for phase 0, rewritten 2026-10-22 for the shared-key model the own
 coordinator's rulings R-K1 to R-K6 and S-1 to S-4 of the same day, and amended on 2026-11-08 for
 the owner's answer of 2026-11-03 that relays are public only (§2.1: a relay learns no folder ID;
 `threat-model.md` TM-25), and on 2026-11-10 for the owner's decision of that day on the list of a
-device's hole-punch coordinators (§2.2, §6.3: never in the DHT). This file is what
-`licketysync-keys` implements and what reviewers check it against. The plan ("Lickety-Sync: Project
-Plan") is the design; where this file and the plan disagree, raise it. `suites.md` fixes the
-algorithms and their crates; `threat-model.md` names the adversaries; `protocol.md` puts these keys
-and records on the wire. **Issues** is the list of problems a device shows its person (the plan's
-Issues panel): every failure this file and `protocol.md` name raises one that states its cause, so
-nothing is dropped without trace.
+device's hole-punch coordinators (§2.2, §6.3: never in the DHT), and on 2026-11-12 for the signed
+watermark that replaces the clock rule and the folder's own time (§0, §3.4, §4, §9 item 8;
+`protocol.md` §4.4). This file is what `licketysync-keys` implements and what reviewers check it
+against. The plan ("Lickety-Sync: Project Plan") is the design; where this file and the plan
+disagree, raise it. `suites.md` fixes the algorithms and their crates; `threat-model.md` names the
+adversaries; `protocol.md` puts these keys and records on the wire. **Issues** is the list of
+problems a device shows its person (the plan's Issues panel): every failure this file and
+`protocol.md` name raises one that states its cause, so nothing is dropped without trace.
 
 Each section says in plain words what the thing is for, then defines it exactly. Anything marked
 "phase N" is not needed for phase 0 ("simulated peers converge") and may be left unimplemented, but
@@ -64,10 +65,12 @@ where this file still marks one `reserved` or "never used", that is only a readi
   it as `uint32`, and a value outside that range is malformed. A folder's suite is the suite of its
   keys, fixed when the folder is made (§1.1); nothing moves a folder to another suite (§7).
 - A **tier** is one byte: `1` write, `2` read, `3` sealed. Lower numbers can do more.
-- No key expires, and nothing in this file compares a key or a signature with a clock. A record's
-  counter, inside its seal, is compared with clocks in two places, the clock rule and the warning of
-  a fast clock, and deletions are forgotten by the folder's own time, the greatest counter held
-  (`protocol.md` §3.2, §4.4); every other time field is informational.
+- No key expires, and nothing in this file compares a key or a signature with a clock. Nor is a
+  record's counter, inside its seal, compared with a clock, since 2026-11-12: when written it is at
+  least its writer's clock, or `CLOCK_FLOOR_MAX` when the clock reads later (the clock floor), and
+  it is at most a fixed ceiling; deletions are forgotten only by a watermark, a counter that a
+  write holder signs in a cleanup's sealed part, when its own clock says it has held them a year
+  (`protocol.md` §4.4, "Expiry by the watermark"); every other time field is informational.
 - Randomness (secrets, nonces, salts) reaches the keys crate from the caller through **the
   runtime's randomness trait**: backed by the operating system's generator in production, by a
   seeded generator in the simulator so that a run replays exactly (`suites.md` §4.3).
@@ -408,8 +411,8 @@ average) would hide more and cost more; suite 1 keeps Padmé (`suites.md` §2.3)
 Everything that would name a file or date it (path, kind, true size, times, mode, plaintext chunk
 hashes, and, since 2026-10-25, the writer's device ID and counter, the version vector and the
 deletion marks) sits in the sealed part of its index record (`protocol.md` §4.4, `SealedMeta`),
-which only read and write holders open; a cleanup's issuer and counter sit in its own sealed part
-(`CleanupMeta`).
+which only read and write holders open; a cleanup's issuer, counter and, since 2026-11-12, the
+watermark it carries sit in its own sealed part (`CleanupMeta`), which still fits 256 bytes.
 
 ```
 meta   = canonical SealedMeta (or CleanupMeta) bytes (§5.2)
@@ -486,9 +489,10 @@ proof_key   = BLAKE3_keyed(payload_key, folder_id || th)                  # 32 b
   that its sender holds `ak`; `proof_key` covers `th`, so it cannot be replayed into another
   connection, and the hint, which is the associated data, covers the role, so it cannot be
   reflected back to its sender. The payload names the tier the prover reports; nothing checks it,
-  and it is shown marked "reported", like a device name, and never relied on, since nothing in the
-  protocol gives a peer more for a higher tier: records and chunks are verified by signature and
-  hash whoever sends them, and only a key holder can open what it receives.
+  and it is shown marked "reported", like a device name, and relied on only to tell how soon a
+  change of the greatest watermark owes a round on the connection (`protocol.md` §3.5), since
+  nothing else in the protocol gives a peer more for a higher tier: records and chunks are verified
+  by signature and hash whoever sends them, and only a key holder can open what it receives.
 - Every tier holds `ak` (write and read holders derive it from `dk`), so every holder computes the
   hints and proof keys of its folders, and nobody without a key can: a relay, or anyone who knows
   only the folder ID, can neither open a proof nor tell which folder one is for. The drafts keyed
@@ -777,7 +781,8 @@ successor only when the two never run at once. The engine raises a hint when a r
 ID arrives with a counter above its high-water mark (`counter > hw`; `protocol.md` §4.5, "Durability
 before transmission"), and an image meant for cloning carries no key store. A device's counters
 follow its clock and rise past every counter it has seen; one whose next counter would pass
-`MAX_COUNTER` (`protocol.md` §4.4) can write nothing more in that folder, and a new device seed
+`MAX_COUNTER`, the fixed ceiling 10 000 years after 1970 (`protocol.md` §4.4, "The counter
+ceiling"), can write nothing more in that folder, and a new device seed
 would not help, so the folder is shared again (§7). The browser client keeps one device seed per
 installation, so clearing a session does not add a device to the vectors of the files it writes
 (plan, "Stable browser device ID", phase 6).
@@ -877,14 +882,16 @@ the crate also checks, `suites.md` §4.4).
    `SealedMeta` holding a vector of two entries, its `record_hash` and signature; the `SealedMeta`
    sealed with a fixed nonce and opened with the 64-byte aad rebuilt from the record; the seal
    failing when moved to another `path_tag` or folder, or into a cleanup; a cleanup of two groups,
-   its `CleanupMeta` sealed under the 32-byte aad, its record hash and its signature under
-   `sig/cleanup`, and the same body signed under `sig/index` (fails); non-zero padding (refused); a
-   300-byte metadata padded to 512 (accepted), padded to 400 (malformed) and padded to 1 024 (a
-   writer fault: past the least power of two that holds it); `sealed` of 295, 297 and 2^21 + 41
-   bytes (malformed); a body with one bit flipped inside a bytes field, so that it still parses,
-   whose signature then fails (forged); a signature by another folder's key (forged); two records
-   with one dot, both verifying; and the set digests (`protocol.md` §4.5) of an empty subtree, of a
-   leaf of three fixed record hashes and of a node over sixteen fixed child digests.
+   its `CleanupMeta`, with a watermark, sealed under the 32-byte aad, its record hash and its
+   signature under `sig/cleanup`, and the same body signed under `sig/index` (fails); a cleanup with
+   no group whose `CleanupMeta` carries only a watermark, sealed, signed and verified alike;
+   non-zero padding (refused); a 300-byte metadata padded to 512 (accepted), padded to 400
+   (malformed) and padded to 1 024 (a writer fault: past the least power of two that holds it);
+   `sealed` of 295, 297 and 2^21 + 41 bytes (malformed); a body with one bit flipped inside a bytes
+   field, so that it still parses, whose signature then fails (forged); a signature by another
+   folder's key (forged); two records with one dot, both verifying; and the set digests
+   (`protocol.md` §4.5) of an empty subtree, of a leaf of three fixed record hashes and of a node
+   over sixteen fixed child digests.
 9. **Handshake inputs** (shared with the protocol crate's vectors, `protocol.md` §8): for a fixed
    transcript hash `th` (32 bytes) and the fixed folder: the hint for both roles, the proof key, and
    the sealed payload for each reported tier in both roles under a fixed nonce, opened again; the

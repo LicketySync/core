@@ -6,6 +6,315 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Spec: forget deletions by a signed watermark, and drop the clock rule and expiry by the folder's
+  own time (the owner's decisions of 2026-11-08, after the research on removing the protocol's
+  dependence on clocks: "Switch", "After 365 days" and "Loose 10,000-year limit"; their answers
+  of 2026-11-12: "A year after arrival, together", cleanups by "the same logic as the deletion of a
+  file", and "a fixed ceiling"; and their decisions of 2026-11-12 on the questions and reviews of
+  this change: on the ceiling's risk, "Accept, documented"; on late deletions, "OK, file comes
+  back"; on a clock that jumps, "Accept, documented"; on the candidate, "Wait, never early"; on a
+  faked date, "Still accept, documented"; and on a slow release, "Accept, documented"). Spec text
+  only, the first spec change of phase 1: the index, the engine and the simulator implement it in
+  their own changes. Until then the code does what phase 0 built: the clock rule (Hello's
+  `clock_days`, `Close(CLOCK_OUT_OF_RANGE)` when the first folder opens, records from the future
+  refused with `MAX_FUTURE_KNOWN`, a folder kept closed after its clock was set back), expiry by
+  the folder's own time with `TOMBSTONE_HORIZON` and the 30-day `CLEANUP_HORIZON`, the fast-clock
+  issue at `CLOCK_AHEAD_WARNING`, `MAX_COUNTER` at 2^62 and `CLOCK_FLOOR_MAX` at 2^61; the
+  README's crate rows say so until those changes. TM-9, TM-17, TM-22, TM-40, TM-41 and TM-43, and
+  `threat-model.md` §3.1, §3.2, §3.3, §3.6, §3.10, §3.12 and §5.
+  - The watermark (`protocol.md` §4.4, "Expiry by the watermark", and "Cleanup", case (d)). A
+    deletion is forgotten only by a write holder's signed decision: a counter, `forget_before`, in a
+    cleanup's sealed part, below the cleanup's own counter (a writer fault otherwise), which every
+    cleanup carries at the greatest value its writer holds. Every read and write holder forgets
+    every tombstone, tree delete and cleanup at or below the greatest watermark it holds (`H`), in
+    the commit that raises `H`, at open and on arrival, unverified; no version of a file or
+    directory expires, live, archived (no horizon) or kept only as a base. `H` is a function of the
+    records held and never falls while its cleanup is held, since no watermark at most `H` expires
+    that cleanup and no honest cleanup case names it, so holders of the same records expire the
+    same ones whatever their clocks, and exchanges converge (`protocol.md` §4.5); a commit that
+    raises `H` and expires a record, or lowers `H`, owes a round on every connection where the
+    folder is open, at once toward a peer that reports the read or write tier and at most once a
+    day toward one that reports the sealed tier. A
+    write holder keeps each deletion's and cleanup's arrival by its own wall clock, checks when the
+    folder opens, when the device resumes from sleep and at least once an hour while it is open,
+    and signs, at most once a day (within one opening by a monotonic clock that counts time asleep,
+    across openings by its wall clock), its candidate: the greatest counter of a record it has held
+    365 days that lies below every record it has held less ("Wait, never early"), when that is
+    above `H` and passes a deletion or a cleanup with a group whose `because` is not empty, in a
+    cleanup with no group unless
+    another cleanup goes in the same commit. So a deletion is forgotten once
+    some write holder has held it a year, and no younger one dated below it, whether or not it was
+    online all year, and then on every device together; a replay at or below `H` is ignored for as
+    long as `H` stands. A late arrival holds back its write holder's forgetting of the records dated
+    above it for a year, and a dishonest writer, a peer that is a write holder's only link or a
+    network attacker that cuts one off can hold forgetting back without bound: storage, never files.
+    Cleanups follow the same rule, which replaces `CLEANUP_HORIZON`: the 100 000-file tree delete's
+    3.4 MB of cleanups is kept a year or more, not 30 days. Sealed peers read no watermark and
+    forget, as before, only by names (case (c)); they also hold the cleanups with no group until a
+    write holder names them. A wrong or faked clock costs at most deletions forgotten early, never a
+    version: a signer whose clock gains time signs early by as much; in the worst case one write
+    holder whose clock jumps a year or more ahead (a mistyped year, a new device first synced with a
+    wrong clock then corrected, a machine back after a year that boots with a wrong clock before its
+    time is synced, or an outsider faking its date through unauthenticated network time or a fake
+    cell tower) makes every device forget every deletion at once and undoes the deletions on their
+    way; a device whose clock reads behind with little of the folder held dates its deletions below
+    a watermark, which undoes them on arrival; and a fast clock's lead, carried forward, moves the
+    watermarks ahead with the counters. Each way a deleted file comes back wherever a copy survives,
+    at a device that never saw the deletion, at a sealed peer, or with a key holder that kept it.
+    Arrivals at open, and on a device restored from a backup, are as the spec author chose (below).
+  - Removed (`protocol.md` header, §3.1, §3.2, §3.5, §4.2, §4.4, §4.5, §4.7 items 2, 6, 7 and 8,
+    section 5, §7, §8, §9): the clock rule's checks of the Hello (`clock_days`, Hello field 11, now
+    reserved), of each record (step 4, records from the future, `MAX_FUTURE_KNOWN`) and of the store
+    at open ("A clock set back"), with `CLOCK_RULE_LIMIT`, `CLOCK_OUT_OF_RANGE` (`CloseReason` 13,
+    now reserved), the clock-rule issue and its remedy and the residuals the remedy left ("What
+    adding the folder again leaves", and with it the open question of a per-folder writer generation
+    for phase 1); the fast-clock issue and `CLOCK_AHEAD_WARNING`; expiry by the folder's own time
+    `G`, `CLEANUP_HORIZON`, and what existed only for them (a cleanup raising the folder's time, "a
+    folder nobody writes to forgets nothing"). The notes on main that said these stood "until the
+    watermark change" are gone. The stored high-water mark's check at open keeps its day of slack as
+    `MARK_SLACK`; `MAX_PEER_NAMES`'s 30-day window is `PEER_NAMES_WINDOW`.
+  - Kept: version vectors and Lamport counters; the clock floor, a protection of the writer's own
+    (the research's recommendation, kept by the coordinator); elapsed-time timeouts and the
+    discovery windows; the display order. A key holder's views show a version's write time from
+    `written_at`, never from its counter (`protocol.md` §4.4, §4.7 item 6).
+  - The counter ceiling (`protocol.md` §4.4, "The counter ceiling"). `MAX_COUNTER` is 10 000 years
+    of microseconds after 1970, 315 569 520 000 000 000, a constant every read and write holder
+    checks alike with no clock (step 7, as before); `CLOCK_FLOOR_MAX` is half of it. A write holder
+    that signs a counter at or just below the ceiling still exhausts the folder's counters: a stated
+    dishonest-writer residual (the research's S2; `threat-model.md` §3.6; the owner's "Accept,
+    documented"), which the clock rule kept out of reach until now. A stored high-water mark at
+    `MAX_COUNTER` is accepted like any mark within `MARK_SLACK` of what the records held justify.
+  - On the wire, within major 1 since nothing has been released (`protocol.md` §4.4 and section 6):
+    `CleanupMeta.forget_before` (field 3); cleanups with no group, so step 1 takes 0 to
+    `MAX_CLEANUP_GROUPS` groups and at least one name only when there is a group; a step-7 check
+    that `forget_before` lies below the cleanup's counter; Hello field 11 and `CloseReason` 13
+    reserved; step 4 left empty, the later steps keeping their numbers. Section 6 adds the watermark
+    to what never changes within major 1. The largest Hello is now a 2 664-byte frame. `suites.md`
+    records why the cleanup record keeps its label, `sig/cleanup`, though its layout changed:
+    nothing had been released, a cleanup encoded before decodes as one with no watermark, and one
+    with no group was malformed before; it uses no clock, and `CleanupMeta` still fits the 256-byte
+    bucket.
+  - Proofs (`protocol.md` §4.4, "Why it is safe"): 6, 10, 11 and 12 forget by the watermark, 10's
+    empty-`because` groups justified by the watermark the cleanup itself carries; 8(c) loses the
+    remedy's case; a new item 14, forgetting only by a signed decision, which costs reappearance
+    only and no lost update, with what arrival order changes and the round a rise of `H` owes; §4.5
+    "Why it converges" loses its exception for records from the future, and the layer's guarantee
+    its "short of records from the future".
+  - Tests (`protocol.md` §8): item 2 (the largest Hello, a Hello carrying field 11); item 6
+    (cleanups with a watermark and with no group, with no group and no watermark, `forget_before` at
+    and below the counter, the old 2^61 and 2^62 now writer faults, records far ahead of or behind
+    the clock judged as any record); item 7 (a store years ahead of the clock opens; expiry by the
+    watermark: a watermark arriving before and after the deletions it forgets, two concurrent
+    watermarks, a replayed old deletion after a watermark, the cleanup carrying `H` lost at rest, a
+    folder nobody writes to, the counter ceiling; properties (d), (e) and (g) lose the clock rule,
+    and new (n), (o) and (p); a stored mark at `MAX_COUNTER` at reopen); item 8 (the round a rise of
+    `H` owes); item 12 (a cleanup with no group at a sealed holder; a forgotten-record note above
+    the watermark of the round's cleanup); and item 13, which was the clock rule at the handshake
+    and is now the watermark's policy (the candidate, the old-record test without overflow, what
+    holds forgetting back, the checks and the interval, arrivals at open, a device with a wrong
+    clock, the worst case of a jump, a new device first synced with a wrong clock, a machine back
+    after a year, a restored backup and the floor). "Who checks what" says so.
+  - Threat model: TM-40 rewritten (versions by vectors, deletions forgotten only by a signed
+    watermark, nothing refused for a clock, the worst case of a wrong or faked clock and its
+    triggers, forgetting held back, the fixed ceiling); §3.1 (a network attacker can move a write
+    holder's clock through unauthenticated time sync, and delay forgetting by cutting it off); §3.2
+    (a read-key holder can hold forgetting back as a write holder's only link); TM-9 and §3.12 (no
+    folder kept closed for its clock; arrivals a store changed at rest can bring forward); TM-17;
+    TM-22 (no record from the future to verify; the life of a cleanup at least a year; up to one
+    watermark a day per write holder and its cost; the index by counter and the cost of each rise of
+    `H`; forgetting held back); TM-41 and TM-43 (the clock rule's exception and remedy gone; a wrong
+    clock forgets early, every deletion at once in the worst case; a rise of `H` that expires a
+    record owes a round); §3.3 (a sealed peer withholds or replays, reads no watermark, cannot make
+    a holder take an expired deletion back, can hold forgetting back as a write holder's only link);
+    §3.6 (exhaustion as a residual; signing a watermark; holding forgetting back); §3.10; §5 (no
+    clock in the Hello; what case (c) and case (d) show a sealed peer; what a key holder reads from
+    `written_at` and the watermarks). `keys.md` §0 (the clock floor stops at `CLOCK_FLOOR_MAX`),
+    §3.4, §8.1 and §9 item 8, and its status line; `suites.md`'s signatures and status line.
+  - The engine entry's spec question about a folder that becomes provable during a connection loses
+    its clock-rule case (no folder is kept closed for its clock); the rest of it stands.
+  - Fix round (2026-11-12), after the correctness, second and security reviews of the first draft
+    and the coordinator's rulings on them: the owner's six decisions of 2026-11-12 written in as the
+    owner's (the candidate rule is now "Wait, never early", no longer the spec author's choice); the
+    worst case of a wrong or faked clock, and its triggers, stated plainly in §4.4, TM-40, §3.1,
+    TM-43 and §9, the overclaims corrected ("Stops clock-skew attacks", "nothing left to protect",
+    "comes back only where …"), and its vectors (§8 item 13); what holds forgetting back, the late
+    arrival's delay and the three residuals (a dishonest writer, a peer that is the only link, a
+    network attacker), with every "about a year" made "at least a year"; the round a rise of `H`
+    owes (§4.5, "Round owed", "Cursors", "Why it converges"; §8 item 8); the checks at open and once
+    a day of monotonic time, the interval by the wall clock and, when the clock reads earlier, by
+    the monotonic clock within an opening (both changed in fix round 2, below), and the candidate
+    and its cleanup in one commit; the rate
+    and its cost (up to one watermark a day per write holder; 64 write holders: about 23 000 a year,
+    9 MB, 1.4 s at open); the index by counter and the cost of each rise of `H`; case (c) judging
+    each note again against its cleanup's watermark; a stored mark at `MAX_COUNTER` no longer
+    corrupt; why `sig/cleanup` keeps its label (`suites.md`); the old-record test without overflow;
+    and the nits: a version, not a tombstone, never expires; how `H` falls by a dishonest name; the
+    owner's follow-ups cited and the arrival question quoted verbatim; what a quiet folder signs
+    (stated then as about once a year, which was wrong: corrected in fix round 2, below); what a
+    sealed peer learns from case (c) and (d), no longer overstated; a cleanup
+    with no group and no watermark; a restored device's file missing until the watermark comes; the
+    marks below added; "stamps" gone from §9; the clock floor's cap in `keys.md` §0; and history in
+    parentheses trimmed where it was only history. Finished by a second author after the first was
+    paused: a slow release needs no order of counters, which a sealed peer cannot read (§4.4, "What
+    holds forgetting back"; `threat-model.md` §3.3); a holder of the read key can hold forgetting
+    back too (`threat-model.md` §3.2); files forgotten early come back from a key holder's kept copy
+    as well (`threat-model.md` §3.6); TM-40's closing claim made exact (it stops a clock from
+    ordering versions and from having anything refused, and no longer claims that no clock decides
+    what a device keeps); TM-41's rounds owed include a rise of `H`; §9's last "about a year or
+    more" made "a year or more"; §4.7 item 6 hands the index the readings its interval needs; a
+    write holder that keeps the folder open while it sleeps, where its monotonic clock stops, checks
+    less often by the calendar and signs later (storage only), with its vector (a residual that fix
+    round 2 removes, below); a clock that steps
+    forward between opens, not only one set back, adds at most one watermark per open; and a new
+    device first synced with a wrong clock and then sent a new deletion, whose counter is above
+    every one it held, still forgetting every deletion it held (§8 item 13).
+  - Marked as the spec author's choices, for the owner's review (all listed): the watermark as a
+    field of a cleanup, not a record type of its own, with a cleanup of no group to carry it alone
+    (case (d)), and what that shows a sealed peer; a cleanup with no group and no watermark valid
+    and harmless, not a writer fault; every cleanup carrying its writer's greatest watermark; a
+    `forget_before` at or above its cleanup's counter a writer fault; only write holders keeping
+    arrivals (the owner asked "Can all devices track the arrival of the deletion record …?"); a
+    record dropped and held again arriving again; the index by counter; the interval between
+    watermarks a day; the monotonic clock for that interval one that counts time asleep, named per
+    platform (`CLOCK_BOOTTIME`, `mach_continuous_time`, `QueryInterruptTime`), with the residual
+    where none exists (fix round 2); no step between watermarks; the round owed when an expired
+    cleanup drops a group `because` it, as for a deletion; arrivals at open checked against nothing,
+    a missing one taking the open's reading, one later than the clock kept and young; a restored
+    device keeping its backup's arrivals and records fetched again arriving anew; `MAX_COUNTER` at
+    10 000 years of 365.2425 days and `CLOCK_FLOOR_MAX` at half of it; `MARK_SLACK` keeping the day
+    of slack at open; `PEER_NAMES_WINDOW` keeping 30 days; step 4 left empty rather than renumbered;
+    `TOMBSTONE_HORIZON` keeping its name with its new meaning, and §8 item 13 reused; and the
+    reading in `suites.md` of why `sig/cleanup` keeps its label.
+  - Marked as the coordinator's rulings of 2026-11-12, for the owner's review (all listed): a commit
+    that raises `H` and expires a record owes a round (the first fix round); from fix round 2, a
+    commit that lowers `H` owes a round too; a stored high-water mark at `MAX_COUNTER` accepted like
+    any within `MARK_SLACK`; and the checks at open, on resuming from sleep and at least hourly,
+    with the interval between watermarks counted within one opening by the monotonic clock alone and
+    across openings by the wall clock, a reading earlier than the last signing's counting as passed;
+    and, from fix round 3, a check that signs only when its candidate passes a tombstone, tree
+    delete or cleanup with a group whose `because` is not empty (replacing fix round 2's "with a
+    group"); a change of `H` owes a round toward a peer that reports the sealed tier at most once
+    per `WATERMARK_INTERVAL` (replacing fix round 2's "none"), so that the reported tier, until then
+    shown only, decides how soon; and the clock that counts time asleep read in phase 1 through a
+    reviewed platform dependency or a platform-FFI crate.
+  - Fix round 2 (2026-11-12), after the confirm review of the first fix round (K-1 to K-6) and the
+    coordinator's rulings on it (1 to 6), each rule it adds marked as the coordinator's ruling of
+    2026-11-12, for the owner's review; the owner's decisions are unchanged.
+    - No echo (ruling 1, K-1; `protocol.md` §4.4, "When a write holder signs one", "Finding what
+      expires", "How many", "How it is forgotten"; §9; TM-22): a write holder signs only when its
+      candidate passes at least one tombstone, tree delete or cleanup with a group, so a check never
+      signs only to forget earlier cleanups with no group (a cleanup with no watermark either
+      counted with them, the spec author's reading). Before, each watermark-only cleanup, once a
+      year old, became the next candidate, and a write holder that had signed daily kept signing
+      daily for ever after deletions stopped (64 write holders: about 23 000 cleanups a year in a
+      folder with no deletions). (Partly wrong, corrected in fix round 3, below: a case-(c)
+      cleanup restarted the echo, and the quiet-folder figures in this item are superseded
+      there.) What it leaves held: the watermark-only cleanups of about the last year, at most one
+      per write holder per day, until the watermark that the next deletion, or cleanup with a group,
+      brings. The
+      first fix round's "a folder in which nothing more is deleted still signs about once a year"
+      and "costs about one watermark-only cleanup a year" are corrected; where a sealed peer is met,
+      a quiet folder costs about one case-(c) cleanup a year per write holder that meets it, and the
+      watermark that forgets it. Vectors (§8 item 13, and item 7's property (p)): candidates passing
+      only cleanups with no group, with and without a tombstone among them; a write holder that
+      signed daily for a year and then holds no new deletion for two years, and the same with a
+      later deletion, whose watermark forgets them all; the three-year quiet folder now signs once.
+    - No round toward sealed peers for a change of `H` (ruling 2, K-2; `protocol.md` §3.5, field
+      `ProofPayload.tier`, §4.4 "Expiry by the watermark", "How many", "How it is forgotten", §4.5
+      "Rounds", "Cursors", "Round owed", "Why it converges", "Why it is safe" 14, step 6, §4.7 items
+      4 and 6, "A device restored from a backup"; `keys.md` §4; TM-22, TM-32, TM-41): the round a
+      rise of `H` owes is owed only on connections to peers that report the read or write tier (fix
+      round 3, below, adds at most one a day toward a sealed peer), since the divergence it mends
+      arises only between them, and a sealed peer's case-(c) cleanups come in rounds that happen
+      anyway. The reported tier, until now shown only, decides this; a false report gains a peer
+      nothing it could not have by withholding records or by opening the folder again on a new
+      connection. The cost left, stated with a figure: 64 write holders each running one round a day
+      with a sealed peer add at most 64 case-(c) cleanups a day, about 23 000 a year, 9 MB and 1.4 s
+      at each open, as much again as the watermarks. Vector (§8 item 8): three write holders, a NAS
+      and a rise of `H` (no round owed toward the NAS; one case-(c) cleanup at its next ordinary
+      round), and the NAS reporting the write tier.
+    - A cleanup's life of "at least a year" qualified wherever it bounds something (ruling 3, K-6):
+      "(sooner while a write holder's clock is wrong or faked, TM-40)" in TM-22 (three places),
+      `threat-model.md` §3.3, `protocol.md` §4.4 "Cleanup" (b) and (c), "How it is forgotten",
+      "Stale copies at a sealed peer, and their bound" (twice), §4.5 "Stale copies" (twice) and
+      §9; and in TM-22 and "Stale copies at a sealed peer, and their bound", that a clock faked
+      forward again each day shortens every cleanup's life to a day, and with it the stale-copy
+      bound, with its vector (§8 item 13: a clock set a year further ahead before each day's first
+      check).
+    - A fall of `H` owes a round too (ruling 4, K-3; `protocol.md` §4.4, §4.5 "Cursors", "Round
+      owed", "Why it converges", "Why it is safe" 14; `threat-model.md` §3.6, TM-22, TM-41), on
+      connections to read and write holders, since a deletion a peer pushed and this side ignored
+      as expired is expired no longer. Vector (§8 item 8): Q and Z, a watermark W, a tombstone T
+      below it, and a dishonest write holder's cleanup C naming W's cleanup (Z owes Q a round,
+      which brings T); item 7's property (e) counts the rounds a fall owes.
+    - A stored high-water mark at `MAX_COUNTER` is accepted like any mark within `MARK_SLACK` of
+      what the records held justify (ruling 5, K-4; `protocol.md` §4.4, "Opening a folder"); the
+      sentence that read two ways is gone. Vector (§8 item 7): a greatest held counter of
+      `MAX_COUNTER` − 5 beside a mark of `MAX_COUNTER` (accepted, no report).
+    - The checks and the interval (ruling 6, K-5 and the coordinator's amendment; `protocol.md`
+      §4.4, §4.7 item 6, section 5's "Time" and constants, §8 item 13; TM-22): a write holder
+      checks when the folder opens, when the device resumes from sleep, and at least once per
+      `WATERMARK_CHECK_INTERVAL` (1 hour, a new constant) while the folder is open; within one
+      opening the interval between watermarks is counted by the monotonic clock alone, across
+      openings by the wall clock, a reading earlier than the last signing's counting as passed, and
+      signing stays at most once per `WATERMARK_INTERVAL`. The monotonic clock for that interval
+      counts time asleep (the spec author's choice, for the owner's review, which the coordinator
+      asked to be made concrete): `CLOCK_BOOTTIME` on Linux and Android, `mach_continuous_time` on
+      macOS and iOS, `QueryInterruptTime` on Windows (which includes time asleep, unlike
+      `QueryUnbiasedInterruptTime`). So the residual of a device that sleeps with the folder open
+      and signs late is removed where such a clock exists; where none does (a browser, phase 6:
+      `performance.now()` may pause while the device sleeps), signing after a sleep can come late,
+      which costs storage only. The two-hours-a-day vector is reworded (a device that opens at 8:30,
+      after signing at 9:00 the day before, signs at its 9:30 check), the sleeping device's vector
+      now signs about once a day, and the table's row no longer has an "otherwise passed" case.
+  - Fix round 3 (2026-11-12), after a narrow check of fix round 2 (L-1 to L-5) and the
+    coordinator's rulings on it, each rule it adds marked as the coordinator's ruling of 2026-11-12,
+    for the owner's review; the owner's decisions are unchanged.
+    - The echo through case (c) stopped (L-1; `protocol.md` §4.4, "When a write holder signs one",
+      "Finding what expires", "How many", "How it is forgotten", §4.7 item 6, §9; TM-22): a case-(c)
+      cleanup has a group, with an empty `because`, so under fix round 2's rule it made a write
+      holder sign a year later, which forgot it at read and write holders while a sealed peer still
+      held it, and the next round named it in a new case-(c) cleanup, for ever wherever a write
+      holder meets a sealed peer. Condition (2) now counts only tombstones, tree deletes and
+      **cleanups with a `because`**, with at least one group whose `because` is not empty (cases (a)
+      and (b)); case-(c) and watermark-only cleanups never make a write holder sign. The five
+      statements are corrected: once nothing more is deleted, the last year's watermark-only and
+      case-(c) cleanups stay held at every tier until the watermark that the next deletion, or
+      cleanup with a `because`, brings, and no case-(c) cleanup follows them. Vectors (§8 item 13):
+      a case-(c) cleanup among those that sign nothing and a case-(b) one among those that sign; a
+      write holder with a daily round with a sealed holder, daily deletions for a year and then none
+      for two years (nothing signed after the watermark that passes the last deletion); property (p)
+      extended.
+    - Rounds toward sealed peers bounded (L-2; `protocol.md` §3.5, §4.4 "Expiry by the watermark",
+      "How it is forgotten", "How many", step 6, "A device restored from a backup", §4.5 "Rounds",
+      "Cursors", "Round owed", "Why it converges", §4.7 items 4 and 6, section 5's
+      `WATERMARK_INTERVAL` row; `keys.md` §4; TM-22, TM-32, TM-41): a change of `H` owes a round
+      toward a peer that reports the sealed tier at most once per `WATERMARK_INTERVAL`, a later
+      change waiting until that interval has passed (one more bit and one monotonic time per folder
+      per connection), so what such a change leaves at a sealed peer waits at most about a day, and
+      the "64 a day" case-(c) figure is a bound for those rounds, with at most one more per round
+      that comes for another reason. Vectors (§8 item 8): the three write holders and the NAS, with
+      a second watermark an hour later whose round toward the NAS waits for the interval; the fall
+      of `H` toward a sealed peer.
+    - Wording (L-3): threat-model §3.6 and TM-32 say "a peer that reports the read or write tier";
+      TM-32's "Enforced by" adds `engine`; step 6 says "a commit that lowers `H`".
+    - Wording (L-4): §9 says no device signs only to forget earlier watermark-only cleanups, its
+      own or another's; the "at most one per write holder per day" bounds (the Cleanup bullet, "How
+      many", TM-22) add the one more per open that a wall clock stepping between opens allows.
+    - L-5: a vector (§8 item 8) for the other false report, a read or write holder that reports
+      the sealed tier (its round comes within the interval, nothing is dropped, both converge); the
+      browser's late signing after a sleep among TM-40's causes of late forgetting; and a line in
+      §4.7 item 6: the named clocks are not `std::time::Instant` on Linux (`CLOCK_MONOTONIC`) or
+      macOS (`CLOCK_UPTIME_RAW`), so phase 1 reads them through a platform dependency that enters
+      by a reviewed change (TM-8) or a platform-FFI crate under TM-7's exception.
+  - Reviewed 2026-11-12 by afcb382db6ef4775f (correctness: blocked by four, now fixed),
+    af68ac480b2578204 (second: one should-fix, now fixed) and a07fe659f19647435 (security: blocked
+    by two, now fixed); the owner decided C-1, F-1, S-1 and S-2. Confirm a4aa1b35e5000b4d4 with the
+    correctness and security passes: blocked by three, now fixed; check adf3d98e7e23c83ce: blocked
+    by one, now fixed, then clean. Authors a1ae674b2ad1cf237 (paused) and a8c7f67f79e4fe833; fixes
+    by a68ce86b3b09eec52 (paused), a64007399e63a4909 and a1260e098fe64bf5d. Landed as one squashed
+    commit.
+
 - Spec: make relays public only, let devices whose persons turn it on coordinate hole punches, and
   archive copies a device can no longer read (the owner's answers of 2026-11-03, "Yes, remove the
   old copy" and "drop the private/protected relay idea and only work with public relays"; of
