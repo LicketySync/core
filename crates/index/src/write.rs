@@ -635,6 +635,10 @@ impl Txn<'_> {
     /// nonces), holds them, writes the cleanups that go with them (a tree
     /// delete's, `because` it, and one for shared writer faults that did not
     /// fit a record's names), and makes each record the base of its path.
+    /// An empty batch writes nothing: it signs no record, stages nothing and
+    /// leaves the high-water mark as it was, the greatest counter of a record
+    /// held or written (4.4, "The writer's rule"), even at the counter
+    /// ceiling (F-1).
     ///
     /// # Errors
     /// [`WriteError`]. The refusals of the batch itself (no write key, the
@@ -649,6 +653,9 @@ impl Txn<'_> {
     ) -> Result<Written, WriteError> {
         if !self.ix.writer() {
             return Err(WriteError::NotWriteKey);
+        }
+        if changes.is_empty() {
+            return Ok(Written::default());
         }
         let mut plans = Vec::new();
         let mut paths = BTreeSet::new();
@@ -738,7 +745,7 @@ impl Txn<'_> {
         let total = u64::try_from(plans.len())
             .unwrap_or(u64::MAX)
             .saturating_add(cleanup_pages);
-        if total > 0 && first.saturating_add(total - 1) > MAX_COUNTER {
+        if first.saturating_add(total.saturating_sub(1)) > MAX_COUNTER {
             return Err(WriteError::CounterExhausted);
         }
         let mut counter = first;
@@ -774,6 +781,19 @@ impl Txn<'_> {
 
     /// Gives the plans their counters, signs and holds them, then the
     /// cleanups that go with them, and sets the bases.
+    ///
+    /// Every record this device signs is held, applied, which the `.ok()` on
+    /// `Txn::store` below relies on. Its signed record passed a reader's
+    /// steps 1 and 7 before signing returned it, so it is not opaque.
+    /// Nothing held covers it: an index record's counter is above `hw`,
+    /// while step 7 keeps every vector entry of an applied held record below
+    /// that record's own counter, which is at most `hw`, so no applied held
+    /// record covers it at its tag or beneath a tree delete (an opaque one
+    /// covers nothing); and a cleanup has no path tag or path, so nothing
+    /// held covers it. Nothing held names it, since no record can name a
+    /// hash that did not exist yet. So holding each raises the high-water
+    /// mark to its counter, and the mark ends at the last counter the batch
+    /// took (the test `every_record_this_device_signs_is_held`).
     fn sign_and_hold(
         &mut self,
         plans: Vec<Plan>,
@@ -847,11 +867,6 @@ impl Txn<'_> {
             self.hold_own(record, clock_us, rng, &mut written, &mut out)?;
             written.cleanup = true;
         }
-        let meta = crate::store::StoredMeta {
-            hw: self.ix.s.meta.hw.max(counter.saturating_sub(1)),
-            ..self.ix.s.meta
-        };
-        self.ix.s.set_meta(meta, Some(&mut self.undo));
         written.dropped = out.dropped;
         written.paths = out.paths;
         written.paths.sort();
@@ -914,6 +929,15 @@ impl Txn<'_> {
     /// Read and sealed holders issue none. Every note is named at the first
     /// round's end, whichever peer's, so a note made from a peer that never
     /// ends a round still goes.
+    ///
+    /// Every cleanup this device signs is held, applied, which the `.ok()` on
+    /// holding it relies on: its signed record passed a reader's steps 1 and
+    /// 7 before signing returned it, so it is not opaque; a cleanup has no
+    /// path tag or path, so nothing held covers it; and nothing held names
+    /// it, since no record can name a hash that did not exist yet. So
+    /// holding each raises the high-water mark to its counter, and the mark
+    /// ends at the last counter the round's end took (the test
+    /// `every_record_this_device_signs_is_held`).
     ///
     /// # Errors
     /// [`WriteError::CounterExhausted`] or [`WriteError::Draft`].
@@ -987,18 +1011,11 @@ impl Txn<'_> {
         }
         let mut written = Written::default();
         let mut out = Accepted::scratch();
-        let mut counter = first;
-        for mut d in drafts {
+        for (counter, mut d) in (first..).zip(drafts) {
             d.dot.counter = counter;
-            counter += 1;
             let record = self.sign_cleanup(&d, rng)?;
             self.hold_own(record, clock_us, rng, &mut written, &mut out)?;
         }
-        let meta = crate::store::StoredMeta {
-            hw: self.ix.s.meta.hw.max(counter.saturating_sub(1)),
-            ..self.ix.s.meta
-        };
-        self.ix.s.set_meta(meta, Some(&mut self.undo));
         for h in &named {
             self.ix.s.remove_note(h, Some(&mut self.undo));
         }

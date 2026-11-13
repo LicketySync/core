@@ -648,6 +648,51 @@ fn the_open_reports_the_entries_the_store_could_not_decode() {
     assert!(report.is_clean());
 }
 
+/// F-2: an open that finds entries the store could not decode draws a new
+/// index epoch, once, and stages it (4.4 "Opening a folder": the store drops
+/// such bytes as the open drops a record that fails its checks; 4.7 item 8:
+/// an open that dropped anything draws a new epoch, once; 4.5; TM-9), so that
+/// every peer reconciles with this device and sends again what the store
+/// lost. Beside a record changed at rest, still one epoch: the first the
+/// open's randomness gives.
+#[test]
+fn an_open_with_entries_the_store_could_not_decode_draws_a_new_epoch_once_f2() {
+    let mut d = Dev::writer(0xd0);
+    let a = d.put("a", 1);
+    let b = d.put("b", 2);
+    let first = {
+        let mut rng = d.rng.clone();
+        crate::index::draw_epoch(&mut |x| rng.fill(x))
+    };
+    assert_ne!(first, d.ix.epoch());
+    let (ix, report) = open_changed(&d, |s| s.undecodable = 1);
+    assert!(report.epoch_redrawn, "{report:?}");
+    assert!(
+        report.dropped.is_empty() && !report.renumbered,
+        "{report:?}"
+    );
+    assert_eq!(ix.epoch(), first, "one new epoch");
+    assert_eq!(
+        report.changes.meta.map(|m| m.epoch),
+        Some(first),
+        "the new epoch stored"
+    );
+    assert!(ix.record(&a).is_some() && ix.record(&b).is_some());
+    let (ix, report) = open_changed(&d, |s| {
+        s.undecodable = 1;
+        for (r, _) in &mut s.records {
+            if r.hash() == b {
+                *r = flipped_body(r);
+            }
+        }
+    });
+    assert!(
+        report.epoch_redrawn && report.dropped.len() == 1,
+        "{report:?}"
+    );
+    assert_eq!(ix.epoch(), first, "drawn once");
+}
+
 /// `MAX_LOCAL_SEQ` itself is a local sequence number (4.5: "at most
 /// `MAX_LOCAL_SEQ`"): a record stored under it, the next number
 /// `MAX_LOCAL_SEQ + 1`, is held under it, nothing numbered afresh, the epoch

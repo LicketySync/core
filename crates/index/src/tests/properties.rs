@@ -27,7 +27,7 @@ use licketysync_protocol::limits::{CLEANUP_HORIZON, CLOCK_RULE_LIMIT, TOMBSTONE_
 use licketysync_protocol::record::{Applied, Dot, Kind, Meta, Record};
 use proptest::prelude::*;
 
-use super::kit::{converge, round, take_unexplained, write_key, Dev, DAY, T0};
+use super::kit::{converge, round, take_own_held, take_unexplained, write_key, Dev, DAY, T0};
 use super::open::snapshot;
 use crate::{Change, Place};
 
@@ -932,8 +932,56 @@ fn a_write_beside_a_twin_first_among_the_heads_leaves_it_k() {
     }
 }
 
+/// The steps each history of `every_record_this_device_signs_is_held`
+/// starts with, so that a round's end has a note to clean up: writer 0
+/// writes three versions of `a`, each from the one before; writer 1 takes
+/// the newest in a round; the oldest is offered to writer 1 again, a stale
+/// copy that nothing it holds names, and noted; and writer 1's next round's
+/// end names it in a cleanup.
+fn a_note_to_clean_up() -> Vec<Op> {
+    vec![
+        Op::Write {
+            dev: 0,
+            path: 0,
+            content: 0,
+        },
+        Op::Write {
+            dev: 0,
+            path: 0,
+            content: 1,
+        },
+        Op::Write {
+            dev: 0,
+            path: 0,
+            content: 2,
+        },
+        Op::Round { a: 1, b: 0 },
+        Op::Deliver { to: 1, pick: 0 },
+        Op::Round { a: 1, b: 0 },
+    ]
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { max_shrink_iters: 256, ..super::proptest_config(12) })]
+
+    /// Every record this device signs is held (the rule `Txn::sign_and_hold`
+    /// and `Txn::end_round` state; the F-1 fix's security review, N1): over
+    /// histories of writes of every kind, deliveries and rounds, each
+    /// starting with a round's end that has a note to clean up, every record
+    /// a write or a round's end returns comes back with its local sequence
+    /// number, and the high-water mark is then the counter of the last of
+    /// them. The kit checks each write and round's end of a device, and
+    /// panics if `store` refused one of the device's own records; this test
+    /// makes sure both kinds were checked.
+    #[test]
+    fn every_record_this_device_signs_is_held(ops in history(24), cap in prop_oneof![Just(2usize), Just(32)]) {
+        let mut all = a_note_to_clean_up();
+        all.extend(ops);
+        let _ = take_own_held();
+        run(&all, WRITERS, cap);
+        let (writes, ends) = take_own_held();
+        prop_assert!(writes >= 3 && ends >= 1, "checked {writes} writes and {ends} rounds' ends");
+    }
 
     /// (a) no record is dropped except by a record that knows it or a later
     /// record of its device at its path or beneath the deleted directory;

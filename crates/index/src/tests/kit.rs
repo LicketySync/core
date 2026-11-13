@@ -204,6 +204,7 @@ impl Dev {
         let (changes, pending) = txn.finish();
         store.commit(&changes).unwrap();
         pending.commit();
+        check_own_held(&self.ix, &written, false);
         let recs = records_of(archive, &written.records);
         check_drops(&self.ix, &self.archive, &recs, &written.dropped, "write");
         Ok(written)
@@ -431,6 +432,7 @@ impl Dev {
         pending.commit();
         *memory = FolderMemory::default();
         *notes = NoteBudget::for_tests();
+        check_own_held(&self.ix, &w, true);
         let recs = records_of(archive, &w.records);
         check_drops(&self.ix, &self.archive, &recs, &w.dropped, "end_round");
         w
@@ -777,6 +779,51 @@ thread_local! {
 /// The drops no change explained since the last call, on this thread.
 pub(crate) fn take_unexplained() -> Vec<String> {
     UNEXPLAINED.with(|f| core::mem::take(&mut *f.borrow_mut()))
+}
+
+// Every record this device signs is held (the rule `Txn::sign_and_hold` and
+// `Txn::end_round` state, the F-1 fix's security review, N1): checked after
+// every write and round's end of a [`Dev`], and counted for the property
+// test that pins it.
+
+thread_local! {
+    static OWN_HELD: core::cell::Cell<(usize, usize)> = const { core::cell::Cell::new((0, 0)) };
+}
+
+/// The writes and the rounds' ends that signed a record, checked on this
+/// thread since the last call.
+pub(crate) fn take_own_held() -> (usize, usize) {
+    OWN_HELD.with(|c| c.replace((0, 0)))
+}
+
+/// Every record a write or a round's end signed came back held, with its
+/// local sequence number, and the high-water mark is the counter of the
+/// last of them (4.4, "The writer's rule"): `store` refused none of this
+/// device's own records. Panics otherwise.
+fn check_own_held(ix: &Index, written: &Written, round_end: bool) {
+    let Some((last, _)) = written.records.last() else {
+        return;
+    };
+    let what = if round_end { "end_round" } else { "write" };
+    for (h, seq) in &written.records {
+        assert!(
+            seq.is_some(),
+            "{what}: a record this device signed was not held: {h:?}"
+        );
+    }
+    let counter = ix.record(last).and_then(|r| r.dot).map(|d| d.counter);
+    assert_eq!(
+        counter,
+        Some(ix.hw()),
+        "{what}: the high-water mark is not the last counter written"
+    );
+    OWN_HELD.with(|c| {
+        let (writes, ends) = c.get();
+        c.set((
+            writes + usize::from(!round_end),
+            ends + usize::from(round_end),
+        ));
+    });
 }
 
 fn records_of(

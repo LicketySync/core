@@ -120,10 +120,16 @@ pub struct OpenReport {
     /// clock floor justify by more than `CLOCK_AHEAD_WARNING`, or at or above
     /// `MAX_COUNTER`, and was replaced.
     pub hw_corrupt: bool,
-    /// Entries the store could no longer decode (a phase 1 store).
+    /// Entries the store could no longer decode (a phase 1 store): dropped,
+    /// as a record that fails its checks is, so the open draws a new epoch.
     pub undecodable: usize,
-    /// A new index epoch was drawn, because the open dropped something or
-    /// numbered the records afresh.
+    /// A new index epoch was drawn, once, because the open dropped something
+    /// (a stored record or base that failed its checks, a record another
+    /// stored record replaces or that expired, a base slot whose record is
+    /// gone, an entry the store could not decode) or numbered the records
+    /// afresh (`protocol.md` 4.4, "Opening a folder"; 4.7 item 8). A store
+    /// with no epoch, none stored or its metadata one of the entries it could
+    /// not decode, gets its first epoch, not a redraw, and this stays false.
     pub epoch_redrawn: bool,
     /// A stored local sequence number was 0, above `MAX_LOCAL_SEQ` or
     /// repeated, or the stored next one past `MAX_LOCAL_SEQ + 1`: every

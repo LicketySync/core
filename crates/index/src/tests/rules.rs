@@ -14,7 +14,7 @@ use licketysync_protocol::exchange::Prefix;
 use licketysync_protocol::limits::{MAX_COUNTER, MAX_REPLACES, TOMBSTONE_HORIZON};
 use licketysync_protocol::record::{PathError, Record};
 
-use super::kit::{cleanup, dev, file, forge, round, sealed_file, Dev, Rng, SEC, T0};
+use super::kit::{cleanup, dev, file, forge, round, sealed_file, Dev, Rng, DAY, SEC, T0};
 use licketysync_protocol::connection::ReconcileServe;
 
 use crate::{Change, Place, StoredMeta, WriteError};
@@ -833,7 +833,9 @@ fn noting(paths: &[&str]) -> (Dev, Vec<RecordHash>) {
     (w, stale)
 }
 
-/// An empty batch signs no record and drops none, and is no error.
+/// An empty batch is a no-op: it signs no record, drops none, stages nothing
+/// and is no error (the high-water mark and the counter ceiling: F-1's test,
+/// below).
 #[test]
 fn an_empty_batch_writes_no_record() {
     let mut d = Dev::writer(0xd0);
@@ -841,6 +843,48 @@ fn an_empty_batch_writes_no_record() {
     let w = d.write(&[]).unwrap();
     assert!(w.records.is_empty() && w.dropped.is_empty() && !w.cleanup);
     assert_eq!(d.all(), [a].into_iter().collect());
+}
+
+/// F-1: an empty batch leaves the high-water mark as it was, since no record
+/// takes a counter (4.4, "The writer's rule": the mark is the greatest
+/// counter of a record held or written), and stages nothing, with the clock
+/// a day ahead of the mark (it raised the mark to the clock less one, staged
+/// that, and so carried a fast clock into the next write's counter, TM-40);
+/// and it is no error at the counter ceiling (it was `CounterExhausted`).
+/// A read or sealed holder's is still refused.
+#[test]
+fn an_empty_batch_leaves_the_high_water_mark_and_stages_nothing_f1() {
+    let mut d = Dev::writer(0xd0);
+    d.put("a", 1);
+    let hw = d.ix.hw();
+    d.clock = hw + DAY;
+    let clock = d.clock;
+    let mut txn = d.ix.begin();
+    assert_eq!(
+        txn.write(&[], clock, &mut |b| b.fill(1)),
+        Ok(crate::Written::default())
+    );
+    assert_eq!(txn.index().hw(), hw, "the mark where it was");
+    assert!(txn.finish().0.is_empty(), "nothing staged");
+    // Committed, then the clock back: the next write takes the clock's
+    // counter, not the fast clock's.
+    d.write(&[]).unwrap();
+    assert_eq!(d.ix.hw(), hw);
+    d.clock = hw + SEC;
+    let b = d.put("b", 2);
+    assert_eq!(d.ix.record(&b).unwrap().dot.unwrap().counter, hw + SEC);
+    // At the counter ceiling: no error, nothing staged.
+    d.ix.s.meta.hw = MAX_COUNTER;
+    let mut txn = d.ix.begin();
+    assert_eq!(
+        txn.write(&[], clock, &mut |b| b.fill(1)),
+        Ok(crate::Written::default())
+    );
+    assert!(txn.finish().0.is_empty(), "nothing staged at the ceiling");
+    for tier in [Tier::Read, Tier::Sealed] {
+        let mut x = Dev::new(tier, 0xa0);
+        assert_eq!(x.write(&[]), Err(WriteError::NotWriteKey), "{tier:?}");
+    }
 }
 
 /// The writer's rule (4.4): the records of one commit take consecutive

@@ -130,11 +130,12 @@ pub(crate) fn open(
             report.opens_at = Some(greatest - CLOCK_RULE_LIMIT);
         }
     }
-    // The epoch: as stored, redrawn once when the open dropped anything or
-    // numbered the records afresh.
+    // The epoch: as stored, redrawn once when the open dropped anything (the
+    // entries the store could not decode included, F-2) or numbered the
+    // records afresh.
     if ix.s.meta.epoch == 0 {
         ix.s.meta.epoch = draw_epoch(rng);
-    } else if silent || report.renumbered || !dropped.is_empty() {
+    } else if silent || report.renumbered || !dropped.is_empty() || report.undecodable > 0 {
         ix.s.meta.epoch = draw_epoch(rng);
         report.epoch_redrawn = true;
     }

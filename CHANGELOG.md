@@ -6,6 +6,57 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Index: fix the two bugs the mutants of the first batch found (F-1, F-2; both Low, confirmed by
+  both reviews of that batch, the coordinator's ruling 7), each with a regression test named after
+  it that fails without its fix.
+  - F-1, an empty batch raised the high-water mark (`protocol.md` §4.4, "The writer's rule": the
+    mark is the greatest counter of a record held or written). With the clock ahead of the mark,
+    `Txn::write` of no change raised the mark to the clock less one, a counter no record holds, and
+    staged it; at the counter ceiling it was refused with `CounterExhausted`. That could raise a
+    false "corrupt high-water mark" at the next open after the clock was set back by more than a
+    day, and carried a briefly fast clock into the counters written after it (TM-40). An empty
+    batch now returns at once after the write-key check, signs nothing, stages nothing and is no
+    error, at the ceiling too; a read or sealed holder's is still refused. The explicit raises of
+    the mark after a write's records and a round's end's cleanups are gone, since holding each
+    record already raises the mark to its counter (they were the equivalent mutants `write.rs`
+    851 and 998), and so is the `total > 0` guard of the batch's ceiling check, which the early
+    return made dead (the check now subtracts with saturation, as the round's end's does); the
+    round's end's cleanups take their counters from a range zipped with them, the raise having
+    been the only reader of its counter after the loop. The engine never writes an empty batch,
+    and no caller relied on the raise.
+  - F-2, an open that found entries the store could not decode drew no new index epoch, though
+    §4.4 ("Opening a folder": such bytes are dropped as a record that fails its checks is), §4.5,
+    §4.7 item 8 ("An open that dropped anything draws a new index epoch, once") and TM-9 say it
+    must, so that every peer reconciles and sends again what the store lost. It applies today: the
+    engine's store already counts such entries. The open now draws one, once, and reports it in
+    `epoch_redrawn` (a store with no epoch, its metadata among the entries it could not decode
+    included, gets its first epoch instead, and the flag stays false). For phase 1: the store
+    leaves the entries it cannot decode in storage, of every kind (per-peer state and the markers
+    of chunks to free too), so one that stays damaged redraws the epoch at every open, once each
+    open, a cost TM-22 already bounds; phase 1's store, its damaged-store problem code and
+    `licketysync doctor` should repair or remove them, and count the entries that carry records
+    apart from the others.
+  - Every record this device signs is held: a write's records and cleanups, and a round's end's
+    cleanups, each come back held with its local sequence number, which the `.ok()` on holding
+    them relies on and the removed raises had hidden. `sign_and_hold` and `end_round` now state
+    it and why (the signed record passed a reader's steps 1 and 7 before signing returned it;
+    step 7 keeps an applied held record's vector entries below its counter, at most the mark, so
+    nothing held covers a fresh counter, and a cleanup has no path tag or path to be covered at;
+    nothing can name a hash that did not exist). The test kit checks it after every write and
+    round's end, with the mark at the last counter written, and
+    `every_record_this_device_signs_is_held` runs it over random histories that each start with a
+    round's end that has a note to clean up.
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, `--timeout-multiplier 2
+    --minimum-test-timeout 300`): `write.rs` with
+    `-F 'sign_and_hold|sign_plans|end_round|Txn<.*>::write'`, 28 tested, 19 caught, 9 unviable,
+    none missed or timed out (851 and 998 gone with the code, and the guard's 741 with it);
+    `open.rs`, 60 tested, 53 caught, 7 unviable, none missed or timed out, `replace > with <` in
+    the new condition caught by the F-2 test alone.
+  - Reviewed 2026-11-13 by a1292c2a800f8e08e (clean) and ab5b4ed68dcfa1e19 (clean), and for
+    security by ac6435a24f7f0a627 (clean; its recommended test and the reviewers' doc points
+    taken, then blocked by two doc points, now fixed; confirm: clean). Author a227cffbad659a18e.
+    Landed as one squashed commit.
+
 - Index: tests that catch 31 of the 33 mutants of the index crate's first batch that the Mutants
   run of 2026-11-12 (43341050834, on 59783b1) found surviving, under the owner's mutation-testing
   mandate of 2026-11-08 ("It's a mandate that we must be safe and secure."). Tests, and one count
