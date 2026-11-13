@@ -1193,11 +1193,14 @@ message CleanupMeta {
   at least a year after it arrived at the write holder that signs that watermark (sooner while a
   write holder's clock is wrong or faked, `threat-model.md` TM-40; later while forgetting is held
   back, expiry below), however often its file is written meanwhile, and the cost is that a stale
-  copy offered again after its group stopped applying stays at the sealed peer until then. A folder
-  nobody writes to forgets too, since a watermark goes by its signer's calendar and not by the
-  folder's writes. And it names, of the records one peer offered (by the device ID its
-  DeviceProof proved), at most `MAX_PEER_NAMES` (1 048 576) in any `PEER_NAMES_WINDOW` (30 days) as
-  its own wall clock counts, in writes and cleanups together (the cap is the coordinator's ruling of
+  copy offered again after its group stopped applying stays at the sealed peer until then. A
+  watermark goes by its signer's calendar, but a write holder signs only when a deletion, or a
+  cleanup with a `because`, is old enough to pass, so a folder in which nothing is deleted any more
+  keeps the cleanups of its last year until the next deletion's watermark (expiry, "When a write
+  holder signs one"): storage, never a file. And it names, of the records one peer offered (by the
+  device ID its DeviceProof proved), at most `MAX_PEER_NAMES` (1 048 576) in any
+  `PEER_NAMES_WINDOW` (30 days) as its own wall clock counts, in writes and cleanups together (the
+  cap is the coordinator's ruling of
   2026-10-25, for the owner's review, and its value the author's: enough for a NAS back from a long
   absence over a folder of a million files, little enough that one peer identity costs at most about
   36 MB of cleanups a month; the window's 30 days are the spec author's choice, for the owner's
@@ -3424,7 +3427,8 @@ interval in section 5's constants is a vector.
    version, and an archived version, each with a counter below `H` (none expired); the cleanup
    carrying `H` lost from the store at rest (`H` lower until it is fetched again, deletions the
    peers forgot held meanwhile, and the same records once it is back); a folder in which nobody
-   writes, holding a deletion and then a watermark above it (the deletion expired all the same);
+   writes, holding a deletion and then a watermark above it that a write holder signed earlier
+   (the deletion expired all the same);
    and **the counter ceiling**: a record at `MAX_COUNTER` (applied; the device's next counter would
    pass it, so it writes nothing more and raises the issue that the folder must be shared again,
    the dishonest-writer residual of 4.4 "The counter ceiling") and one at `MAX_COUNTER` + 1 (a
@@ -3882,13 +3886,15 @@ held for less (the owner's decision of 2026-11-12, "Wait, never early"). It does
 been switched on for the whole year, only when it signs. Every device that receives the watermark
 then forgets the same deletions, whatever its own clock says, and ignores any of them that it is
 sent again. Cleanup messages are forgotten the same way (the owner's decision of 2026-11-12; it was
-30 days). So every device that holds the same records forgets the same deletions, and a folder in
-which nobody writes forgets them too. Each device with the write key can sign such a message once a
-day, about 400 bytes, kept a year or more: in a folder with 64 such devices, about 9 MB. Once
-deletions stop, the devices stop signing: no device signs only to forget earlier messages of this
-kind, its own or another device's, nor the cleanups that tell a NAS to forget deletions already
-forgotten, so the last year's stay until a watermark brought by the next deletion forgets them
-(the coordinator's rulings of 2026-11-12, for the owner's review).
+30 days). So every device that holds the same records forgets the same deletions. Each device with
+the write key can sign such a message once a day, about 400 bytes, kept a year or more: in a folder
+with 64 such devices, about 9 MB. A device signs only when the deletion, or the cleanup with a
+`because`, that it passes is old enough, so once deletions stop, the devices stop signing: no device
+signs only to forget earlier messages of this kind, its own or another device's, nor the cleanups
+that tell a NAS to forget deletions already forgotten. So a folder in which nobody deletes any more
+still holds the last year's such messages, at every device, until a watermark that the next
+deletion, or a cleanup with a `because`, brings forgets them. That costs a little storage, never a
+file (the coordinator's rulings of 2026-11-12, for the owner's review).
 
 Forgetting can come later than a year, and nothing promises otherwise. A deletion that reaches a
 device late, dated before others it holds, holds back that device's forgetting of the later ones

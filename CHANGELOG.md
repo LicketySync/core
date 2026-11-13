@@ -6,6 +6,21 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Spec: count the six connectivity switches in TM-25, and say what a folder keeps once deletions
+  stop. Spec text only. TM-25 listed "the first five" of the plan's per-folder switches; it now says
+  the plan lists all six (the hole-punch level too) and that a new folder starts from the
+  device-wide settings (the owner's decisions of 2026-11-10 and 2026-11-11). `protocol.md` §4.4
+  ("Cleanup") and §9 said a folder in which nobody writes forgets its deletions too, which the
+  coordinator's ruling of 2026-11-12 contradicts: a write holder signs only when its candidate
+  passes a deletion or a cleanup with a `because`, so once deletions stop no one signs, and the
+  watermark-only and case-(c) cleanups of the last year stay held at every tier until the next
+  deletion's watermark. Both now say so, and that it costs storage, never a file; TM-40 lists it
+  with the other ways forgetting comes late; the §8 vector of a folder in which nobody writes
+  says its watermark was signed earlier, and TM-22 and the other §8 vectors already agreed.
+  - Reviewed 2026-11-12 by a3748f41ed973e0ea (blocked by one, a line width, now fixed; a nit taken)
+    and a0e386c3000d820df (blocked by one, the entry's place, now fixed; confirm: clean). Author
+    a0e9f6d9ef6b17df4. Landed as one squashed commit.
+
 - Spec: forget deletions by a signed watermark, and drop the clock rule and expiry by the folder's
   own time (the owner's decisions of 2026-11-08, after the research on removing the protocol's
   dependence on clocks: "Switch", "After 365 days" and "Loose 10,000-year limit"; their answers

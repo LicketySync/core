@@ -1185,8 +1185,9 @@ able to be individually configured for hole punch, plus there should be global c
 allowing direct connect, DHT, etc. global settings set defaults. Folders can override."). Every
 connectivity switch has a device-wide default that each folder may override: LAN discovery, direct
 connections, the DHT, public relays, Tor, and the hole-punch level (below); the plan's "Connectivity
-per folder" lists the first five, with their device-wide defaults under Settings → Connectivity.
-Offering to relay and offering to coordinate stay device-wide. A connection serves a folder only as
+per folder" lists all six, with their device-wide defaults under Settings → Connectivity, and a
+new folder starts from the device-wide settings (the owner's decision of 2026-11-11). Offering to
+relay and offering to coordinate stay device-wide. A connection serves a folder only as
 that folder's own settings, or the defaults it keeps, allow, and on a connection they do not allow
 the folder is treated as paused (`protocol.md` §3.1, §3.5).
 
@@ -1672,9 +1673,12 @@ dishonest writer can keep forgetting from moving at all (section 3.6); a peer th
 holder's only link, or a network attacker that cuts it off, can release deletions to it slowly
 (sections 3.3 and 3.1); and a write holder with no monotonic clock that counts time asleep (a
 browser, phase 6, whose `performance.now()` may pause while the device sleeps) can sign late after
-a sleep (`protocol.md` §4.4, "When a write holder signs one"), all of which costs storage and never
-a file (the owner's decisions of 2026-11-12, "Wait, never early" and, on a slow release, "Accept,
-documented"). The clock rule of
+a sleep (`protocol.md` §4.4, "When a write holder signs one"); and, once deletions stop, a folder
+keeps the watermark-only and case-(c) cleanups of its last year, since no write holder signs only to
+forget them, until a watermark that the next deletion, or a cleanup with a `because`, brings (the
+coordinator's ruling of 2026-11-12), all of which costs storage and never a file (the owner's
+decisions of 2026-11-12, "Wait, never early" and, on a slow release, "Accept, documented"). The
+clock rule of
 2026-10-25 is gone (the owner's decision of 2026-11-08): no Hello carries a clock, no device refuses
 a peer or a record for its clock, and no store is kept closed for one; its remedy (unlink, fix the
 clock, add the folder again), the residuals that remedy left and the fast-clock warning are gone
