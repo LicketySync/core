@@ -534,6 +534,80 @@ fn a_since_reply_with_nothing_to_send_is_one_empty_page() {
     assert_eq!((p.records.len(), p.through), (0, 1));
 }
 
+/// A counted push for a peer without per-peer state creates none, whatever
+/// its epoch and `through` (4.5, "Per-peer state" and "Cursors": the cursor
+/// and its epoch come from a round's end, and pushes move it on from there),
+/// so at `MAX_PEER_STATES` it evicts no peer's state (TM-22). Before, a push
+/// of epoch 0, which the wire refuses, made `{epoch 0, cursor through}`.
+#[test]
+fn a_counted_push_for_a_peer_without_state_creates_none_whatever_its_epoch() {
+    let mut a = Dev::writer(0xa0);
+    for epoch in [0, 1, 5, u64::MAX] {
+        for through in [0, 1, 12, MAX_LOCAL_SEQ] {
+            let mut txn = a.ix.begin();
+            txn.cursor_advanced(dev(1), epoch, through);
+            let (changes, pending) = txn.finish();
+            assert!(changes.is_empty(), "epoch {epoch}, through {through}");
+            pending.commit();
+            assert!(
+                a.ix.peer(&dev(1)).is_none(),
+                "epoch {epoch}, through {through}"
+            );
+        }
+    }
+    // At the cap.
+    let mut txn = a.ix.begin();
+    for i in 0..MAX_PEER_STATES {
+        let mut d = [0u8; 32];
+        d[..4].copy_from_slice(&u32::try_from(i).unwrap().to_be_bytes());
+        txn.round_ended(
+            licketysync_keys::DeviceId(d),
+            true,
+            Some((1, 1)),
+            T0 + i as u64,
+        );
+    }
+    txn.finish().1.commit();
+    let before = a.ix.s.peers.clone();
+    let mut txn = a.ix.begin();
+    txn.cursor_advanced(dev(0xff), 0, 5);
+    txn.cursor_advanced(dev(0xff), 1, 5);
+    let (changes, pending) = txn.finish();
+    assert!(changes.is_empty());
+    pending.commit();
+    assert_eq!(a.ix.s.peers, before, "none made, none evicted");
+}
+
+/// A counted push raises the cursor held for its epoch to its `through`,
+/// and never lowers it; a push of another epoch moves nothing (4.5,
+/// "Cursors").
+#[test]
+fn a_counted_push_raises_the_cursor_of_its_epoch_and_never_lowers_it() {
+    let mut a = Dev::writer(0xa0);
+    let mut txn = a.ix.begin();
+    txn.round_ended(dev(1), true, Some((5, 9)), T0);
+    txn.finish().1.commit();
+    let state = *a.ix.peer(&dev(1)).unwrap();
+    for (epoch, through) in [(5, 0), (5, 3), (5, 9), (4, 99), (6, 99), (0, 99)] {
+        let mut txn = a.ix.begin();
+        txn.cursor_advanced(dev(1), epoch, through);
+        let (changes, pending) = txn.finish();
+        assert!(changes.is_empty(), "epoch {epoch}, through {through}");
+        pending.commit();
+        assert_eq!(a.ix.peer(&dev(1)), Some(&state));
+    }
+    let mut txn = a.ix.begin();
+    txn.cursor_advanced(dev(1), 5, 12);
+    let (changes, pending) = txn.finish();
+    let raised = crate::PeerState {
+        cursor: 12,
+        ..state
+    };
+    assert_eq!(changes.peers, vec![(dev(1), Some(raised))]);
+    pending.commit();
+    assert_eq!(a.ix.peer(&dev(1)), Some(&raised));
+}
+
 #[test]
 fn a_record_parsed_has_its_key_in_the_digests() {
     let r = spread(1).pop().unwrap();

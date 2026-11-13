@@ -6,6 +6,41 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Index: remove by simpler code the two equivalent mutants that the second batch's tests left
+  (`serve.rs` 123:56 and `index.rs` 964:44, equivalent by both reviews of that batch; the
+  coordinator's ruling 5), rather than skip them.
+  - `Index::since_plan` (`protocol.md` §4.5, "Serving an `IndexRequest`"): a reset's `redraw` is
+    now `epoch == self.epoch()` alone. The reset is served only when the epoch is another's or
+    `since` is above the local sequence, so with this side's epoch `since > local` already held,
+    and its `>` with `>=` changed nothing. No behaviour changed.
+  - `Txn::cursor_advanced` (§4.5, "Per-peer state" and "Cursors": a round's end sets the cursor
+    and its epoch, and pushes move it on from there): a counted push now acts only on per-peer
+    state already held for its epoch, raising the cursor to its `through` with `max` (a state left
+    as it was is neither logged nor stored, as before). A push for a peer without state creates
+    none. Before, one of epoch 0 made `{epoch 0, cursor through}`, a cursor no round's end set,
+    and at `MAX_PEER_STATES` it could evict a real peer's state (TM-22); for any other epoch it
+    did nothing, as now. No caller relied on it: the wire refuses epoch 0 (`IndexRequest`,
+    `ReconcileReply`, `IndexRecords`), the connection counts pushes only from a round's end, and
+    the engine applies that round's `RoundCompleted` before the `CursorAdvanced` it leads to, in
+    one queue per folder; the fuzz target `index_ops` pushes only with epoch 1, which made no
+    state before either, and the other tests push after a round's end.
+    `a_counted_push_for_a_peer_without_state_creates_none_whatever_its_epoch` fails
+    without the change (epoch 0, `through` 1, and at the cap);
+    `a_counted_push_raises_the_cursor_of_its_epoch_and_never_lowers_it` holds the new form to
+    what the old guard did.
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, `--timeout-multiplier 2
+    --minimum-test-timeout 300`), `-f` on `serve.rs` and `index.rs` with `-F` on `since_plan` and
+    `cursor_advanced`, 16 mutants (the two files' field deletions included, whatever the `-F`),
+    on 32321a2 with this change: 11 caught, 5 unviable, none missed or timed out; with
+    `--cap-lints true`, 15 caught, 1 unviable (`since_plan` replaced with `Default::default()`:
+    `SincePlan` has none), none missed or timed out. On eedfd6d, without batch 2's tests, each run
+    also missed `index.rs` 560:34 (a field deletion in `Txn::renumber`), which those tests kill.
+    `since_plan`'s new `==` with `!=` (124:31) is caught by `vector_digests` and
+    `a_request_for_another_epoch_is_reset_without_a_new_epoch_whatever_its_since`;
+    `cursor_advanced`'s `==` with `!=`, its body replaced with `()` and its `cursor` field
+    deleted are caught by `vector_digests` and the second test above, the last two unviable
+    without `--cap-lints true` (they leave a binding unused, which the workspace lints deny).
+
 - CI: cap the lints in every cargo-mutants run, so that the mutants the workspace's denied lints
   hid are tested, under the owner's mutation-testing mandate of 2026-11-08 ("It's a mandate that
   we must be safe and secure."). `Cargo.toml` denies the `dead_code` and `unused` lints, and

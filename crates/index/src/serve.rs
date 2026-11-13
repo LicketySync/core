@@ -120,7 +120,8 @@ impl Index {
             })
         } else {
             SincePlan::Reset {
-                redraw: epoch == self.epoch() && since > local,
+                // Here this side's epoch means `since > local`: it is the whole condition.
+                redraw: epoch == self.epoch(),
             }
         }
     }

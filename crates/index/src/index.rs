@@ -958,12 +958,15 @@ impl Txn<'_> {
         self.forget_peers(clock_us);
     }
 
-    /// A counted push raised `peer`'s cursor (4.5, "Cursors").
+    /// A counted push raised `peer`'s cursor (4.5, "Cursors"): the cursor
+    /// held for the push's epoch rises to `through`, never falls; a peer
+    /// without state, whose cursor only a round's end makes, gets none.
     pub fn cursor_advanced(&mut self, peer: DeviceId, epoch: u64, through: u64) {
-        let mut state = self.ix.s.peers.get(&peer).copied().unwrap_or_default();
-        if state.epoch == epoch && through > state.cursor {
-            state.cursor = through;
-            self.set_peer(peer, state);
+        let held = self.ix.s.peers.get(&peer).copied();
+        if let Some(state) = held.filter(|s| s.epoch == epoch) {
+            // A state left as it was is neither logged nor stored.
+            let cursor = state.cursor.max(through);
+            self.set_peer(peer, PeerState { cursor, ..state });
         }
     }
 
