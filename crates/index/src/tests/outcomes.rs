@@ -6,7 +6,9 @@
 //! (duplicate, expired, obsolete, held, replacing, opaque, from the future,
 //! a record under the device's own ID), with the section 5 row of each, on a
 //! write holder and, where the tier changes nothing, on a read holder given
-//! the same records (`outcomes.json`).
+//! the same records (`outcomes.json`); then expiry on arrival at its horizon,
+//! and step 3's obsolete records: ignored unverified when they replace
+//! nothing held, verified and dropping what they replace otherwise.
 
 use licketysync_keys::RecordHash;
 use licketysync_protocol::connection::Judgement;
@@ -530,4 +532,166 @@ fn a_stale_copy_is_verified_before_it_is_noted_c1_sc1() {
     // Noted once: never verified again while the note lasts.
     let again = w.accept(&garbage(d.signed(&v2))).unwrap();
     assert!(!again.noted);
+}
+
+/// Phase 0's expiry by the folder's own time `G` on arrival (step 3, as the
+/// CHANGELOG's index entry of phase 0 has it: expired once `G` has passed
+/// the record's counter by strictly more than its horizon, 365 days for a
+/// tombstone or tree delete, 30 for a cleanup): one exactly its horizon
+/// behind `G` is held, one a microsecond older is expired. The signed
+/// watermark (`protocol.md` 4.4, "Expiry by the watermark", spec 59783b1)
+/// replaces this rule in phase 1, and this test with it.
+#[test]
+fn a_deletion_or_cleanup_exactly_its_horizon_behind_the_folders_time_is_not_expired() {
+    use licketysync_protocol::limits::CLEANUP_HORIZON;
+    let g = T0 + TOMBSTONE_HORIZON + 10 * SEC;
+    let tombstone = |path: &str, counter: u64| {
+        let mut m = sealed_file(path, dev(2), counter);
+        m.deleted = true;
+        m.size = 0;
+        m.plain_hashes.clear();
+        forge(path, &[], &m, &[])
+    };
+    for mut x in [Dev::reader(0xa1), Dev::writer(0xa0)] {
+        x.clock = g;
+        let late = forge("late", &[chunk(1)], &sealed_file("late", dev(1), g), &[]);
+        assert_eq!(x.judge(&late), Ok(Judgement::Held));
+        assert_eq!(x.ix.folder_time(), g);
+        let at = tombstone("at", g - TOMBSTONE_HORIZON);
+        assert_eq!(x.judge(&at), Ok(Judgement::Held), "a tombstone at it");
+        assert!(x.holds(&at.hash()), "and kept");
+        let past = tombstone("past", g - TOMBSTONE_HORIZON - 1);
+        assert_eq!(
+            x.judge(&past),
+            Ok(Judgement::Expired),
+            "a tombstone past it"
+        );
+        let at = cleanup(
+            dev(3),
+            g - CLEANUP_HORIZON,
+            &[(None, vec![RecordHash([7; 32])])],
+        );
+        assert_eq!(x.judge(&at), Ok(Judgement::Held), "a cleanup at it");
+        assert!(x.holds(&at.hash()), "and kept");
+        let past = cleanup(
+            dev(3),
+            g - CLEANUP_HORIZON - 1,
+            &[(None, vec![RecordHash([8; 32])])],
+        );
+        assert_eq!(x.judge(&past), Ok(Judgement::Expired), "a cleanup past it");
+    }
+}
+
+// Step 3 (`protocol.md` 4.4): a record that something held names, covers or
+// forgets is obsolete only when it replaces nothing held; then it is ignored
+// unverified (TM-22: no peer makes this device verify what changes
+// nothing), and otherwise it is verified and drops what it replaces, and
+// step 6 then leaves it unheld.
+
+/// A cleanup that a held cleanup forgets in a group that applies, and whose
+/// own groups forget nothing held, is obsolete: ignored unverified at every
+/// tier, so a copy with a garbage signature is judged obsolete, not forged.
+#[test]
+fn a_cleanup_a_held_cleanup_forgets_that_forgets_nothing_held_is_obsolete_unverified() {
+    let c1 = cleanup(dev(1), T0 + 10, &[(None, vec![RecordHash([7; 32])])]);
+    let c2 = cleanup(dev(1), T0 + 20, &[(None, vec![c1.hash()])]);
+    for mut x in [Dev::writer(0xa0), Dev::reader(0xa1), Dev::sealed(0xa2)] {
+        assert_eq!(x.judge(&c2), Ok(Judgement::Held));
+        let a = x.accept(&garbage(&c1));
+        assert_eq!(
+            a.map(|a| a.judgement),
+            Ok(Judgement::Obsolete),
+            "unverified"
+        );
+        assert!(!x.holds(&c1.hash()));
+    }
+}
+
+/// A cleanup that a held cleanup forgets, but whose own group that applies
+/// forgets a record held, replaces something: it is verified, drops that
+/// record (step 6), and is not held, since the held cleanup forgets it.
+#[test]
+fn a_cleanup_a_held_cleanup_forgets_still_drops_what_its_own_groups_forget() {
+    let mut d = Dev::writer(0xd0);
+    let v = d.put("f", 1);
+    let c1 = cleanup(dev(1), T0 + 10, &[(None, vec![v])]);
+    let c2 = cleanup(dev(1), T0 + 20, &[(None, vec![c1.hash()])]);
+    for mut x in [Dev::writer(0xa0), Dev::reader(0xa1), Dev::sealed(0xa2)] {
+        x.take(&d, &[v]);
+        assert_eq!(x.judge(&c2), Ok(Judgement::Held));
+        assert_eq!(x.accept(&forged(&c1)), Err(Cause::Forged), "verified");
+        assert!(x.holds(&v), "nothing staged");
+        let a = x.accept(&c1).unwrap();
+        assert!(!a.judgement.held(), "not held: c2 forgets it");
+        assert!(a.rows.contains(&Cause::ReplacesHeld), "{:?}", a.rows);
+        assert_eq!(a.dropped, vec![v], "what it forgets goes all the same");
+        assert!(!x.holds(&v) && !x.holds(&c1.hash()));
+    }
+}
+
+/// A version that a record held at its tag names, but that covers another
+/// version held there, replaces something at a read or write holder: it is
+/// verified, drops the version it covers (step 6), and is not held, since
+/// the held record names it. U by device 1 and W by device 2 are concurrent
+/// heads; V by device 3 covers U, and W names V.
+#[test]
+fn a_version_a_held_record_names_still_drops_the_versions_at_its_tag_it_covers() {
+    let u = forge("f", &[chunk(1)], &sealed_file("f", dev(1), T0), &[]);
+    let mut mv = sealed_file("f", dev(3), T0 + 3);
+    mv.vector = vec![entry(dev(1), T0)];
+    let v = forge("f", &[chunk(3)], &mv, &[]);
+    let w = forge(
+        "f",
+        &[chunk(2)],
+        &sealed_file("f", dev(2), T0 + 5),
+        &[v.hash()],
+    );
+    for mut x in [Dev::writer(0xa0), Dev::reader(0xa1)] {
+        assert_eq!(x.judge(&u), Ok(Judgement::Held));
+        assert_eq!(x.judge(&w), Ok(Judgement::Held));
+        assert_eq!(x.accept(&forged(&v)), Err(Cause::Forged), "verified");
+        let a = x.accept(&v).unwrap();
+        assert!(!a.judgement.held(), "not held: w names it");
+        assert!(a.rows.contains(&Cause::ReplacesHeld), "{:?}", a.rows);
+        assert_eq!(a.dropped, vec![u.hash()], "it covers u");
+        assert!(!x.holds(&u.hash()) && !x.holds(&v.hash()) && x.holds(&w.hash()));
+    }
+}
+
+/// A version covered at its tag replaces nothing held when it covers no
+/// version held at its tag, whatever it covers beneath its path: step 3
+/// judges a version by its tag, and only a tree delete by what lies
+/// beneath it. D, a directory version at `a` by device 2, covers V, a
+/// directory version there by device 3 whose vector covers U, a file in
+/// `a`: V is obsolete, ignored unverified at a read holder (a write holder
+/// would verify it to note it), and U stays.
+#[test]
+fn a_version_covered_at_its_tag_is_obsolete_unverified_whatever_it_covers_beneath_it() {
+    let directory = |device, counter| licketysync_protocol::messages::SealedMeta {
+        kind: 2,
+        size: 0,
+        mode: 0o755,
+        plain_hashes: vec![],
+        ..sealed_file("a", device, counter)
+    };
+    let u = forge("a/x", &[chunk(1)], &sealed_file("a/x", dev(1), T0), &[]);
+    let mut mv = directory(dev(3), T0 + 5);
+    mv.vector = vec![entry(dev(1), T0)];
+    let v = forge("a", &[], &mv, &[]);
+    let mut md = directory(dev(2), T0 + 10);
+    md.vector = vec![entry(dev(3), T0 + 5)];
+    let d = forge("a", &[], &md, &[]);
+    let mut x = Dev::reader(0xa1);
+    assert_eq!(x.judge(&u), Ok(Judgement::Held));
+    assert_eq!(x.judge(&d), Ok(Judgement::Held));
+    let a = x.accept(&garbage(&v));
+    assert_eq!(
+        a.map(|a| a.judgement),
+        Ok(Judgement::Obsolete),
+        "unverified"
+    );
+    assert!(x.holds(&u.hash()) && x.holds(&d.hash()));
+    let a = x.accept(&v).unwrap();
+    assert_eq!(a.judgement, Judgement::Obsolete);
+    assert!(a.dropped.is_empty() && x.holds(&u.hash()));
 }

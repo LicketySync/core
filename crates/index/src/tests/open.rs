@@ -8,8 +8,8 @@
 //! tier, once per open, with one new epoch; the ordered crash between a
 //! change's records and its removals is repaired; a store that refuses a
 //! change leaves the index exactly as it was; the stored high-water mark is
-//! checked; per-peer state past its horizon goes; the result is the same on
-//! any number of verifying threads.
+//! checked (and a sealed holder keeps none); per-peer state past its horizon
+//! goes; the result is the same on any number of verifying threads.
 
 use licketysync_keys::Tier;
 use licketysync_protocol::limits::{CLOCK_AHEAD_WARNING, MAX_COUNTER, PEER_STATE_HORIZON};
@@ -325,6 +325,7 @@ fn the_memory_store_counts_and_modes() {
     assert!(m.is_empty() && m.meta().is_none());
     let mut d = Dev::writer(0xd0);
     d.put("a", 1);
+    d.put("b", 2);
     m.commit(
         &d.store
             .load()
@@ -336,8 +337,37 @@ fn the_memory_store_counts_and_modes() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(m.len(), 1);
+    assert_eq!(m.len(), 2, "two records held");
+    assert!(!m.is_empty());
     assert_eq!(Commit::default(), Commit::Atomic);
+}
+
+/// A sealed holder keeps no high-water mark (4.4, "Opening a folder":
+/// "Sealed peers keep no mark, since they write nothing"; "The writer's
+/// rule": the mark is the greatest counter of an applied record held or
+/// written, and a sealed holder applies none and writes none): a mark its
+/// store holds, within the bounds a key holder's open checks or past them,
+/// gives no mark after the open, and the store is given the metadata with
+/// none. Whether the open reports such a mark as corrupt the spec does not
+/// say (a question in the CHANGELOG), so this test does not pin it.
+#[test]
+fn a_sealed_holder_keeps_no_high_water_mark_whatever_its_store_holds() {
+    let mut d = Dev::writer(0xd0);
+    d.put("a", 1);
+    for stored_hw in [d.ix.hw(), MAX_COUNTER] {
+        let mut s = Dev::sealed(0xa2);
+        s.take_all(&d);
+        assert_eq!(s.ix.hw(), 0, "none on arrival");
+        let meta = s.store.meta().unwrap();
+        s.store.set_meta(StoredMeta {
+            hw: stored_hw,
+            ..meta
+        });
+        let report = s.reopen();
+        assert_eq!(s.ix.hw(), 0, "{stored_hw}");
+        assert_eq!(report.changes.meta, Some(StoredMeta { hw: 0, ..meta }));
+        assert_eq!(s.ix.len(), 1, "the record held as before");
+    }
 }
 
 /// Opens `d`'s stored state as changed by `change`, at `d`'s clock.

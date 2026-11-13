@@ -5,8 +5,9 @@
 //! One focused test per rule the review found no test of (its I-3, I-5 and
 //! IR-1): the write refusals, each staging nothing; the two fixes of the
 //! first round that had no regression test; and the rules of the open, of
-//! writing, of notes and the end of a round, of expiry, of serving and of the
-//! undo log, each of which a test here fails without.
+//! writing, of notes and the end of a round, of expiry, of serving, of the
+//! undo log, and of the local sequence and per-peer state, each of which a
+//! test here fails without.
 
 use licketysync_keys::records::SignedRecord;
 use licketysync_keys::{RecordHash, Tier};
@@ -638,6 +639,62 @@ fn records_replies_and_pushes_take_several_pages() {
     assert_eq!(sub, all);
 }
 
+/// A Since reply is done once its last page is built, and not before
+/// (4.5, "Serving an `IndexRequest`": pages, `more` on every page but the
+/// last): three records a page each are three pages, the first two with
+/// `more`.
+#[test]
+fn a_since_reply_is_done_only_once_its_last_page_is_built() {
+    let mut a = Dev::writer(0xa0);
+    for i in 0..3u8 {
+        a.put(&format!("p{i}"), i);
+    }
+    let crate::SincePlan::Pages(mut reply) = a.ix.since_plan(a.ix.epoch(), 0) else {
+        panic!("pages")
+    };
+    assert!(!reply.is_done(), "no page built yet");
+    let mut pages = Vec::new();
+    loop {
+        let page = a.ix.since_page(
+            &mut reply,
+            1,
+            1,
+            licketysync_protocol::limits::DEFAULT_MESSAGE_SIZE,
+        );
+        pages.push((page.records.len(), page.more));
+        assert_eq!(reply.is_done(), !page.more, "page {}", pages.len());
+        if !page.more {
+            break;
+        }
+        assert!(pages.len() < 3, "the reply ends");
+    }
+    assert_eq!(pages, vec![(1, true), (1, true), (1, false)]);
+}
+
+/// A request for another epoch is answered with a reset that draws no new
+/// epoch, whatever its `since` (4.5, "Local sequence and epoch": a request
+/// draws one only when it asks with this side's epoch and a `since` above
+/// its local sequence); with this side's epoch, such a `since` draws one.
+#[test]
+fn a_request_for_another_epoch_is_reset_without_a_new_epoch_whatever_its_since() {
+    use licketysync_protocol::limits::MAX_LOCAL_SEQ;
+    let mut a = Dev::writer(0xa0);
+    a.put("x", 1);
+    let (epoch, local) = (a.ix.epoch(), a.ix.local_seq());
+    let other = if epoch == 1 { 2 } else { 1 };
+    for since in [0, local, local + 1, MAX_LOCAL_SEQ] {
+        assert_eq!(
+            a.ix.since_plan(other, since),
+            crate::SincePlan::Reset { redraw: false },
+            "since {since}"
+        );
+    }
+    assert_eq!(
+        a.ix.since_plan(epoch, local + 1),
+        crate::SincePlan::Reset { redraw: true }
+    );
+}
+
 // IR-1: the undo log.
 
 /// A dropped transaction gives back the whole state exactly: notes made and
@@ -1077,4 +1134,68 @@ fn a_rounds_end_pages_its_names_across_groups_by_the_record() {
     let mut want = vec![f[0], f[1], f[2], g[0]];
     want.sort_unstable();
     assert_eq!(named, want, "each named once");
+}
+
+// The local sequence and per-peer state (4.5).
+
+/// The records held, with their local sequence numbers, in that order.
+fn numbers(d: &Dev) -> Vec<(RecordHash, u64)> {
+    d.ix.records().map(|r| (r.hash, r.seq)).collect()
+}
+
+/// 4.5, "Local sequence and epoch": a record may take `MAX_LOCAL_SEQ`
+/// itself, with nothing numbered afresh and the epoch kept; the next number
+/// would pass it, so every record held is numbered afresh from 1 in its
+/// present order under a new epoch, and the store keeps the new numbers (a
+/// reopen gives the same). The records held before are not numbered 1, 2,
+/// ... to begin with (the first was dropped), so a renumbering that left
+/// them their numbers would show.
+#[test]
+fn the_local_sequence_takes_max_local_seq_then_numbers_every_record_afresh_from_1() {
+    use licketysync_protocol::limits::MAX_LOCAL_SEQ;
+    let mut d = Dev::writer(0xd0);
+    let x1 = d.put("x", 1);
+    let y = d.put("y", 2);
+    let x2 = d.put("x", 3);
+    assert!(!d.holds(&x1));
+    assert_eq!(numbers(&d), vec![(y, 2), (x2, 3)]);
+    d.ix.s.meta = StoredMeta {
+        next_seq: MAX_LOCAL_SEQ,
+        ..d.ix.s.meta
+    };
+    let epoch = d.ix.epoch();
+    let z = d.put("z", 4);
+    assert_eq!(numbers(&d), vec![(y, 2), (x2, 3), (z, MAX_LOCAL_SEQ)]);
+    assert_eq!(d.ix.epoch(), epoch, "nothing numbered afresh");
+    assert_eq!(d.ix.local_seq(), MAX_LOCAL_SEQ);
+    let w = d.put("w", 5);
+    assert_eq!(numbers(&d), vec![(y, 1), (x2, 2), (z, 3), (w, 4)]);
+    assert_ne!(d.ix.epoch(), epoch, "a new epoch");
+    assert_eq!(d.ix.local_seq(), 4);
+    let epoch = d.ix.epoch();
+    let report = d.reopen();
+    assert!(report.is_clean() && !report.epoch_redrawn, "{report:?}");
+    assert_eq!(
+        numbers(&d),
+        vec![(y, 1), (x2, 2), (z, 3), (w, 4)],
+        "the store kept the new numbers"
+    );
+    assert_eq!(d.ix.epoch(), epoch);
+}
+
+/// Per-peer state goes after `PEER_STATE_HORIZON` without a round that
+/// ended (4.5, "Per-peer state"), not at it, at a round's end as at the
+/// open: a state exactly that old stays when another peer's round ends, and
+/// goes a microsecond later.
+#[test]
+fn per_peer_state_at_its_horizon_stays_at_a_rounds_end_and_goes_past_it() {
+    use licketysync_protocol::limits::PEER_STATE_HORIZON;
+    let mut d = Dev::writer(0xd0);
+    let mut txn = d.ix.begin();
+    txn.round_ended(dev(1), true, Some((1, 2)), T0);
+    txn.round_ended(dev(2), true, Some((1, 2)), T0 + PEER_STATE_HORIZON);
+    assert!(txn.index().peer(&dev(1)).is_some(), "at the horizon: kept");
+    txn.round_ended(dev(2), true, Some((1, 2)), T0 + PEER_STATE_HORIZON + 1);
+    assert!(txn.index().peer(&dev(1)).is_none(), "past it: gone");
+    assert!(txn.index().peer(&dev(2)).is_some());
 }

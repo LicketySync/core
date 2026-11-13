@@ -6,6 +6,76 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Index: tests that catch 28 of the 30 mutants of the index crate's second batch that the Mutants
+  run of 2026-11-12 on 9349d4f found surviving (all 30 still survived on eedfd6d), under the
+  owner's mutation-testing mandate of 2026-11-08 ("It's a mandate that we must be safe and
+  secure."). Tests only; no production behaviour changed. Each test checks what the spec states,
+  and each kill was shown by cargo-mutants on its functions under `ci/mutants.sh`'s caps.
+  - Step 3 (`protocol.md` §4.4; TM-22): a record that something held names, covers or forgets is
+    obsolete only when it replaces nothing held, and is then ignored unverified. A cleanup that a
+    held cleanup forgets, whose own groups forget nothing held, and a version covered at its tag,
+    whatever its vector covers beneath its path (only a tree delete is judged by what lies beneath
+    it), are judged obsolete with a garbage signature. A cleanup that a held cleanup forgets but
+    whose own group forgets a record held, and a version that a held record names but that covers
+    a version held at its tag, are verified, drop what they replace (step 6) and are not held.
+  - Phase 0's expiry by the folder's own time on arrival, until the signed watermark (spec
+    59783b1) replaces it in phase 1: a tombstone or a cleanup exactly its horizon behind `G` is
+    held, one a microsecond older is expired.
+  - The local sequence (§4.5): a record takes `MAX_LOCAL_SEQ` itself, nothing numbered afresh and
+    the epoch kept; the next numbers every record held afresh from 1 in its order under a new
+    epoch, records that were not numbered 1, 2, … before, and the store keeps the new numbers.
+  - Serving (§4.5): a Since reply is done at its last page and not before; a request for another
+    epoch is reset without drawing a new epoch, whatever its `since`.
+  - Per-peer state (§4.5): a state exactly `PEER_STATE_HORIZON` old stays at a round's end and goes
+    a microsecond later, as at the open; a peer's `MAX_PEER_NAMES` window ends exactly 30 days
+    (`PEER_NAMES_WINDOW`) after it began, alike when a copy is judged and when the round's end
+    counts names.
+  - The store (§4.7 item 1): a change set of any one persisted part alone is not empty; a record
+    kept only as a base leaves the store with its last base slot, so a reopen has nothing to
+    repair; the memory store counts what it holds; an index is empty until it holds a record; a
+    sealed holder keeps no high-water mark whatever its store holds (§4.4, "Opening a folder":
+    "Sealed peers keep no mark").
+  - Spec questions raised, for the coordinator's queue (no test pins an answer):
+    - What a sealed holder's open does with a stored high-water mark, since §4.4's check of the
+      stored mark ("Opening a folder") names no tier: one within the bounds a key holder's open
+      accepts, one above what the records held and the clock floor justify, and one above
+      `MAX_COUNTER`; and whether it reports any of them as corrupt. The code keeps none of them
+      and reports none; the test pins only that no mark is kept (review A's F-1).
+    - `Judgement::Obsolete`'s doc in the protocol crate ("Something held replaces it and it
+      replaces nothing held: ignored") does not fit the label the index gives a record that is
+      verified, drops what it replaces (step 6) and is then not held because something held names
+      or forgets it (its rows are `ReplacesHeld`, then `Obsolete`). Queued for the protocol crate;
+      the tests assert that such a record is not held and that its rows carry `ReplacesHeld`, not
+      its label (review A's F-2).
+    - `PEER_NAMES_WINDOW` (§4.5, "Stale copies"; §4.4, "at most `MAX_PEER_NAMES` … in any
+      `PEER_NAMES_WINDOW`"): which end of a window is included (the code, and the test that pins
+      it, take 30 days from its start, the start included and the end not); and whether "in any"
+      means every window of that length, which the code's fixed windows, one after another, do
+      not keep: up to twice `MAX_PEER_NAMES` across one boundary (predates this change; review
+      B's N-2).
+  - Equivalent, not skipped (for the reviewers and the coordinator): `serve.rs` 123:56, `replace >
+    with >= in Index::since_plan` (where the reset's `redraw` is computed, the request's epoch
+    being this side's already means its `since` is above the local sequence); and `index.rs`
+    964:44 (958:44 in the run), `replace > with >= in Txn::cursor_advanced` (raising a cursor to
+    the value it has writes the same state, which `State::set_peer` does not even log; without
+    state for the peer the mutant differs only for epoch 0, which the protocol refuses on the
+    wire and never counts).
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, `--timeout-multiplier 2
+    --minimum-test-timeout 300`), every mutant of the covered functions, one file at a time:
+    `index.rs` with `-F` on `Index::is_empty`, `Index::key_holder` and `Txn`'s `next_seq`,
+    `renumber`, `expired`, `peer_names`, `cursor_advanced` and `forget_peers`, 44 tested (the
+    file's field deletions included), 32 caught, 11 unviable, 1 missed (964:44, above); `serve.rs`
+    with `Index::since_plan` and `SinceReply::is_done`, 11 tested, 9 caught, 1 unviable, 1 missed
+    (123:56, above); `state.rs` with `State::replaces_any` and `State::changes`, 24 tested, 19
+    caught, 5 unviable; `store.rs` with `ChangeSet::is_empty`, `MemoryStore::len` and
+    `MemoryStore::is_empty`, 12 tested, 12 caught; none timed out. `index.rs`'s lines are the
+    run's plus 6, moved by the F-1 and F-2 fix. The two equivalent mutants go in the change that
+    follows, which writes both comparisons more simply (the coordinator's ruling 5).
+  - Reviewed 2026-11-13 by a7222cd089df59e4c (blocked by two, a sealed holder's report and a
+    judgement's label pinned where the spec says neither, now fixed; confirm: clean) and
+    a23e89878894b04ba (clean; two nits taken; confirm: clean). Author ae0d453c2ab4bc489. Landed
+    as one squashed commit.
+
 - Index: fix the two bugs the mutants of the first batch found (F-1, F-2; both Low, confirmed by
   both reviews of that batch, the coordinator's ruling 7), each with a regression test named after
   it that fails without its fix.

@@ -5,9 +5,10 @@
 //! The views the engine reads (R10 and R11; the review's I-2), at every
 //! tier: the chunks the folder wants, a file version's content, Status's
 //! `extra_versions` (`protocol.md` 8 item 11), a record's writer fault, the
-//! bases and their refusals, and what a change reports of itself: the chunk
-//! hashes it freed, the paths it touched and whether the folder's wants
-//! changed.
+//! bases and their refusals, whether an index holds anything, and what a
+//! change reports of itself: the chunk hashes it freed, the paths it
+//! touched, whether the folder's wants changed, whether it changed anything
+//! the store keeps, and the records kept only as bases it removes.
 
 use licketysync_keys::{CipherHash, RecordHash, Tier};
 use licketysync_protocol::record::WriterFault;
@@ -434,4 +435,156 @@ fn a_path_view_lists_the_tree_deletes_held_at_its_tag() {
     let mut w = Dev::writer(0xd2);
     w.put("f", 1);
     assert!(w.ix.path("f").unwrap().trees.is_empty());
+}
+
+/// Status's `index_records` and its emptiness (4.7): an index holds nothing
+/// until it holds a record, at every tier, and a reopen of an empty store
+/// holds nothing either.
+#[test]
+fn an_index_is_empty_until_it_holds_a_record() {
+    let mut d = Dev::writer(0xd0);
+    assert!(d.ix.is_empty(), "a new index");
+    assert_eq!(d.ix.len(), 0);
+    let v = d.put("f", 1);
+    for tier in TIERS {
+        let mut x = Dev::new(tier, 0xa0);
+        assert!(x.ix.is_empty(), "{tier:?}: nothing held");
+        x.reopen();
+        assert!(x.ix.is_empty(), "{tier:?}: nothing stored");
+        x.take(&d, &[v]);
+        assert!(!x.ix.is_empty(), "{tier:?}: one record held");
+        assert_eq!(x.ix.len(), 1, "{tier:?}");
+    }
+}
+
+/// What the engine commits (4.7 item 1): a change set is empty only when
+/// nothing the store keeps changed, so a change of any one part alone (a
+/// record put or removed, a record kept only as a base put or removed, a
+/// base slot, the metadata, a peer's state) is never taken for none and
+/// left uncommitted.
+#[test]
+fn a_change_set_is_empty_only_when_nothing_it_keeps_changed() {
+    use crate::{ChangeSet, PeerState, StoredMeta};
+    let mut d = Dev::writer(0xd0);
+    let h = d.put("f", 1);
+    let signed = d.signed(&h).clone();
+    let slot = (super::kit::tag("f"), Place::Path);
+    assert!(ChangeSet::default().is_empty());
+    let one_part = [
+        (
+            "put",
+            ChangeSet {
+                put: vec![(signed.clone(), 1)],
+                ..ChangeSet::default()
+            },
+        ),
+        (
+            "remove",
+            ChangeSet {
+                remove: vec![h],
+                ..ChangeSet::default()
+            },
+        ),
+        (
+            "base_only_put",
+            ChangeSet {
+                base_only_put: vec![signed],
+                ..ChangeSet::default()
+            },
+        ),
+        (
+            "base_only_remove",
+            ChangeSet {
+                base_only_remove: vec![h],
+                ..ChangeSet::default()
+            },
+        ),
+        (
+            "a base slot set",
+            ChangeSet {
+                bases: vec![(slot.clone(), Some(h))],
+                ..ChangeSet::default()
+            },
+        ),
+        (
+            "a base slot cleared",
+            ChangeSet {
+                bases: vec![(slot, None)],
+                ..ChangeSet::default()
+            },
+        ),
+        (
+            "meta",
+            ChangeSet {
+                meta: Some(StoredMeta::default()),
+                ..ChangeSet::default()
+            },
+        ),
+        (
+            "a peer's state set",
+            ChangeSet {
+                peers: vec![(dev(1), Some(PeerState::default()))],
+                ..ChangeSet::default()
+            },
+        ),
+        (
+            "a peer's state dropped",
+            ChangeSet {
+                peers: vec![(dev(1), None)],
+                ..ChangeSet::default()
+            },
+        ),
+    ];
+    for (what, changes) in one_part {
+        assert!(!changes.is_empty(), "{what} alone is a change");
+    }
+}
+
+/// A record kept only as a base (4.4, "Bases") leaves the store with the
+/// last base slot that holds it: the change that moves the slot on removes
+/// it, so the store keeps nothing the index no longer holds, and a reopen
+/// has nothing to repair.
+#[test]
+fn a_record_kept_only_as_a_base_leaves_the_store_with_its_last_slot() {
+    let stored_base_only = |x: &Dev| -> Vec<RecordHash> {
+        x.store
+            .load()
+            .unwrap()
+            .base_only
+            .iter()
+            .map(licketysync_keys::records::SignedRecord::hash)
+            .collect()
+    };
+    for tier in [Tier::Write, Tier::Read] {
+        let mut e = Dev::writer(0xe0);
+        let mut x = Dev::new(tier, 0xa0);
+        let v1 = e.put("f", 1);
+        x.take(&e, &[v1]);
+        x.apply("f");
+        let v2 = e.put("f", 2);
+        x.take(&e, &[v2]);
+        assert!(!x.holds(&v1), "{tier:?}: replaced");
+        assert!(
+            stored_base_only(&x).contains(&v1),
+            "{tier:?}: on the disk, stored only as a base"
+        );
+        // The engine puts v2 on the disk at the path.
+        let mut txn = x.ix.begin();
+        txn.set_base("f", Place::Path, Some(v2)).unwrap();
+        let (changes, pending) = txn.finish();
+        assert_eq!(changes.base_only_remove, vec![v1], "{tier:?}");
+        x.store.commit(&changes).unwrap();
+        pending.commit();
+        assert!(
+            !stored_base_only(&x).contains(&v1),
+            "{tier:?}: gone from the store"
+        );
+        let report = x.reopen();
+        assert!(report.is_clean(), "{tier:?}: {report:?}");
+        assert_eq!(
+            report.changes,
+            crate::ChangeSet::default(),
+            "{tier:?}: nothing left in the store to repair"
+        );
+    }
 }

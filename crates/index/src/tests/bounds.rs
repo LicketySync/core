@@ -15,7 +15,7 @@ use licketysync_keys::RecordHash;
 use licketysync_protocol::connection::Judgement;
 use licketysync_protocol::limits::{CLEANUP_HORIZON, MAX_NOTE_VERIFICATIONS};
 
-use super::kit::{dev, garbage, Dev};
+use super::kit::{dev, garbage, Dev, DAY};
 use crate::{Change, NotNoted};
 
 /// A writer `d` with three versions at each of `paths`, and a write holder
@@ -74,6 +74,35 @@ fn a_peer_at_max_peer_names_is_not_noted_until_its_window_ends() {
     w2.clock += CLEANUP_HORIZON + 1;
     let c = w2.accept(d2.signed(&old2[1])).unwrap();
     assert!(c.noted, "a new window");
+}
+
+/// The window of `MAX_PEER_NAMES` is `PEER_NAMES_WINDOW`, 30 days by the
+/// write holder's wall clock (4.5, "Stale copies"), from the first name
+/// counted in it: a microsecond before it ends the peer is still at its
+/// bound, and when it ends the peer's names count afresh, alike when a
+/// copy it offers is judged and when its names are counted at a round's
+/// end.
+#[test]
+fn a_peers_names_window_ends_exactly_30_days_after_it_began() {
+    const PEER_NAMES_WINDOW: u64 = 30 * DAY;
+    let (d, mut w, old) = stale_copies(&["a", "b"]);
+    w.ix.bounds.peer_names = 1;
+    assert!(w.accept(d.signed(&old[0])).unwrap().noted);
+    assert!(w.end_round().cleanup);
+    let began = w.ix.peer(&dev(0xee)).unwrap().names_window_us;
+    w.clock = began + PEER_NAMES_WINDOW - 1;
+    let a = w.accept(&garbage(d.signed(&old[1]))).unwrap();
+    assert_eq!(a.not_noted, Some(NotNoted::PeerNames), "still the window");
+    w.clock = began + PEER_NAMES_WINDOW;
+    let b = w.accept(d.signed(&old[1])).unwrap();
+    assert!(b.noted && b.not_noted.is_none(), "a new window");
+    assert!(w.end_round().cleanup);
+    let p = w.ix.peer(&dev(0xee)).unwrap();
+    assert_eq!(
+        (p.names_window_us, p.names),
+        (began + PEER_NAMES_WINDOW, 1),
+        "counted in the new window"
+    );
 }
 
 #[test]
