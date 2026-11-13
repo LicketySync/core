@@ -124,6 +124,40 @@ mod tests {
     }
 
     #[test]
+    fn the_page_estimate_is_no_looser_than_its_rounding() {
+        // An estimate above the frame defers a page the budget had room for
+        // (the module documentation: the budget holds back a frame only when
+        // the frame would pass it). At the widest fields a page may carry
+        // (`PAGE_FIXED_OVERHEAD`), the estimate passes the encoded frame by
+        // the frame's type, counted both in the frame header and in the
+        // protocol's page overhead, and by what each record's tag and length
+        // varint (at least 2 bytes) leave of `PER_RECORD`.
+        use licketysync_protocol::limits::MAX_LOCAL_SEQ;
+        let folder = FolderId([7; 32]);
+        for n in [0usize, 1, 5, 64] {
+            let records: Vec<Vec<u8>> = (0..n).map(|i| vec![0x5a; 100 + i * 37]).collect();
+            let page = IndexRecords {
+                folder_id: folder.0.to_vec(),
+                records,
+                more: true,
+                request_id: u32::MAX,
+                epoch: u64::MAX,
+                through: MAX_LOCAL_SEQ,
+                reset: true,
+            };
+            let frame = Message::IndexRecords(page.clone())
+                .to_frame()
+                .unwrap()
+                .encode();
+            let slack = page_estimate(&page) - frame.len();
+            assert!(
+                slack <= TYPE_LEN + n * (PER_RECORD - 2),
+                "{n} records: {slack} bytes over"
+            );
+        }
+    }
+
+    #[test]
     fn the_chunk_estimate_bounds_the_encoded_frame() {
         use licketysync_protocol::messages::ChunkReply;
         for len in [1usize, 300, 70_000, 4_325_416] {

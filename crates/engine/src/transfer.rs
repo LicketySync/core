@@ -454,3 +454,168 @@ impl Engine {
         self.counters.bug();
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod tests {
+    use core::time::Duration;
+
+    use licketysync_keys::chunk::seal_chunk;
+    use licketysync_protocol::frame::{FrameDecoder, FrameKind, MessageType};
+    use licketysync_protocol::limits::{MAX_MESSAGE_SIZE, MAX_REQUESTS_IN_FLIGHT};
+
+    use crate::issues::StoreFailureCause;
+    use crate::runtime::PeerId;
+    use crate::testkit::{config, folder_key, write_key, Hold, Net};
+    use crate::tests::{folder, pair, state, write};
+    use crate::{FolderState, WriteFailure};
+
+    /// The frames of `kind` that node `from` has sent node `to`.
+    fn frames_of(net: &Net, from: usize, to: usize, kind: MessageType) -> usize {
+        let bytes = net.streams.get(&(from, to)).cloned().unwrap_or_default();
+        let mut decoder = FrameDecoder::new(MAX_MESSAGE_SIZE);
+        let mut input = bytes.as_slice();
+        let mut n = 0;
+        while let Ok(Some(frame)) = decoder.next_frame(&mut input) {
+            if frame.kind() == FrameKind::Known(kind) {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn a_chunk_that_arrives_while_its_folder_is_paused_is_not_stored_and_comes_again_after() {
+        // The `pause` module (section 5, "Store failure"): a paused folder
+        // stores no chunk. One asked for before the pause that arrives
+        // during it is dropped and counted, stays lacking, and is fetched
+        // again once the pause ends.
+        let mut net = pair();
+        net.hold = Some(Hold::new(0, 1, MessageType::ChunkReply));
+        let hash = write(&mut net, 0, "p.bin", &[3u8; 900]).unwrap();
+        net.nodes[1].cx.storage.full = true;
+        assert_eq!(
+            write(&mut net, 1, "x.txt", b"x"),
+            Err(WriteFailure::Store(StoreFailureCause::Full))
+        );
+        // The store works again while the folder stays paused until its
+        // probe: a chunk judged now would be stored and committed, so only
+        // the pause can keep it out.
+        net.nodes[1].cx.storage.full = false;
+        assert_eq!(state(&net, 1), FolderState::Paused(StoreFailureCause::Full));
+        let skipped = net.nodes[1].engine.counters().skipped_while_paused;
+        net.release();
+        let one = net.nodes[1].engine.folder(&folder()).unwrap();
+        assert!(one.stored_chunks.is_empty(), "not stored while paused");
+        assert_eq!(one.lacking.len(), 1, "it stays lacking");
+        assert!(net.nodes[1].engine.counters().skipped_while_paused > skipped);
+        net.advance(Duration::from_secs(5));
+        let n = &net.nodes[1];
+        assert_eq!(
+            n.engine.read_file(&n.cx.storage, &folder(), &hash),
+            Ok(vec![3u8; 900]),
+            "fetched again once the probe resumed the folder"
+        );
+    }
+
+    #[test]
+    fn a_chunk_request_the_connection_does_not_hold_is_dropped_and_not_counted() {
+        // `serve_chunk`: a `CHUNK_OK` the connection refuses because the
+        // request is not outstanding there (UNREQUESTED; FOLDER_NOT_OPEN and
+        // CLOSED alike) is dropped and the queue moves on, and it is not
+        // counted in `Counters::internal_errors`. The branch is defensive:
+        // the engine's queue holds exactly the requests the connection
+        // handed over, so only a desync between the two reaches it. The
+        // test makes one by hand: node 1 holds the chunk and finds a request
+        // in its queue that node 0 never made.
+        let mut net = pair();
+        write(&mut net, 0, "a.bin", &[6u8; 900]).unwrap();
+        net.advance(Duration::from_secs(3));
+        let n = &mut net.nodes[1];
+        let chunk = n.engine.folder(&folder()).unwrap().stored_chunks[0];
+        let zero = PeerId::new(0);
+        n.engine
+            .conns
+            .get_mut(&zero)
+            .unwrap()
+            .chunk_requests
+            .push_back((folder(), chunk));
+        let bugs = n.engine.counters().internal_errors;
+        n.engine.run(&mut n.cx, |_, _, w| {
+            w.pump.insert(zero);
+        });
+        assert!(n.engine.conns[&zero].chunk_requests.is_empty(), "dropped");
+        assert_eq!(n.engine.counters().internal_errors, bugs);
+    }
+
+    #[test]
+    fn a_chunk_that_comes_to_lack_below_a_pass_is_asked_for_when_that_pass_ends() {
+        // 4.6, "Passes": a pass asks in ascending hash order from its
+        // position and ends when no lacking hash lies above it; a hash that
+        // came to lack below the position meanwhile is asked for by a new
+        // pass at once, not left until something else drives the passes.
+        // Node 0 takes one request at a time, so node 1's pass waits at the
+        // chunk of `a.bin` until it arrives; `b.bin`, whose chunk hashes
+        // below it, arrives with it.
+        let keys = write_key(1).chunk_keys();
+        let mut contents: Vec<Vec<u8>> = (0u8..8).map(|i| vec![i; 600]).collect();
+        contents.sort_by_key(|c| seal_chunk(&keys, c).unwrap().cipher_hash);
+        let (low, high) = (contents[0].clone(), contents[7].clone());
+        let mut zero = config(0, vec![folder_key(1, 1)]);
+        zero.max_requests_in_flight = 1;
+        let mut net = Net::new(vec![zero, config(1, vec![folder_key(1, 1)])]);
+        net.connect(0, 1);
+        net.advance(Duration::from_secs(2));
+        net.hold = Some(Hold::new(0, 1, MessageType::ChunkReply));
+        let first = write(&mut net, 0, "a.bin", &high).unwrap();
+        let second = write(&mut net, 0, "b.bin", &low).unwrap();
+        let one = net.nodes[1].engine.folder(&folder()).unwrap();
+        assert_eq!(
+            one.lacking,
+            vec![seal_chunk(&keys, &high).unwrap().cipher_hash],
+            "a.bin's chunk asked for; b.bin not heard of yet"
+        );
+        net.release();
+        let n = &net.nodes[1];
+        for (record, content) in [(first, high), (second, low)] {
+            assert_eq!(
+                n.engine.read_file(&n.cx.storage, &folder(), &record),
+                Ok(content)
+            );
+        }
+    }
+
+    #[test]
+    fn a_pass_asks_for_as_many_chunks_as_the_peer_allows_in_one_go() {
+        // 4.6, "Passes": a pass asks for each lacking hash in turn while the
+        // peer's `max_requests_in_flight` has room, here the largest a Hello
+        // may advertise, 1 024. The bound on a drive's steps (each asks for
+        // a hash or ends a pass) leaves room for all of them, so it is never
+        // reached: reaching it counts an engine bug. Node 0's answers are
+        // held, so every request comes from the drive that the record
+        // started, and nothing is stored, so the test stays quick whatever
+        // storing a chunk costs.
+        let mut zero = config(0, vec![folder_key(1, 1)]);
+        zero.max_requests_in_flight = MAX_REQUESTS_IN_FLIGHT;
+        let mut net = Net::new(vec![zero, config(1, vec![folder_key(1, 1)])]);
+        net.connect(0, 1);
+        net.advance(Duration::from_secs(2));
+        net.hold = Some(Hold::new(0, 1, MessageType::ChunkReply));
+        let content: Vec<u8> = (0..1030u32)
+            .flat_map(|k| {
+                let mut chunk = vec![0u8; 1024];
+                chunk[..4].copy_from_slice(&k.to_le_bytes());
+                chunk
+            })
+            .collect();
+        write(&mut net, 0, "big.bin", &content).unwrap();
+        assert_eq!(
+            frames_of(&net, 1, 0, MessageType::ChunkRequest),
+            1024,
+            "every request node 0 allows, in one go"
+        );
+        assert_eq!(net.nodes[1].engine.counters().internal_errors, 0);
+        let one = net.nodes[1].engine.folder(&folder()).unwrap();
+        assert_eq!(one.lacking.len(), 1030, "none answered yet");
+    }
+}

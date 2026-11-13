@@ -19,6 +19,7 @@
     reason = "test code"
 )]
 
+use core::cell::Cell;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -216,6 +217,16 @@ impl Storage for FakeStorage {
     }
 }
 
+/// The most clock reads one context answers at one instant of its clock:
+/// at least 25 times what the busiest unit test reads at one instant (under
+/// 4 000 in every unit test). Past it the engine is taken to spin while it
+/// reads the clock, in a handler that loops or on timers that fire again and
+/// again with no time passing (a livelock), and the test fails at once
+/// instead of hanging until a harness's time limit, which the weekly
+/// mutation test counts as a timeout, not as a mutant caught. A spin that
+/// never reads the clock is not caught.
+pub(crate) const MAX_READS_AT_ONE_INSTANT: u64 = 100_000;
+
 /// One engine's view of the world for one call.
 #[derive(Debug, Default)]
 pub(crate) struct FakeCx {
@@ -228,14 +239,32 @@ pub(crate) struct FakeCx {
     pub(crate) outbox: BTreeMap<PeerId, Vec<u8>>,
     /// Unsent bytes the transport reports on top of the outbox.
     pub(crate) extra_unsent: BTreeMap<PeerId, usize>,
+    /// After each send to a peer here, its `extra_unsent` becomes this: a
+    /// link that stopped draining.
+    pub(crate) fill_on_send: BTreeMap<PeerId, usize>,
     pub(crate) timers: BTreeMap<TimerId, Instant>,
     pub(crate) closed: Vec<PeerId>,
     pub(crate) refused: u64,
     pub(crate) rng: u64,
+    /// The instant of the last clock read, and the reads made at it
+    /// ([`MAX_READS_AT_ONE_INSTANT`]).
+    pub(crate) reads: Cell<(u64, u64)>,
 }
 
 impl Clock for FakeCx {
     fn now(&self) -> Instant {
+        let (at, n) = self.reads.get();
+        let n = if at == self.now { n + 1 } else { 1 };
+        assert!(
+            n <= MAX_READS_AT_ONE_INSTANT,
+            "node {}: {n} clock reads at {} ns with no time passing: the engine spins in a \
+             handler, or a timer fires again and again at one instant (a livelock), or an \
+             honest test does this much work at one instant: advance the clock or raise \
+             MAX_READS_AT_ONE_INSTANT",
+            self.id,
+            self.now
+        );
+        self.reads.set((self.now, n));
         Instant::from_nanos(self.now)
     }
     fn wall_time(&self) -> u64 {
@@ -262,6 +291,9 @@ impl Transport for FakeCx {
             return Err(SendError::NotConnected);
         }
         self.outbox.entry(to).or_default().extend_from_slice(&bytes);
+        if let Some(&n) = self.fill_on_send.get(&to) {
+            self.extra_unsent.insert(to, n);
+        }
         Ok(())
     }
     fn unsent(&self, to: PeerId) -> usize {
@@ -561,5 +593,27 @@ impl Net {
         let r = f(&mut n.engine, &mut n.cx);
         self.settle();
         r
+    }
+}
+
+#[test]
+#[should_panic(expected = "(a livelock)")]
+fn a_context_read_again_and_again_at_one_instant_fails_the_test() {
+    // `MAX_READS_AT_ONE_INSTANT`: what a spinning handler or a timer that
+    // fires again and again at one instant does to the clock.
+    let cx = FakeCx::default();
+    for _ in 0..=MAX_READS_AT_ONE_INSTANT {
+        let _ = cx.now();
+    }
+}
+
+#[test]
+fn the_reads_at_one_instant_count_afresh_once_time_passes() {
+    let mut cx = FakeCx::default();
+    for t in 0..3 {
+        cx.now = t;
+        for _ in 0..MAX_READS_AT_ONE_INSTANT {
+            assert_eq!(cx.now(), Instant::from_nanos(t));
+        }
     }
 }

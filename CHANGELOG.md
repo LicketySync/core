@@ -6,6 +6,54 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Engine: tests that catch the engine crate's second batch of surviving and timed-out mutants
+  (Mutants run 43341050834, on 59783b1: 26 in `engine.rs`, `transfer.rs`, `issues/`, `pacing.rs`,
+  `chunks.rs`, `conn.rs`, `pause.rs` and `runtime.rs`, 6 of them timed out), so that no mutant of
+  the engine survives the weekly run unexplained. Tests and the test kit only; no production
+  behaviour changed. Each test checks what the spec or the module documentation states.
+  - The test kit fails a test that spins while it reads the clock: past 100 000 clock reads at one
+    instant (under 4 000 in every unit test), a handler that loops or timers that fire again and
+    again with no time passing fail the test at once. Before, such a mutant kept the unit tests
+    from finishing, and the run counted it timed out rather than caught. Five of the six timed-out
+    mutants hung so (`Instant::as_nanos` read as 0 or 1 by the engine's ticks and the test net's
+    timers; a deferred commit armed with nothing deferred; the clock rule's timer for a folder that
+    never opens; a `CHUNK_OK` with room waiting for room); the sixth (a refresh that judges every
+    stored chunk again) failed no unit test. All six are caught now. The test kit's transport can
+    also stop draining (`fill_on_send`).
+  - What the tests check: an idle engine sets no timer, and the free tick and the deferred commit
+    are set only while work waits for them (§4.7 item 1); a frame of an unknown non-critical type is
+    answered `Unsupported` once and then ignored, each side counting its part (§2, step 4; the §5
+    table); a `CHUNK_OK` the send queue has no room for waits and goes on `Room` once the queue
+    drains; a connection whose Close is flushing counts for no folder (SEC N6); a chunk that arrives
+    for a paused folder is not stored and is fetched again once the pause ends (§5, "Store
+    failure"); a queued request the connection does not hold, which only a desync between the
+    engine's queue and the connection's can leave, is dropped and not counted as an engine bug; a
+    chunk that comes to lack below a pass is asked for when that pass ends, and a pass asks for all
+    1 024 chunks a peer allows in one go (§4.6, "Passes"); a stored chunk is judged once; every
+    chunk-book refresh is counted (RS-N1's test reads the count); the page estimate is no looser
+    than its rounding.
+  - With the lints capped and the unit tests alone, two more mutants of these functions survived:
+    `transfer.rs` 48:30 `replace * with /` (a drive of four steps), caught now; and `engine.rs`
+    494:17 (`replace != with ==` in `Engine::settle_states`: the chunk patience timer never set),
+    left to the change that fixes the bug its test found (below).
+  - A bug found, left to its own change: a handler that runs at or after the instant a requested
+    hash's patience runs out, other than the chunk patience timer's own (a message, or another
+    timer due then), cancels that timer without driving the passes, since `InFlight::next_expiry`
+    leaves out an expiry at `now`. So the hash is not offered to another connection while the
+    peer that took the request stays connected and silent (`crate::inflight`; §4.6, "Passes").
+  - Nine mutants are equivalent, none skipped:
+    - `engine.rs` 121:24, `-` with `+` and with `/` in `clock_days`: the protocol clamps
+      `clock_days` to `MAX_CLOCK_DAYS` again when it builds the Hello, and nothing else reads it.
+    - `issues/mod.rs` 368:13 (`<` with `<=`, `==`, `>`) and 370:17 (`<` with `>`): the check that
+      the close reasons' numbers are distinct runs at compile time and holds, so no test can tell.
+    - `transfer.rs` 48 (`+` with `-` and `*`, `*` with `+`): a drive takes at most 1 027 steps
+      (1 024 requests, the most a peer allows, and two pass ends), below `DRIVE_STEPS` (2 052) and
+      each mutated bound (2 044, 8 192, 1 030).
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, unit tests only,
+    where the weekly run's `cargo test` stops when they fail), over the functions these tests
+    cover: 54 tested, 42 caught, 10 missed (the nine equivalent ones and 494:17), 2 unviable, none
+    timed out. Of the batch's 26, 17 are caught, the six that timed out among them.
+
 - Spec: make the specs agree where the documentation site's reviewers found them at odds, and narrow
   three claims to what holds. Spec text only. TM-18 and TM-37, and `threat-model.md` §1, §3.1, §3.9
   and §5; `keys.md` §1.3, §2.2, §3.2 to §3.4 and §6.3; `suites.md` ("Padding"); `protocol.md` §9.

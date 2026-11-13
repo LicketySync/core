@@ -64,3 +64,35 @@ impl Conn {
         self.reacts() && self.open.contains(folder)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod tests {
+    use crate::runtime::{Peer as _, PeerId};
+    use crate::tests::{pair, state};
+    use crate::FolderState;
+
+    #[test]
+    fn a_connection_whose_close_is_flushing_counts_for_no_folder() {
+        // The protocol test kit's rule (SEC N6): once a connection is closed,
+        // a Close sent included, the engine acts on it no more, though the
+        // transport stays up while the Close flushes (the protocol's 1 s).
+        // So the folder it was open on waits for peers at once.
+        let mut net = pair();
+        assert_eq!(state(&net, 0), FolderState::UpToDate);
+        let n = &mut net.nodes[0];
+        n.engine.on_stop(&mut n.cx);
+        let c = n.engine.conns.get(&PeerId::new(1)).unwrap();
+        assert!(!c.hung_up, "the Close is still flushing");
+        assert!(!c.reacts());
+        assert_eq!(
+            state(&net, 0),
+            FolderState::Syncing {
+                lacking_chunks: 0,
+                bytes_needed: 0,
+                rounds_pending: 0,
+                open_on: 0,
+            }
+        );
+    }
+}

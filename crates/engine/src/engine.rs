@@ -725,3 +725,132 @@ impl Peer for Engine {
         self.run(cx, Self::stop);
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "test code"
+)]
+mod tests {
+    use core::time::Duration;
+
+    use licketysync_protocol::frame::{Frame, FrameKind, MessageType};
+    use licketysync_protocol::Cause;
+
+    use crate::runtime::{Instant, PeerId, MAX_SEND_QUEUE};
+    use crate::testkit::{config, folder_key, Hold, Net};
+    use crate::tests::{folder, pair, write};
+    use crate::FolderState;
+
+    #[test]
+    fn an_idle_engine_sets_no_timer_and_the_free_tick_only_while_chunks_wait() {
+        // `settle_states`: the free tick is set while chunks wait to be
+        // freed or read again (4.7 item 1: once a minute while the folder is
+        // open on no connection), the deferred commit while phase C left
+        // index work; an engine with nothing waiting sets no timer at all.
+        let mut net = Net::new(vec![config(0, vec![folder_key(1, 1)])]);
+        let idle = |net: &Net| net.nodes[0].cx.timers.is_empty();
+        assert!(idle(&net), "{:?}", net.nodes[0].cx.timers);
+        // A second version leaves the first one's chunks unnamed: listed to
+        // be freed, on no connection.
+        write(&mut net, 0, "a.bin", &[1u8; 3000]).unwrap();
+        write(&mut net, 0, "a.bin", &[2u8; 3000]).unwrap();
+        let listed = |net: &Net| {
+            net.nodes[0]
+                .engine
+                .folder(&folder())
+                .unwrap()
+                .pending_free
+                .len()
+        };
+        assert!(listed(&net) > 0);
+        let in_a_minute = Instant::from_nanos(net.now).saturating_add(Duration::from_secs(60));
+        assert!(
+            net.nodes[0].cx.timers.values().any(|at| *at == in_a_minute),
+            "the free tick, due in a minute: {:?}",
+            net.nodes[0].cx.timers
+        );
+        net.advance(Duration::from_secs(61));
+        assert_eq!(listed(&net), 0, "freed within the minute");
+        assert!(idle(&net), "idle again: {:?}", net.nodes[0].cx.timers);
+    }
+
+    #[test]
+    fn an_unknown_non_critical_type_is_answered_unsupported_once_then_ignored() {
+        // Section 2, frames, step 4, and the section 5 table: a frame of an
+        // unknown type with the critical bit clear is answered `Unsupported`
+        // once per type per connection, and later frames of that type are
+        // ignored with a log line; the connection continues. Each side
+        // counts its part: the sender the `Unsupported` it heard, the
+        // receiver the frame it ignored.
+        let mut net = pair();
+        let unknown = Frame::new(0x0123, vec![]).unwrap();
+        assert_eq!(unknown.kind(), FrameKind::UnknownNonCritical(0x0123));
+        for _ in 0..2 {
+            net.nodes[1]
+                .cx
+                .outbox
+                .entry(PeerId::new(0))
+                .or_default()
+                .extend(unknown.encode());
+        }
+        net.settle();
+        let receiver = net.nodes[0].engine.counters();
+        assert_eq!(receiver.unsupported, 1, "the second frame, ignored");
+        assert_eq!(receiver.of(Cause::UnknownNonCriticalType), 1);
+        let sender = net.nodes[1].engine.counters();
+        assert_eq!(sender.unsupported, 1, "the one Unsupported answer");
+        for (i, n) in net.nodes.iter().enumerate() {
+            assert_eq!(n.engine.counters().blaming_closes(), 0, "node {i}");
+            assert_eq!(
+                n.engine.connections().count(),
+                1,
+                "node {i}: the connection stays"
+            );
+        }
+    }
+
+    #[test]
+    fn a_chunk_that_waits_for_room_in_the_send_queue_goes_once_the_queue_drains() {
+        // `Connection::want_room`: a `CHUNK_OK` the send queue has no room
+        // for waits, and goes on `Event::Room` once the transport drains,
+        // which the connection watches through its wake-ups. Node 0's
+        // budget is past `MAX_SEND_QUEUE`, so the queue's room alone holds
+        // the chunk back; its link stops draining at the first chunk it
+        // sends, so the second waits.
+        let mut zero = config(0, vec![folder_key(1, 1)]);
+        zero.send_budget = usize::MAX;
+        let mut net = Net::new(vec![zero, config(1, vec![folder_key(1, 1)])]);
+        net.connect(0, 1);
+        net.advance(Duration::from_secs(2));
+        net.hold = Some(Hold::new(1, 0, MessageType::ChunkRequest));
+        let content: Vec<u8> = (0..2000u32).map(|i| (i % 251) as u8).collect();
+        let hash = write(&mut net, 0, "room.bin", &content).unwrap();
+        net.nodes[0]
+            .cx
+            .fill_on_send
+            .insert(PeerId::new(1), MAX_SEND_QUEUE);
+        net.release();
+        let one = net.nodes[1].engine.folder(&folder()).unwrap();
+        assert_eq!(
+            (one.stored_chunks.len(), one.lacking.len()),
+            (1, 1),
+            "the first chunk went; the second waits for room"
+        );
+        let n = &mut net.nodes[0].cx;
+        n.fill_on_send.clear();
+        n.extra_unsent.clear();
+        net.advance(Duration::from_secs(2));
+        let n = &net.nodes[1];
+        assert_eq!(
+            n.engine.read_file(&n.cx.storage, &folder(), &hash),
+            Ok(content)
+        );
+        assert_eq!(
+            n.engine.folder(&folder()).unwrap().state,
+            FolderState::UpToDate
+        );
+    }
+}

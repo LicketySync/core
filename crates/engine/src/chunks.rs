@@ -840,6 +840,58 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_chunk_is_judged_once_and_later_refreshes_leave_it_unread() {
+        // `refresh` judges the stored positions not yet judged; one judged
+        // good stays so while its record is wanted, so the next refresh (every
+        // change of the index brings one) reads its blob no more. Here that
+        // read would fail and forget the chunk.
+        let keys = write_key(1).chunk_keys();
+        let s = seal_chunk(&keys, &[8u8; 400]).unwrap();
+        let folder = FolderId([1; 32]);
+        let mut storage = FakeStorage::default();
+        crate::store::stage_chunk(&mut storage, &folder, &s.cipher_hash, &s.stored).unwrap();
+        let mut book = ChunkBook::new([s.cipher_hash].into_iter().collect());
+        let w = want(
+            9,
+            &[(s.cipher_hash, s.stored.len() as u32, s.plain_hash)],
+            400,
+        );
+        let named: BTreeSet<CipherHash> = [s.cipher_hash].into_iter().collect();
+        let (findings, _) = book.refresh(
+            &folder,
+            vec![w.clone()],
+            named.clone(),
+            Some(&keys),
+            &storage,
+        );
+        assert_eq!(findings, vec![]);
+        assert!(book.ready(&RecordHash([9; 32])), "judged good at the open");
+        storage.get_fails = true;
+        let (findings, grew) = book.refresh(&folder, vec![w], named, Some(&keys), &storage);
+        assert_eq!(findings, vec![], "the blob was not read again");
+        assert!(!grew && book.lacking().is_empty());
+        assert!(book.is_stored(&s.cipher_hash) && book.ready(&RecordHash([9; 32])));
+    }
+
+    #[test]
+    fn every_refresh_is_counted() {
+        // RS-N1's test (`a_page_of_duplicates_commits_nothing`) reads this
+        // count to show a page of duplicates refreshes nothing: a count that
+        // stood still would pass it whatever the engine did.
+        let mut book = ChunkBook::new(BTreeSet::new());
+        for n in 1..=3 {
+            book.refresh(
+                &FolderId([1; 32]),
+                vec![],
+                BTreeSet::new(),
+                None,
+                &FakeStorage::default(),
+            );
+            assert_eq!(book.refreshes, n);
+        }
+    }
+
+    #[test]
     fn a_sealed_holder_judges_the_stored_length_only_and_passes_go_in_ascending_order() {
         let mut book = ChunkBook::new(BTreeSet::new());
         let hashes: Vec<CipherHash> = (1..=3u8).map(|i| CipherHash([i; 32])).collect();
