@@ -167,8 +167,11 @@ or a careful finding reproduces locally with the same tool (`ci/mutants.sh
 <k>/<n> <budget>` runs one shard of the mutants as the weekly job does: each
 mutant's tests limited to twice the unmutated tree's test time, at least
 300 s, and on Linux each test process under the job's caps on memory and file
-size). `ci/test-mutants.sh` also needs python3 and prlimit (util-linux), and
-`ci/test-download.sh` python3 and openssl.
+size). Every cargo-mutants run in this tree, by hand too, caps rustc's lints
+(`.cargo/mutants.toml` says why), so that a mutant that only leaves something
+unused is tested, not counted unviable. `ci/test-mutants.sh` also needs
+python3 (3.11 or later) and prlimit (util-linux), and `ci/test-download.sh`
+python3 and openssl.
 gitleaks is optional (`ci/gitleaks-install.sh ~/.local/bin` installs the
 release CI pins). Every download in the CI scripts (gitleaks, and Chrome for
 Testing in `nightly.yml`) goes through `ci/download.sh`, which retries any

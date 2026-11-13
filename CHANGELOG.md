@@ -6,6 +6,71 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- CI: cap the lints in every cargo-mutants run, so that the mutants the workspace's denied lints
+  hid are tested, under the owner's mutation-testing mandate of 2026-11-08 ("It's a mandate that
+  we must be safe and secure."). `Cargo.toml` denies the `dead_code` and `unused` lints, and
+  `ci/mutants.sh` did not tell cargo-mutants 27.1.0 to cap them, so a mutant that leaves a
+  parameter, binding, import or item unused, as many replacements of a whole function body do
+  (`replace State::replaces_any -> bool with false`) and some deletions of a struct field and
+  replacements of a match guard, failed to build and was counted unviable, its tests never run.
+  The run of 2026-11-12 (43341050834, on 59783b1) counted 1,400 of its 3,296 mutants so (1,320
+  of them whole-body replacements, 16 match-guard replacements), against 1,705 caught and 154
+  missed, so an unknown share of the mandate's backlog was hidden. Both reviews of index
+  mutants batch 2 found it; one ran 31 such index mutants with `--cap-lints true`: 30 caught, 1
+  missed (`state.rs:975:41`, match guard `*s == now.seq` replaced with false in `State::changes`).
+  - `.cargo/mutants.toml` (new) sets `cap_lints = true`, the key cargo-mutants 27.1.0 reads from
+    the workspace root's `.cargo/mutants.toml` (its `src/config.rs`; with it, `src/cargo.rs` adds
+    `--cap-lints=warn` to the rustc flags of every build and test it runs, the unmutated tree's
+    included). So the weekly job and any run by hand, an author's or a reviewer's, cap them, with
+    no flag to remember; `--cap-lints false` or `--no-config` turns it off. Only the cargo
+    processes cargo-mutants starts are capped; cargo never reads the file, so `gate.sh` and CI
+    still deny the lints. The file says why, and `ci/mutants.sh`'s header and `CONTRIBUTING.md`
+    point to it.
+  - `ci/test-mutants.sh`: the stand-in cargo now records whether cargo-mutants 27.1.0 would cap
+    the lints, by its rules. It reads its config file first, whatever the command line says of
+    the cap: the file `--config` names, none with `--no-config`, or else the workspace root's
+    `.cargo/mutants.toml`, which may be absent. A missing `--config` file stops it, and so does a
+    file that is not TOML, holds a key it does not know (its `Config` is `deny_unknown_fields`;
+    the stand-in lists 27.1.0's keys) or a `cap_lints` that is not a boolean. Then `--cap-lints`
+    on the command line wins over the file (the real cargo-mutants 27.1.0, run with `--list
+    --config`, exits 1 on an unknown key, a `cap_lints` that is a string and a missing file, and
+    takes `test_tool` and `sharding`). 17 rows check the stand-in against those rules,
+    `--config` replacing the tree's file both ways among them; breaking the stand-in four ways
+    (unknown keys accepted, a missing `--config` file ignored, `--config` not replacing the
+    tree's file, the command line not winning) fails them. Each case's root gets a copy of the
+    repository's `.cargo/mutants.toml`, and a new check fails unless the listing and the run both
+    cap the lints. Without the file, or with `cap_lints = false` in it, the check fails (run by
+    hand on copies of `ci/`); `--cap-lints true` from `ci/mutants.sh` would satisfy it too. The
+    script needs python3 3.11 or later (tomllib) and now checks for it first, saying so.
+  - Measured on the keys crate, the smallest (unchanged since 59783b1), with cargo-mutants 27.1.0
+    under `ci/mutants.sh`'s caps and limits on the development machine (8 cores), 564 mutants:
+    without the cap 255 caught, 3 missed, 0 timed out, 306 unviable, as on 2026-11-12, in 18
+    minutes; with it 414 caught, 3 missed (the same three), 0 timed out, 147 unviable, in 31
+    minutes. All 159 that the cap made viable (158 whole-body replacements of 296, 1 match-arm
+    deletion of 10 other mutants) were caught, 4.2 s each. Their logs without the cap show the
+    159 failed on lints alone (unused variables and imports, items never used or read); the 147
+    still unviable fail on compile errors no cap turns off (a missing trait or method, mostly; 9
+    a constant evaluated at compile time).
+  - The estimate for the weekly run (`mutants.yml`'s comment has the arithmetic): at keys' rates,
+    with every unviable guard replacement or field deletion building (as did all 6 of an index
+    sample that were unviable without the cap: 4 guards, 2 field deletions), some 730 of the
+    1,400 are tested (engine 199, index 188, protocol 184, keys 159); at what a tested mutant of
+    each crate cost on 2026-11-12 (engine 57 s, index and protocol 22 s, keys 5 s, hangs
+    included), about 5.4 hours more over the run, 20 minutes a shard: shards of 57 to 104 minutes
+    against the 38 to 87 of 2026-11-12, about two and a half hours in all; about 120 for the
+    slowest were all 1,400 tested. Each shard keeps an hour of its 180-minute budget (a mutant
+    that hangs costs its build and its test limit, twice its shard's baseline test time and at
+    least 300 s: under 10 minutes on 2026-11-12; the job's `timeout-minutes` is 210, GitHub's
+    limit 6 hours), so the 16 shards, the budget and the job's limit stay.
+  - The backlog (139 missed and 30 timed out on 2026-11-07; 154 and 37 on 2026-11-12) will be
+    re-counted by the next baseline run, which should report more missed: of the mutants the
+    cap makes viable, those the tests do not catch (none of keys' 159; 1 of the index sample's
+    31).
+  - Reviewed 2026-11-13 by a1dcd7b1828867f62 (clean; nits taken; confirm: clean, checked against
+    the real cargo-mutants 27.1.0 on all 17 rows) and ae3cd57c8275dd10c (blocked by two, a sample
+    size and an override claim, now fixed; confirm: clean). Author a7ed89912312928bc. Landed as one
+    squashed commit.
+
 - Index: tests that catch 28 of the 30 mutants of the index crate's second batch that the Mutants
   run of 2026-11-12 on 9349d4f found surviving (all 30 still survived on eedfd6d), under the
   owner's mutation-testing mandate of 2026-11-08 ("It's a mandate that we must be safe and

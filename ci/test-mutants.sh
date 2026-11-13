@@ -9,12 +9,25 @@
 # and then each mutant's (a stand-in test process, `hog`, that asks for a
 # little less or a little more than a cap; a test binary's or a doc-test's)
 # through the host's runner, logs them as cargo-mutants, cargo and rustdoc do,
-# and counts the mutant caught or missed. The expected exit code and the
-# expected lines of output are the assertions. Needs python3 and prlimit
-# (util-linux). Run by gate.sh, ci.yml and mutants.yml. Exit 1 if any case
-# fails.
+# and counts the mutant caught or missed. For the listing and the run alike it
+# records whether cargo-mutants 27.1.0 would cap the lints, by its rules: a
+# --cap-lints on its command line, else cap_lints in its config file (the
+# workspace root's .cargo/mutants.toml, where ci/mutants.sh runs it, unless
+# --no-config or --config says otherwise). Each case's repository root gets a
+# copy of this repository's .cargo/mutants.toml, as the real one has it. The
+# expected exit code and the expected lines of output are the assertions.
+# Needs python3 (3.11 or later, for tomllib) and prlimit (util-linux). Run by
+# gate.sh, ci.yml and mutants.yml. Exit 1 if any case fails.
 set -euo pipefail
+# The stand-in cargo reads TOML with Python's tomllib, new in 3.11.
+if ! python3 -I -c 'import tomllib' 2> /dev/null; then
+  echo "ci/test-mutants.sh needs python3 3.11 or later, for tomllib;" \
+    "python3 --version says: $(python3 --version 2>&1 || true)" >&2
+  exit 1
+fi
 script="$(cd "$(dirname "$0")" && pwd)/mutants.sh"
+# The configuration ci/mutants.sh's cargo-mutants reads, which each case gets.
+config="$(cd "$(dirname "$0")/.." && pwd)/.cargo/mutants.toml"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
@@ -28,6 +41,62 @@ EOF
 cat > "$tmp/bin/cargo" << 'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> args
+# Whether cargo-mutants 27.1.0 caps the lints (src/main.rs, src/options.rs,
+# src/config.rs). It reads its config file first, whatever the command line
+# says of the cap: the file --config names, none with --no-config, or else
+# .cargo/mutants.toml of the workspace root (here, the directory it runs in),
+# which may be absent. A --config file that is missing stops it (exit 1),
+# recorded here as "error"; so does a file that is not TOML, holds a key it
+# does not know (its Config is deny_unknown_fields) or a cap_lints that is not
+# a boolean, recorded as "invalid". The types of its other keys are not
+# checked here. Then --cap-lints <bool> or --cap-lints=<bool> on its command
+# line wins over cap_lints in the file, which is false when absent.
+cap='' file=.cargo/mutants.toml named=''
+for ((i = 1; i <= $#; i++)); do
+  a=${!i} j=$((i + 1))
+  case $a in
+    --cap-lints) cap=${!j-} ;;
+    --cap-lints=*) cap=${a#*=} ;;
+    --no-config) file='' ;;
+    --config) file=${!j-} named=1 ;;
+    --config=*) file=${a#*=} named=1 ;;
+  esac
+done
+in_file=false
+if [ -n "$named" ] && [ ! -f "$file" ]; then
+  in_file=error
+elif [ -n "$file" ] && [ -e "$file" ]; then
+  # Config's fields (src/config.rs) and those serde reads of the Common it
+  # flattens (src/options.rs), in cargo-mutants 27.1.0.
+  in_file=$(python3 -I -c '
+import sys, tomllib
+known = {
+    "additional_cargo_args", "additional_cargo_test_args", "all_features",
+    "build_timeout_multiplier", "cap_lints", "copy_vcs", "copy_target",
+    "error_values", "examine_globs", "examine_re", "exclude_globs", "exclude_re",
+    "gitignore", "features", "minimum_test_timeout", "no_default_features",
+    "output", "profile", "skip_calls", "skip_calls_defaults", "test_package",
+    "test_workspace", "timeout_multiplier", "test_tool", "sharding",
+}
+try:
+    with open(sys.argv[1], "rb") as f:
+        c = tomllib.load(f)
+except (OSError, ValueError):
+    c = None
+v = None if c is None or set(c) - known else c.get("cap_lints", False)
+print(("false", "true")[v] if isinstance(v, bool) else "invalid")
+' "$file")
+fi
+case $in_file in
+  true | false) ;;
+  *)
+    echo "cap_lints=$in_file" >> lints
+    echo "Error: the config file $file: $in_file" >&2
+    exit 1
+    ;;
+esac
+cap=${cap:-$in_file}
+echo "cap_lints=$cap" >> lints
 if [ "$2" = --list ]; then
   printf '%b' "${FAKE_LIST:-}"
   exit "${FAKE_LIST_EXIT:-0}"
@@ -192,12 +261,17 @@ n=0
 fails=0
 # case_ <name> <expected exit> <shard> <budget> <expected output lines, one
 # per line> [VAR=value ... for the stand-ins]. An outer timeout(1) stops a case
-# whose budget is not enforced.
+# whose budget is not enforced. The case's repository root gets a copy of
+# this repository's .cargo/mutants.toml, when there is one.
 case_() {
   n=$((n + 1))
   local name=$1 want=$2 shard=$3 budget=$4 lines=$5 dir="$tmp/$n" rc=0 line
   shift 5
   mkdir "$dir"
+  if [ -f "$config" ]; then
+    mkdir "$dir/.cargo"
+    cp "$config" "$dir/.cargo/mutants.toml"
+  fi
   (cd "$dir" && env GITHUB_STEP_SUMMARY="$dir/summary" "$@" \
     "$tmo" 60 "$script" "$shard" "$budget" "$dir") > "$dir/out" 2>&1 || rc=$?
   local ok=1
@@ -345,6 +419,53 @@ case_ "the unmutated tree's doc-tests past both caps: the error names both" 1 13
   FAKE_BASELINE_TESTS="doc hog memory $((6442450944 + (64 << 20)))
 doc hog file 1073741825"
 
+# The stand-in decides the lint cap as cargo-mutants 27.1.0 does, so that the
+# check of case 1 below is not vacuous. Each row: what .cargo/mutants.toml
+# holds (- for no file; \n between lines), the arguments after --list, and the
+# cap expected; "invalid" and "error" also expect cargo-mutants to stop.
+# other.toml sets cap_lints = true, empty.toml nothing, and missing.toml is
+# not there.
+lint_rows='-||false
+cap_lints = true||true
+cap_lints = false||false
+cap_lints = true|--cap-lints false|false
+cap_lints = true|--cap-lints=false|false
+-|--cap-lints true|true
+cap_lints = true|--no-config|false
+-|--config other.toml|true
+-|--config=other.toml|true
+cap_lints = true|--config empty.toml|false
+cap_lints = false|--config other.toml|true
+cap_lints = true\ntest_tool = "cargo"\nsharding = "round-robin"||true
+cap_lints = true\nbogus = 1||invalid
+cap_lints = "yes"||invalid
+cap_lints = "yes"|--cap-lints true|invalid
+cap_lints = [||invalid
+-|--config missing.toml|error'
+k=0
+lint_fails=$fails
+while IFS='|' read -r content flags want; do
+  k=$((k + 1))
+  d="$tmp/lints-$k"
+  mkdir -p "$d/.cargo"
+  [ "$content" = - ] || printf '%b\n' "$content" > "$d/.cargo/mutants.toml"
+  printf 'cap_lints = true\n' > "$d/other.toml"
+  : > "$d/empty.toml"
+  rc=0
+  # shellcheck disable=SC2086 # the row's arguments, split on purpose
+  (cd "$d" && cargo mutants --list $flags > /dev/null 2>&1) || rc=$?
+  stops=0
+  case $want in invalid | error) stops=1 ;; esac
+  if [ "$(cat "$d/lints")" != "cap_lints=$want" ] || [ "$((rc != 0))" != "$stops" ]; then
+    echo "FAIL the stand-in with [$content] and [$flags]: $(cat "$d/lints"), exit $rc;" \
+      "expected cap_lints=$want"
+    fails=$((fails + 1))
+  fi
+done <<< "$lint_rows"
+if [ "$fails" = "$lint_fails" ]; then
+  echo "ok   the stand-in decides the lint cap as cargo-mutants 27.1.0 does ($k rows)"
+fi
+
 # What reaches cargo-mutants, and what reaches the job summary.
 picked="--package licketysync-keys --package licketysync-protocol --package licketysync-index --package licketysync-engine --no-shuffle --sharding round-robin --shard 3/16"
 if [ "$(cat "$tmp/1/args")" = "mutants --list $picked"$'\n'"mutants $picked --timeout-multiplier 2 --minimum-test-timeout 300 --caught --unviable" ]; then
@@ -352,6 +473,17 @@ if [ "$(cat "$tmp/1/args")" = "mutants --list $picked"$'\n'"mutants $picked --ti
 else
   echo "FAIL cargo-mutants arguments:"
   sed 's/^/  | /' "$tmp/1/args"
+  fails=$((fails + 1))
+fi
+# Cargo.toml denies the dead_code and unused lints: without the cap, a mutant
+# that only leaves something unused does not build and is counted unviable,
+# never tested (.cargo/mutants.toml says more).
+if [ "$(cat "$tmp/1/lints")" = "cap_lints=true"$'\n'"cap_lints=true" ]; then
+  echo "ok   cargo-mutants caps the lints, for the listing and the run"
+else
+  echo "FAIL cargo-mutants does not cap the lints (cap_lints = true in .cargo/mutants.toml," \
+    "or --cap-lints true from ci/mutants.sh):"
+  sed 's/^/  | /' "$tmp/1/lints"
   fails=$((fails + 1))
 fi
 if [ "$(cat "$tmp/1/runner")" = "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER=$caps" ]; then

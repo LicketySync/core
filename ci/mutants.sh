@@ -7,7 +7,12 @@
 # tests the unmutated tree (its baseline), with no time limit but the budget,
 # then each mutant of the shard with a limit on its tests of twice the
 # baseline's test time, at least 300 s (below), and leaves mutants.out/ in the
-# repository root, which the job uploads.
+# repository root, which the job uploads. Every build it runs, the unmutated
+# tree's and each mutant's, caps rustc's lints at warn: cap_lints in
+# .cargo/mutants.toml, which cargo-mutants reads from the repository root, here
+# and in any run by hand, and which says why (a mutant that only leaves
+# something unused is tested, not counted unviable). ci/test-mutants.sh checks
+# that the listing and the run both get it.
 #
 # On Linux every test process runs under caps on its memory and on the files
 # it writes (below), so that a mutant whose tests grow without bound fails its

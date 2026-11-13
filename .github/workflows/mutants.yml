@@ -35,6 +35,27 @@ jobs:
   # minutes (ci/mutants.sh, which then fails and says so) and the job after
   # 210, well inside the 6 h limit; when a shard nears its budget, add shards.
   #
+  # From 2026-11-13 every build caps the lints (.cargo/mutants.toml says why),
+  # so the mutants that only left something unused, counted unviable until
+  # then for one failed build each (about 1 s), are tested. The run of
+  # 2026-11-12 (43341050834: 3,296 mutants, 1,400 of them unviable) took 38 to
+  # 87 minutes a shard, 107 minutes in all. With the cap, the keys crate's
+  # unviable whole-body replacements built 158 times in 296 and its other
+  # unviable mutants 1 in 10 (measured 2026-11-13). At those rates, and with
+  # every unviable guard replacement or field deletion building (as did all 6
+  # of an index sample that were unviable without the cap: 4 guards, 2 field
+  # deletions), some 730 of the 1,400 are tested: engine 199, index 188,
+  # protocol 184, keys 159. Each then costs what a tested mutant of its crate
+  # did on 2026-11-12 on average, hangs included (engine 57 s, index and
+  # protocol 22 s, keys 5 s), instead of its second: about 5.4 hours more over
+  # the run, 20 minutes a shard on average. Shard by shard, from each one's
+  # own unviable mutants, that is 57 to 104 minutes, about two and a half
+  # hours in all. Were all 1,400 tested, the slowest shard would take about
+  # 120 minutes. Either way each shard keeps an hour of its 180 minutes in
+  # hand (a mutant that hangs costs its build and its test limit, twice its
+  # shard's baseline test time and at least 300 s: under 10 minutes on
+  # 2026-11-12), so the 16 shards, the budget and timeout-minutes stay.
+  #
   # Each mutant's tests may run for twice the time the unmutated tree's took
   # in that shard, and at least 300 s (ci/mutants.sh says why); the unmutated
   # tree's have no limit but the budget: at worst, if they hang, every shard
@@ -66,7 +87,8 @@ jobs:
     strategy:
       fail-fast: false
       # 12 shards at a time, so that a run leaves runners for CI and the
-      # nightly; the other 4 start as the first finish (about two hours in all).
+      # nightly; the other 4 start as the first finish (about two and a half
+      # hours in all, above).
       max-parallel: 12
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]

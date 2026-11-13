@@ -1,0 +1,25 @@
+# cargo-mutants' settings for this workspace. cargo-mutants 27.1.0 reads them
+# from here (src/config.rs, read_tree_config) in every run in this tree: the
+# weekly job's (ci/mutants.sh) and any run by hand. --cap-lints on the command
+# line overrides cap_lints here (--cap-lints false turns the cap off), and
+# --no-config or --config <file> skips this file whole.
+#
+# Cap the lints. Cargo.toml denies the dead_code and unused lints in every
+# crate, so a mutant that leaves a parameter, binding, import or item unused
+# did not build: cargo-mutants counted it unviable and never ran its tests.
+# Many replacements of a whole function body do (`replace
+# State::replaces_any -> bool with false`), and some deletions of a struct
+# field and replacements of a match guard. The run of 2026-11-12
+# (43341050834) counted 1,400 of its 3,296 mutants unviable. With cap_lints,
+# cargo-mutants adds --cap-lints=warn to the rustc flags of every build and
+# test it runs, the unmutated tree's included (src/cargo.rs,
+# encoded_rustflags: added to CARGO_ENCODED_RUSTFLAGS, or to RUSTFLAGS, and
+# set as CARGO_ENCODED_RUSTFLAGS), so a denied lint only warns there and the
+# mutant's tests judge it. On the keys crate (2026-11-13, under
+# ci/mutants.sh's caps) 159 of its 306 unviable mutants then built, and its
+# tests caught all 159; the other 147 still fail on compile errors that no
+# cap turns off (mostly a type without the trait or method the replacement
+# needs; 9 break a constant evaluated at compile time). Only the cargo
+# processes cargo-mutants starts are capped; cargo never reads this file, so
+# gate.sh and CI still deny the lints.
+cap_lints = true
