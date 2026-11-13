@@ -17,7 +17,15 @@ owner's decisions of 2026-11-08 and 2026-11-12: a deletion or cleanup is forgott
 watermark that a write holder signs once it has held it for a year by its own calendar, the clock
 rule is gone, and counters have a fixed ceiling; a wrong or faked clock on one write holder can make
 every device forget every deletion at once, and forgetting can be held back without bound, both
-stated residuals (TM-40). This file is normative for
+stated residuals (TM-40); and on 2026-11-13 for the owner's decisions of that day: every
+connectivity setting is on, off, at default (the setting's default, TM-25) or unconfirmed, and
+starts unconfirmed, which acts as off; the guided setup asks once, suggesting a recommended set that
+never makes the device a relay, a DHT server or a coordinator for strangers (TM-24 to TM-26,
+TM-31, section 5); a computer may coordinate punches only for two devices that have the same one
+of its folders open with it; and a public relay also coordinates punches (TM-25); and the same day
+for the consistency fixes the documentation site's reviews found: what the client does with a link's
+fragment (TM-18), what a browser invite is (TM-37), and what LAN beacons, DHT lookups and Padmé show
+(sections 3.1, 3.9 and 5). This file is normative for
 every crate in this workspace, for the apps in `app/` and for the browser client in `web/`. Its
 companions are `suites.md` (algorithms and approved crates), `keys.md` (folder keys, derivations,
 records, key strings) and `protocol.md` (wire protocol). The plan, "Lickety-Sync: Project Plan", is
@@ -82,7 +90,7 @@ design and are listed as leaks in section 5 rather than promised away.
 | Local key store | The device seed and one key per folder the device holds | That device | Confidentiality: its theft is the theft of every key in it (section 3.4) |
 | Catalogue (phase 5) | Which folders a person's linked devices hold, and at which tiers | Those linked devices | Confidentiality against everyone else |
 | Local API token | Authenticates the CLI and web UI to the service | The local user | Confidentiality against other local users and web pages |
-| Metadata that leaks | Padded sizes, chunk counts, record counts and rates, timing, the salted folder and announcer hashes on the LAN, the daily discovery hash and the stable identifiers a device publishes with it on the DHT, that two addresses talk, device IDs and names, and to whoever completes a connection the libp2p peer ID, the protocols it offers in multistream-select, the device key, the suite, compression, hash and feature lists and limits, and a coarse count of the folders it holds (proof-result timing) | Sealed peers, relays, network observers, as section 5 states | Not protected; documented |
+| Metadata that leaks | Padded sizes, chunk counts, record counts and rates, timing, the salted folder and announcer hashes on the LAN with each beacon's port, number of folders and minute, the daily discovery hash, the lookups for it and the stable identifiers a device publishes with it on the DHT, that two addresses talk, device IDs and names, and to whoever completes a connection the libp2p peer ID, the protocols it offers in multistream-select, the device key, the suite, compression, hash and feature lists and limits, and a coarse count of the folders it holds (proof-result timing) | Sealed peers, relays, network observers, as section 5 states | Not protected; documented |
 
 ## 2. Parties and trust boundaries
 
@@ -97,11 +105,11 @@ holder of one key is trusted alike.
 | Read key holders | Verification key, data key, index, plaintext | To read; their changes are rejected by every peer | Same |
 | Sealed key holders (sealed peers) | Verification key, access key, ciphertext, signed records, chunk ciphertext hashes | To store and serve ciphertext faithfully; nothing else, and faithfulness is verified rather than assumed | Same; a NAS, a friend's machine, a browser in vault mode |
 | Linked devices (phase 5) | A person's devices, passing folder keys to each other over an authenticated channel | As holders of the keys they receive | Same |
-| Relays (public only: the owner's decision of 2026-11-03) | Both endpoints' addresses and libp2p peer IDs, timing, volume and the sizes of the encrypted frames it forwards; no folder ID, since a reservation and a circuit name peers, never a folder | Nothing; forwards end-to-end ciphertext only, within the limits its person set (TM-25) | Any computer whose person turned relaying on, theirs or a stranger's, never a phone; no relay is used, and none is served, unless turned on: using per folder, serving per device. There are no own-device, private or protected relays, since a device cannot tell its person's machines from a friend's when both share the same folders |
-| Hole-punch coordinators (the owner's decision of 2026-11-08) | That two devices are connecting, when, their public addresses and libp2p peer IDs, which devices keep reservations with it, and at most 64 KiB of their encrypted set-up a circuit; no folder, key or file | Nothing; forwards only a punch's set-up, never file data, since neither side runs the sync protocol through it, within its limits (TM-25) | Any computer whose person turned coordinating on, theirs or a stranger's, never a phone (the owner's decision of 2026-11-10, "Computers only"), needing no key to any folder; used only as each folder's settings allow, and reaching a device only for a requester that device knows from a shared folder or that proves a key to one of its folders (TM-25) |
-| The LAN | Beacons (salted folder hashes, salted announcer hash, port), multicast, every unencrypted byte | Nothing: a café network is the model | The network interface |
+| Relays (public only: the owner's decision of 2026-11-03) | Both endpoints' addresses and libp2p peer IDs, timing, volume and the sizes of the encrypted frames it forwards; no folder ID, since a reservation and a circuit name peers, never a folder | Nothing; forwards end-to-end ciphertext only, within the limits its person set (TM-25) | Any computer whose person turned relaying on, theirs or a stranger's, never a phone; no relay is used, and none is served, unless turned on: using per folder, serving per device (the guided setup's recommended set turns using on, never serving). There are no own-device, private or protected relays, since a device cannot tell its person's machines from a friend's when both share the same folders |
+| Hole-punch coordinators (the owner's decisions of 2026-11-08 and 2026-11-13) | That two devices are connecting, when, their public addresses and libp2p peer IDs, which devices keep reservations with it, and at most 64 KiB of their encrypted set-up a circuit; no folder, key or file | Nothing; forwards only a punch's set-up, never file data, since neither side runs the sync protocol through it, within its limits (TM-25) | Any computer whose person turned coordinating on, theirs or a stranger's, for anyone or only for the devices of its own folders (the guided setup's recommended set: the owner's decision of 2026-11-13, "Both (Recommended)"; and only for two devices that have the same one of its folders open with it: "Narrow (Recommended)"), and any public relay (the owner's decision of 2026-11-13, "Yes, relays help too (Recommended)"); never a phone (the owner's decision of 2026-11-10, "Computers only"); needing no key to any folder; used only as each folder's settings allow, and reaching a device only for a requester that device knows from a shared folder or that proves a key to one of its folders (TM-25) |
+| The LAN | Beacons (salted folder hashes, salted announcer hash, port, minute), multicast, every unencrypted byte | Nothing: a café network is the model | The network interface |
 | The internet | Addresses, timing, volume, QUIC and TLS handshakes | Nothing | Same |
-| The Mainline DHT | Daily discovery hashes with the addresses announcing them; signed address records (BEP 44) under a stable per-device key | Nothing; off by default, and seeing a peer grants no access | UDP to strangers; client mode by default |
+| The Mainline DHT | Daily discovery hashes with the addresses announcing them; signed address records (BEP 44) under a stable per-device key | Nothing; off until its person turns it on (the guided setup's recommended set turns it on, in client mode), and seeing a peer grants no access | UDP to strangers; client mode unless its person turns server mode on, which the recommended set never does |
 | The browser client's static host (licketysync.app) | Serves the WebAssembly bundle; never sees invite fragments, keys or content | To serve the published bundle; a compromise serves a changed client, which a signed manifest lets the native app or a verifying extension detect | HTTPS; the service worker cache only delays what the host serves |
 | The browser running the client | Keys and plaintext of the folders it joins, in origin-private storage or a chosen directory | As a peer at its key's tier; the browser's origin rules keep other sites out | The browser's same-origin policy |
 | The local API and its clients | The service listens on a Unix socket or named pipe and on localhost HTTP; the CLI and web UI hold the token | The token holder is the local user | Host and Origin checks, the token, socket permissions |
@@ -149,18 +157,19 @@ file, and matters only where no other write holder signs (the owner's decision o
 slow release, "Accept, documented"; `protocol.md` §4.4, "What holds forgetting back").
 
 Cannot: read contents, names, index records, keys or key material; learn the folder ID, a device's
-identity key or any key from the hashes, or link two beacons to one folder or to one device from the
-beacons' contents without the ID or the key (the source address links beacons from one interface,
-which no hashing hides); join a folder, open a folder proof, or learn whether a device holds a
-folder, by knowing its ID (TM-32); downgrade the transport to plaintext (TM-1), or from TLS to Noise
-on one transport, because each transport offers exactly one security protocol (`suites.md`,
-transport): blocking can force the choice of transport, never of the protocol within one, and the
-WebSocket path it can force a dialer onto is still encrypted and authenticated (TM-1); downgrade
-the suite (TM-30); open recorded traffic later with a quantum computer beyond what a sealed peer
-sees, because content is encrypted under the folder's symmetric keys before it leaves the device and
-no folder key ever travels inside the protocol (TM-33, section 5); link one day's DHT announcements
-to the next without the folder ID, a stable address or a stable published identifier (TM-24);
-impersonate a peer, because peers authenticate by key, not address (TM-32).
+identity key or any key from the hashes, or link two beacons to one folder or to one device by their
+hashes without the ID or the key (the port, the number of announced folders and the minute, which
+every beacon carries in the clear, and the source address can link them, section 5); join a folder,
+open a folder proof, or learn whether a device holds a folder, by knowing its ID (TM-32); downgrade
+the transport to plaintext (TM-1), or from TLS to Noise on one transport, because each transport
+offers exactly one security protocol (`suites.md`, transport): blocking can force the choice of
+transport, never of the protocol within one, and the WebSocket path it can force a dialer onto is
+still encrypted and authenticated (TM-1); downgrade the suite (TM-30); open recorded traffic later
+with a quantum computer beyond what a sealed peer sees, because content is encrypted under the
+folder's symmetric keys before it leaves the device and no folder key ever travels inside the
+protocol (TM-33, section 5); link one day's DHT announcements to the next without the folder ID, a
+stable address or a stable published identifier (TM-24); impersonate a peer, because peers
+authenticate by key, not address (TM-32).
 
 What a network observer who answers at an address can also learn (recorded 2026-11-03): **a
 dialer's libp2p identity**. `net` dials with the peer ID it expects, but `libp2p-tls` builds its
@@ -483,15 +492,15 @@ verifying extension trusts the host at the moment of loading, exactly as with an
 Someone who runs many DHT nodes to surround a target's position in the routing space, enumerate
 announcements, or use the DHT as an amplifier.
 
-Can: see which addresses announce a given day's discovery hash, if they know the folder ID, and the
-stable identifiers each announcing device publishes (the BEP 44 key its address record is signed
-with, its DHT node ID; the record carries no libp2p peer ID, the DeviceProof binds identity at the
-handshake instead, and no list of the hole-punch coordinators the device uses, which travels only
-to its folders' peers and in invites: the owner's decision of 2026-11-10, TM-25); serve an old
-signed address record to a reader that holds no newer one, which is
-harmless because the address is only a dial hint and the handshake decides the rest; eclipse a
-device so that its lookups return only the attacker's nodes, denying discovery through the DHT;
-enumerate announcing addresses by crawling.
+Can: see which addresses announce a given day's discovery hash, if they know the folder ID, and,
+at the nodes they run that a lookup reaches, which addresses look it up; and the stable identifiers
+each announcing device publishes (the BEP 44 key its address record is signed with, its DHT node ID;
+the record carries no libp2p peer ID, the DeviceProof binds identity at the handshake instead, and
+no list of the hole-punch coordinators the device uses, which travels only to its folders' peers and
+in invites: the owner's decision of 2026-11-10, TM-25); serve an old signed address record to a
+reader that holds no newer one, which is harmless because the address is only a dial hint and the
+handshake decides the rest; eclipse a device so that its lookups return only the attacker's nodes,
+denying discovery through the DHT; enumerate announcing addresses by crawling.
 
 Cannot: turn a discovery hash back into the folder ID or any key; gain access to a folder by seeing
 or impersonating its peers, since access needs a key (TM-32); link a folder's announcements across
@@ -502,7 +511,8 @@ announcement (BEP 44 key, persisted node ID); use the device as a `get_peers` am
 since the DHT runs in client mode unless the person turns on server mode, which adds a per-source
 rate limit and bounded responses (TM-24, Adamsky 2015); replay an old BEP 44 address record over a
 newer one a reader already holds, since the sequence number is persisted and never reused (TM-24);
-affect anyone who has not turned the DHT on (it is off by default). Eclipse denies one discovery
+affect anyone who has not turned the DHT on (it is off until its person turns it on, TM-24).
+Eclipse denies one discovery
 method; LAN, direct addresses and peer exchange remain, and so do public relays where the person
 turned them on and learned of them other than through the DHT (from peer exchange or a list the
 person adds, TM-25).
@@ -861,15 +871,22 @@ newer one, or a deleted file back, never replace a newer version with an older o
 rollback, where a store serves an older snapshot as current (Tahoe-LAFS known issues; Syncthing's
 untrusted-device spec is silent on it). Enforced by `index`.
 
-**TM-18. Invite secrets travel only after `#`, and the client origin has no landing page.** In a link
-the key string sits in the fragment, which browsers never send to a server; licketysync.app serves
-the client bundle and nothing else, so no page there logs, redirects or renders a link's secret; the
-documentation site, on the separate registrable domain licketysync.com, links to the client and
-never carries an invite; and a link that does not begin with `https://licketysync.app/join#` is
-refused (`keys.md` §6.3). Stops secrets in URLs leaking through referrers, history and landing pages
-(Resilio Sync 2024; BitTorrent Sync analysis 2014; Tahoe-LAFS). Enforced by `keys` (the link
-parser), `web` (client) and `site` (documentation), reviewed in `app` and `cli` wherever a link is
-built.
+**TM-18. Invite secrets travel only after `#`, and the client origin has no landing page.** In a
+link the key string sits in the fragment, which browsers never send to a server; licketysync.app
+serves the client bundle and nothing else, so no page there logs, redirects or renders a link's
+secret; the documentation site, on the separate registrable domain licketysync.com, links to the
+client and never carries an invite; a link that does not begin with `https://licketysync.app/join#`
+is refused (`keys.md` §6.3); and the client, whenever the page's address has a fragment, a refused
+link's included, replaces that address with the same one less its fragment (`history.replaceState`),
+once it has read the key from it if it carries one, so that the key leaves the address bar and the
+page's entry in the tab's history, and a bookmark or a copy of the page's address no longer carries
+it (the spec author's choice, for the owner's review). What the browser recorded before the client
+ran, in its own list of visited pages and in anything that syncs that list, and the message the link
+came in, the client cannot reach: a stated residual. Stops secrets in URLs leaking through
+referrers, server logs and landing pages, and narrows what a browser's history keeps to that
+residual (Resilio Sync 2024; BitTorrent Sync analysis 2014; Tahoe-LAFS). Enforced by `keys` (the
+link parser), `web` (client) and `site` (documentation), reviewed in `app` and `cli` wherever a link
+is built.
 
 **TM-19. Retired 2026-10-22.** Was "Revocation, suspension and epochs". There is no revocation,
 suspension, lift, rotation, epoch or grant (owner's decision, 2026-10-18); removing someone is
@@ -1159,7 +1176,10 @@ then it would fail the nightly fuzz job at once) moved into `fuzz_targets/`.
 announcement hash is derived from the folder ID and the current day; the node is a client unless the
 person turns on server mode, which adds a per-source rate limit and bounded responses; the BEP 44
 sequence number is persisted and never reused, and the BEP 44 signing key, like the node ID, is a
-stable identifier the device publishes (section 5); the DHT is off until a folder turns it on. Stops
+stable identifier the device publishes (section 5); the DHT is off until its person turns it on, for
+the device or for a folder: in the guided setup, whose recommended set turns it on in client mode
+and never in server mode (the owner's decisions of 2026-11-13, TM-25), or in the settings; server
+mode is a setting of the device. Stops
 Sybil and eclipse attacks learning more than one day's peers, announcement enumeration by crawlers,
 and `get_peers` amplification (Wang and Kangasharju; BEP 42; Adamsky 2015). Enforced by `net`.
 
@@ -1167,18 +1187,20 @@ and `get_peers` amplification (Wang and Kangasharju; BEP 42; Adamsky 2015). Enfo
 are used only where turned on, and punches only as each folder's settings allow; a relay is public,
 carries ciphertext only and enforces its person's limits with bounded state; a coordinator carries
 only a punch's set-up; and a device takes a punch only from a requester it knows or that proves a
-key.** No device relays or coordinates hole punches for others, and no device uses a relay, unless
-its person turned that on (the owner's answers of 2026-11-02, "Only relay when configured to do so",
-and of 2026-11-03, "drop the private/protected relay idea and only work with public relays"; for
-hole punches, the owner's decision of 2026-11-08, below). Asking for punches, and being reached
-through them, is on unless turned off, through peers of a shared folder, as each folder's settings
-allow (the owner's decision of 2026-11-08, "Those defaults are fine, go ahead"). Serving as a relay
-is a setting of each device, off by default and
-offered on computers only, never on a phone (the plan's "Role in a folder": a phone is a leaf, never
-a relay); using relays is each folder's public-relays switch, off by default. Every relay serves
-whoever reaches it and is a stranger to the peers it carries: there are no own-device, private or
-protected relays, since a device cannot tell its person's machines from a friend's when both share
-the same folders.
+key.** No device relays or coordinates hole punches for others, no device uses a relay, and no
+device asks for a punch or is reached through one, unless its person turned that on (the owner's
+answers of 2026-11-02, "Only relay when configured to do so", and of 2026-11-03, "drop the
+private/protected relay idea and only work with public relays"; for hole punches, the owner's
+decisions of 2026-11-08 and 2026-11-13, below). Every one of these settings starts unconfirmed,
+which acts as off, and the guided setup asks once (below); the owner's default of 2026-11-08, by
+which asking for punches through peers of a shared folder, and being reached through them, was on
+unless turned off ("Those defaults are fine, go ahead"), is replaced by their decisions of
+2026-11-13. Serving as a relay is a setting of each device, off until turned on, which the guided
+setup never does, and offered on computers only, never on a phone (the plan's "Role in a folder": a
+phone is a leaf, never a relay); using relays is each folder's public-relays switch, off until
+turned on. Every relay serves whoever reaches it and is a stranger to the peers it carries: there
+are no own-device, private or protected relays, since a device cannot tell its person's machines
+from a friend's when both share the same folders.
 
 **Connectivity settings** (the owner's decision of 2026-11-10: "Both must allow. Folders should be
 able to be individually configured for hole punch, plus there should be global configuration for
@@ -1186,10 +1208,112 @@ allowing direct connect, DHT, etc. global settings set defaults. Folders can ove
 connectivity switch has a device-wide default that each folder may override: LAN discovery, direct
 connections, the DHT, public relays, Tor, and the hole-punch level (below); the plan's "Connectivity
 per folder" lists all six, with their device-wide defaults under Settings → Connectivity, and a
-new folder starts from the device-wide settings (the owner's decision of 2026-11-11). Offering to
-relay and offering to coordinate stay device-wide. A connection serves a folder only as
-that folder's own settings, or the defaults it keeps, allow, and on a connection they do not allow
-the folder is treated as paused (`protocol.md` §3.1, §3.5).
+new folder starts from the device-wide settings (the owner's decision of 2026-11-11); each switch,
+a folder's included, has the four states below, and a folder's at default follows the device's.
+Offering to relay and offering to coordinate stay device-wide, and so do port mapping (TM-26) and
+the DHT's server mode (TM-24), which concern the device's one port and its one DHT node. A
+connection serves a folder only as that folder's own settings, or the defaults it keeps, allow, and
+on a connection they do not allow the folder is treated as paused (`protocol.md` §3.1, §3.5).
+
+**Every setting starts unconfirmed, and the guided setup asks once** (the owner's decisions of
+2026-11-13). On finding devices on the local network the owner answered "Ask during setup", and
+then: "Ask, suggest using recommended options. By default, let's turn on the usage of local network
+discovery, opening a port on the router, using public trackers, hole punching, using public relays,
+etc. because the user probably wants to have this 'just work.' The defaults would not enable this
+node as a public relay - instead it would only enable features that would benefit the local
+folders. However, some security-minded people will certainly want to disable these options. If the
+user says no, they can be presented with the configuration screen to select what features they want
+to enable."; on port mapping, "Yes, this feature should default to on (see the previous question)
+and advanced users can turn it off before the folder even starts to sync."; on who helps with hole
+punches, "Both (Recommended)"; on "public trackers", "Yes, the DHT (Recommended)"; on setup's "no",
+"Start by showing the recommended settings enabled (as defaulted options). Again, at least three
+states: on (override default), off (override default), and default (the recommended settings). Make
+sure it's clear if the default setting is on or off."; and on settings that a later release adds,
+"Ask once about each when there is a GUI and have it disabled until after the user decides. Then we
+can turn it on (via default settings), but only if the person selected to use the recommended
+settings. The settings should not be on/off, but on/off/default or on/off/default/unconfirmed where
+default is the recommended settings and the unconfirmed state is where we didn't get confirmation.
+Modifying them turns them into on/off and a button would reset all settings to recommended
+defaults. When upgrading, we should be forthcoming with settings like this. CLI tools should start
+with unconfirmed as well, offering a suggestion to run the command with specific flags to set the
+option appropriately." So:
+
+- **Four states.** Every connectivity setting, the device's and each folder's alike, is in one of
+  four states: **on** or **off**, which override the default; **default**, which follows that
+  setting's default, the app always showing whether that default is on or off; and **unconfirmed**,
+  not yet confirmed, which acts as off. There are two defaults: a device setting's **recommended
+  default**, which is on for the recommended set below and off for every other setting, and a
+  folder switch's **device default**, the device's setting for it. Changing a setting makes it on or
+  off, and a button resets every setting to default; the settings screen shows each default's value
+  next to that button, and on the command line a reset and `settings confirm` each print every
+  setting they set and the value it takes, so the person sees what a reset or a confirm turns on, a
+  later or raised default among it. A new folder's switches start at
+  default, following the device's, unless the person changes them as they make or join the folder;
+  confirming the make or join confirms them, so a folder's switch is never unconfirmed itself,
+  though at default it follows a device setting that may be. The hole-punch level, which has four
+  levels rather than on and off, is likewise at a level the person chose, at default (the fourth
+  level, or the device's), or unconfirmed (acting as never); and so is coordinating (below).
+- **Before the answer.** Until the person answers the guided setup, every connectivity setting of
+  the device is unconfirmed, and so acts as off: the six device-wide defaults above, the hole-punch
+  level among them, which acts as never; port mapping (TM-26); the DHT's server mode; serving as a
+  relay; coordinating; and the browser listeners, WebTransport and the secure WebSocket (HTTPS)
+  listener with its certificate, the person's own or Let's Encrypt's (`suites.md`,
+  transport). The device then contacts no host (TM-31): it sends no beacon, asks the DHT nothing,
+  maps no port, reserves with no relay and dials no peer; and it opens no listening socket but the
+  local API's (TM-21) and joins no multicast group. The same holds while the settings are
+  unconfirmed after "No", and, once they are confirmed, until a setting that needs one of them is on
+  and a folder that uses it starts to sync (below).
+- **The answer is a setting of the device, and is never assumed.** The guided setup asks once,
+  before the device's first folder is made or joined; closing it, or closing the graphical settings
+  screen without confirming it, is no answer, and the setup asks again; no folder is made or joined
+  until the setup has an answer. On the command line (phase 1, whose command names these examples
+  only suggest), every setting starts unconfirmed too, and the setup is answered once no shown
+  setting is unconfirmed: after a "yes" (`licketysync setup --recommended`, say), which sets every
+  shown setting to default; after `licketysync settings confirm`, which confirms the shown defaults;
+  after a reset, which sets every setting to default; or once every setting has been set. A "no"
+  prints every setting with its default's value and the command that sets it on, off or default,
+  and sets nothing, so alone it is no answer, like a closed screen. Until the setup is answered, a
+  command that would make or join a folder makes or joins nothing: at a terminal it asks again, and
+  without one, as on a headless device, it names the command that answers. The command line reports
+  every setting still unconfirmed, with the command that sets it.
+- **What it suggests.** It explains each setting, what it gives and what it shows (section 5), and
+  suggests the **recommended set**: LAN discovery; port mapping (TM-26); the DHT in client mode
+  ("public trackers", which the owner confirmed means the DHT, the spec's one internet-wide
+  discovery, TM-24); direct connections, hole punching among them; using public relays; on
+  computers, coordinating punches for the devices of this device's own folders only (below); and
+  each folder's hole-punch level at the fourth, through any device it knows and any public relay
+  its person turned on. Tor, serving as a relay, the DHT's server mode, coordinating for anyone and
+  the browser listeners stay off.
+- **"Yes" and "No".** "Yes" sets every setting the setup showed to default, so each follows its
+  recommended default, and every new folder starts from them. "No" opens the settings screen with
+  every setting at default, each showing whether its default is on or off; nothing is active until
+  the person confirms the screen, every setting staying unconfirmed until then (the coordinator's
+  reading of the owner's words, for the owner's review). Either way, one rule holds, however a
+  setting was turned on: a service that contacts a host or listens (LAN discovery, port mapping, the
+  DHT, relays and coordinating, and the listeners they need) starts only when the first folder that
+  uses it starts to sync, and stops when the last such folder is paused or unlinked; and no folder
+  starts to sync until the setup has closed and the person has confirmed making or joining it.
+  Before a folder starts to sync, the person can turn any of them off: the six switches above for
+  the device or for one folder, and port mapping, coordinating, relaying, the DHT's server mode and
+  the browser listeners for the device, the only place they are set.
+- **Settings a later release adds.** The setup shows only the settings its release has, and its
+  answer covers only those. A setting that a later release adds starts unconfirmed, acting as off,
+  on a device that has already answered. With a graphical app, the app asks once about it, explains
+  it and suggests its recommended value; if the person picks that, the setting is at default,
+  otherwise on or off as they chose (the coordinator's reading, for the owner's review). The command
+  line reports it as unconfirmed and suggests the flags that set it. A later release that changes a
+  recommended default so that it allows more (off to on, a more open hole-punch level, a wider
+  coordinating value) makes that setting unconfirmed, acting as off, on every device that keeps it
+  at default, and the app asks once about it, as for a new setting; a change that allows less
+  applies at once, and the release says so.
+- **What it never does, and what it shows.** The recommended set never makes the device a relay, a
+  DHT server, or a coordinator for anyone but the devices of its own folders, and on a phone it
+  turns no coordinating on. What it shows is section 5's ("What the recommended set shows"): at the
+  fourth level, every coordinator a punch uses, a stranger's public relay among them, learns that
+  two devices are connecting, when, and their addresses; the up to three coordinators a device
+  keeps standing reservations with, strangers' public relays among them, learn its peer ID, its
+  public address as it changes, and when it is online; and coordinating for the devices of its own
+  folders keeps one residual: it serves no stranger only while its folders' keys stay secret.
 
 A relay:
 
@@ -1262,26 +1386,82 @@ A relay:
 key to the folder; in part, verbatim: "Hole punching can now use any known client. Prefer ones that
 we've connected to, but you can fall back to public relays. We no longer need to prove that we have
 a key to the same folder.", and "The load there should be minimal (much less than a relay) and it
-doesn't leak more than what others are willing to give up, so go for it."). Hole punching, by which
+doesn't leak more than what others are willing to give up, so go for it."; and their decisions of
+2026-11-13 on the guided setup, above). Hole punching, by which
 two devices behind ordinary home routers reach each other directly, needs a third device that both
 can reach, the **coordinator**, to carry their first messages over a short relayed connection, by
 which each learns the other's public address and the two time a simultaneous open (libp2p's DCUtR
 over circuit relay v2). From phase 2 (the owner's answer to Q4 of 2026-11-04):
 
-- **Who coordinates.** A device coordinates punches only if its person turned "allow acting as a
-  hole-punch coordinator" on: a setting of each device, off unless turned on (the owner's decision
-  of 2026-11-08, "Those defaults are fine, go ahead"), offered on computers only, desktops, laptops
-  and NAS boxes, never on a phone, which can be helped but never helps (the owner's decision of
-  2026-11-10, "Computers only (Recommended)"). A coordinator announces itself by registering the
-  punch's relay protocol with libp2p, whose identify lists it to every device it connects to, and a
-  device uses as a coordinator only a device that lists it (the spec author's choice, for the
-  owner's review).
+- **Who coordinates.** A device coordinates punches only if its person turned coordinating on: a
+  setting of each device, offered on computers only, desktops, laptops and NAS boxes, never on a
+  phone, which can be helped but never helps (the owner's decision of 2026-11-10, "Computers only
+  (Recommended)"), with three values: **off**; **for the devices of its own folders**, which the
+  guided setup's recommended set turns on (the owner's decision of 2026-11-13, "Both
+  (Recommended)"; below); and **for anyone**, "allow acting as a hole-punch coordinator", off unless
+  turned on (the owner's decision of 2026-11-08, "Those defaults are fine, go ahead"), which the
+  recommended set never turns on. In the four states above it is at a value the person chose (off,
+  for the devices of its own folders, or for anyone); at default, which is for the devices of its
+  own folders on a computer, and is not offered on a phone; or unconfirmed, acting as off, as it
+  starts. A public relay also coordinates, for anyone, with no setting
+  of its own (below). A coordinator announces itself by registering the punch's relay protocol with
+  libp2p, whose identify lists it to every device it connects to, and a device uses as a coordinator
+  only a device that lists it (the spec author's choice, for the owner's review); one for the
+  devices of its own folders offers and lists it only on some connections (below).
+- **For the devices of its own folders** (the owner's decisions of 2026-11-13, "Both (Recommended)",
+  and on its scope, "Narrow (Recommended)"; how it admits is the spec author's choice, for the
+  owner's review). In this mode a device offers the punch's relay protocol, in identify and in
+  multistream-select, only on a direct connection where one of its folders is open (`protocol.md`
+  §3.5), which a folder never is on a connection its own settings do not allow (above), and accepts
+  a reservation, and a request for a punch (circuit relay v2's CONNECT), only there, from a device
+  that has so proven a key to a folder this device holds. It joins two devices only when both have
+  the same one of its folders open with it, on the connection that holds the reservation and on the
+  one that carries the request: unless one of its folders is open on both, a request for a punch is
+  answered as one for a device that holds no reservation with it (NO_RESERVATION). That check comes
+  before any cap; a request it refuses then counts only toward the requester's own caps, never
+  toward the reserved device's or the caps in all, so that the answer is NO_RESERVATION however
+  often it comes, never busy, and the reserved device's punches are unaffected. A request on any
+  other connection, if one comes, is answered first, without regard to any table or cap, a
+  reservation refused (RESERVATION_REFUSED) and a request for a punch NO_RESERVATION, however often
+  it comes; only then is it counted, at most toward its requester's cap by peer ID, never toward a
+  source address's nor toward any other cap that the peers of its folders share (TM-22 bounds the
+  streams that carry such requests), so that the answer tells the requester nothing of who reserves
+  there and uses up nothing a peer of its folders needs. It drops a reservation once no such folder
+  is open on the connection that holds it. A device that wants a reservation there asks on a
+  connection once two things have happened, in either order: its folders' proofs there are answered
+  (`protocol.md` §3.5), and identify lists the punch's relay protocol there; when a folder opens
+  there later and the listing follows, it asks again, once, if it holds no reservation there; a
+  requester refused tries the next coordinator it read. A device cannot tell a coordinator's mode,
+  which identify does not carry, so it lists any coordinator that is a peer of one of its folders,
+  whatever its mode, only in the peer exchange of the folders open between the two, and never in an
+  invite (below). Phase 2 checks that circuit relay v2's server, as rust-libp2p builds it, can be
+  offered and refused per connection. Everything else is as for any coordinator below: punch-only
+  circuits of at most 64 KiB and 60 s, direct connections only, the same rate limits, caps and
+  tables; each side of a punch it joins still filters the addresses it receives, and the device to
+  be reached still admits the requester itself ("Known peers or key holders", below). So the two
+  devices of every punch it joins are peers of one folder it holds, and a device that is not, a
+  stranger among them, gets neither a reservation nor a punch; a removed person (TM-42) who still
+  holds the old folder's key can still open that folder with it until this device unlinks it
+  (`keys.md` §7.4), and is served until then.
+  - **What it learns, and what remains** (the owner's words of 2026-11-08: "B can safely coordinate
+    if it is the same folder because B isn't going to get any information it doesn't already
+    have", and "If we must leak a share, then we don't do it."). It joins only peers of a folder it
+    holds, whose addresses and peer IDs it has already from that folder, and learns of them only
+    that they connect to each other, and when; its listing reaches only peers of that folder, who
+    learn from it nothing that the folder's peer exchange does not show them; and a peer of its
+    folders that asks for a punch to a device learns whether the device reserves there only when the
+    device is a peer of the same folder, whose peer exchange shows its coordinators anyway. One
+    residual remains: "never strangers" holds only while its folders' keys stay secret, since
+    anyone who holds a key to one of its folders, a widely shared read or sealed key among them, is
+    a peer of that folder. Section 5 and `protocol.md` §9 state the same.
 - **Each folder's hole-punch level.** A folder's level, its own or the device-wide default, says
-  which coordinators a punch for it may use, at one of four levels, the owner's: **never**;
-  **through peers of a shared folder**, the default unless changed (the owner's decision of
-  2026-11-08); **through devices it is connected to directly**; or **through any device it knows and
-  any public relay its person turned on**. The names of the levels are the spec author's, for the
-  owner's review, and so are these meanings, which the reviews of 2026-11-10 asked for:
+  which coordinators a punch for it may use, at one of four levels, the owner's: **never**, as which
+  an unconfirmed level acts (above); **through peers of a shared folder**, the default of the
+  owner's decision of 2026-11-08, which their decisions of 2026-11-13 replace; **through devices it
+  is connected to directly**; or **through any device it knows and any public relay its person
+  turned on**, the recommended default, which a device's level at default follows (the owner's
+  decision of 2026-11-13, "Both (Recommended)"). The names of the levels are the spec author's, for
+  the owner's review, and so are these meanings, which the reviews of 2026-11-10 asked for:
   - the levels are cumulative: each allows the coordinators of the levels before it;
   - a **peer of a shared folder** is a device that has opened a folder with this device, any folder
     this device still holds, as that folder's per-peer state shows by the libp2p peer ID the
@@ -1297,7 +1477,8 @@ over circuit relay v2). From phase 2 (the owner's answer to Q4 of 2026-11-04):
     it), an invite, or a list its person added; a public relay counts once its person turned it on,
     through the methods of TM-31;
   - a public relay is a coordinator only for a folder at the fourth level whose public-relays switch
-    is on, and its reservation counts among the device's coordinators.
+    is on, and its reservation counts among the device's coordinators (the owner's decision of
+    2026-11-13, "Yes, relays help too (Recommended)": no second switch).
 - **Both must allow** (the owner's decision of 2026-11-10). A punch serves a folder only when that
   folder's direct-connections switch is on and its level allows the coordinator that timed the
   punch, on each side: each side applies its own folders' settings when a folder opens on the
@@ -1307,21 +1488,24 @@ over circuit relay v2). From phase 2 (the owner's answer to Q4 of 2026-11-04):
   settings allow a punch through the coordinator in the middle count, for the lookup of a known peer
   as for a key proof: every other folder is treated as paused in the admission handshake, and the
   public-relays switches play no part on a punch-only circuit (the coordinator's ruling of
-  2026-11-10 on the confirm review).
+  2026-11-10 on the confirm review). A coordinator for the devices of its own folders adds its own
+  condition (above): it joins only two devices that have the same one of its folders open with it.
 - **The device to be reached chooses its coordinators in advance; nothing is picked at random.** A
   device whose settings allow punches and that cannot be reached directly keeps a reservation, a
-  small standing connection, with up to three coordinators its settings allow: devices it is
-  connected to that announce themselves as coordinators first, then public relays its person turned
-  on. It lists them as an address through each ("reach me through X"), and the list, which names its
-  own libp2p peer ID, goes only to known peers, each coordinator only for a folder whose own
-  settings allow a punch through it: by peer exchange, over connections on which such a folder is
-  open, and in the addresses of an invite to such a folder, where the sender adds them (`keys.md`
-  §6.3; the coordinator's ruling of 2026-11-10 on the confirm review). Its address record in the DHT
-  carries neither its peer ID nor the list (the owner's decision of 2026-11-10, "Peers now, alias
-  later"; `keys.md` §2.2), so a device found only through the DHT, and reachable only through
-  punches, is not reached that way. **Phase 2 item** (the same decision): a rotating alias that
-  coordinators accept in place of the device's peer ID, so that the DHT can carry the list without
-  the peer ID. A device that wants to reach it reads at most three coordinators of its list,
+  small standing connection, with up to three coordinators its settings allow and that accept it:
+  devices it is connected to that announce themselves as coordinators first, then public relays its
+  person turned on. It lists them as an address through each ("reach me through X"), and the list,
+  which names its own libp2p peer ID, goes only to known peers, each coordinator only for a folder
+  whose own settings allow a punch through it: by peer exchange, over connections on which such a
+  folder is open, and in the addresses of an invite to such a folder, where the sender adds them
+  (`keys.md` §6.3; the coordinator's ruling of 2026-11-10 on the confirm review); but a coordinator
+  that is a peer of one of the device's folders, whatever its mode, only in the peer exchange of the
+  folders open between the two, and never in an invite (above). Its address record in the DHT
+  carries neither its peer ID nor the list (the owner's decision of 2026-11-10, "Peers
+  now, alias later"; `keys.md` §2.2), so a device found only through the DHT, and reachable only
+  through punches, is not reached that way. **Phase 2 item** (the same decision): a rotating alias
+  that coordinators accept in place of the device's peer ID, so that the DHT can carry the list
+  without the peer ID. A device that wants to reach it reads at most three coordinators of its list,
   connects to those its own folders' settings allow, at most two at once, and the coordinator joins
   the two over a set-up circuit (below) to time the punch; if that fails, it tries the next. A
   device prefers coordinators it is already connected to and falls back to public relays acting as
@@ -1458,35 +1642,76 @@ over circuit relay v2). From phase 2 (the owner's answer to Q4 of 2026-11-04):
   router may pass on to a port it forwards), at most 20 attempts a minute, so at most 160 short
   bursts a minute toward third parties, and the device to be reached can do the same to a requester;
   a coordinator that lies about an address adds nothing beyond that, since each side filters what it
-  receives. - **Abuse, and its bounds.** A coordinator flooded with requests answers busy past the
-  limits above, and its tables do not grow. A requester cannot aim a punch at a device that did not
-  ask for one: the coordinator opens a circuit only to a device that holds a reservation with it,
-  which a device makes only as its own settings allow, and that device takes the punch only from a
-  requester it knows or that proves a key. A coordinator that lies about an address, or withholds or
-  delays the set-up, costs a failed punch and nothing else: the connection a punch makes is
-  authenticated by the transport's peer ID, and nothing of a folder crosses it before both sides'
-  folder proofs (TM-32); the device then tries another coordinator, or stays unconnected.
+  receives.
+- **Abuse, and its bounds.** A coordinator flooded with requests answers busy past the limits above,
+  and its tables do not grow. A requester cannot aim a punch at a device that did not ask for one:
+  the coordinator opens a circuit only to a device that holds a reservation with it, which a device
+  makes only as its own settings allow, and that device takes the punch only from a requester it
+  knows or that proves a key. A coordinator that lies about an address, or withholds or delays the
+  set-up, costs a failed punch and nothing else: the connection a punch makes is authenticated by
+  the transport's peer ID, and nothing of a folder crosses it before both sides' folder proofs
+  (TM-32); the device then tries another coordinator, or stays unconnected.
 
 The byte, time and count bounds, the coordinators' included, are the spec author's starting values,
 fixed in phase 2 with the code that applies them. A public relay, when its person turns relaying on,
-also coordinates punches, within its own limits above (the spec author's reading of the owner's "you
-can fall back to public relays", for the owner's review), and the device to be reached admits a
-requester through it as through any coordinator.
+also coordinates punches, within its own limits above, with no second switch (the owner's decision
+of 2026-11-13, "Yes, relays help too (Recommended)", which confirms the spec's reading of their "you
+can fall back to public relays"), and the device to be reached admits a requester through it as
+through any coordinator.
 
 The defaults of a relay's limits are fixed with the relay protocol, in phase 7. Stops a relay or a
 coordinator being used as free bandwidth beyond what its person allows, one requester, or many
 identities from one address, taking a relay's capacity, a relay or a coordinator learning contents
 or which folder a connection is for, a punch aimed at a third party or into a private network
-beyond the residuals stated, a stranger or a removed person reaching a device through a punch, and
-a device relaying or coordinating, a folder taking a punch its settings do not allow, or a folder's
-traffic leaving through a relay, without its person's consent (Syncthing relay spec; libp2p circuit
-relay v2 and DCUtR). Enforced by `net`: hole-punch coordinators from phase 2, public relays in
-phase 7 (the owner's decision of 2026-11-04).
+beyond the residuals stated, a stranger or a removed person reaching a device through a punch, a
+coordinator for the devices of its own folders joining anyone else, and a device relaying or
+coordinating, a folder taking a punch its settings do not allow, a folder's traffic leaving through
+a relay, or anything turned on before the guided setup's answer, without its person's consent
+(Syncthing relay spec; libp2p circuit relay v2 and DCUtR). Enforced by `net`: hole-punch
+coordinators from phase 2, public relays in phase 7 (the owner's decision of 2026-11-04), with
+`protocol.md` §8 item 15's vectors; the settings' starting values and the guided setup by `daemon`
+and `cli` from phase 1, by `app`, and by `web` for the browser client, whose own setup is phase 6's
+design, with these tests: `tm_25_nothing_before_the_answer` (a fresh device has every setting
+unconfirmed, opens no listening socket but the local API's, joins no multicast group and sends no
+packet, until the answer and, after "No", until the screen is confirmed and a setting needs one),
+`tm_25_yes_sets_every_shown_setting_to_default`, `tm_25_services_follow_their_folders` (a service
+starts with the first folder that uses it and stops with the last, however it was turned on),
+`tm_25_no_shows_defaults_and_turns_on_nothing_until_confirmed`,
+`tm_25_a_change_overrides_the_default`, `tm_25_reset_sets_every_setting_to_default`,
+`tm_25_a_folder_at_default_follows_the_device`, `tm_25_a_new_folder_starts_at_the_device_default`
+(its switches at default unless changed as it is made or joined, and never unconfirmed),
+`tm_25_a_phone_coordinates_for_no_one`, `tm_25_no_answer_makes_no_folder` (closing the setup or the
+settings screen unconfirmed, a command-line "no" that leaves settings unconfirmed, or a command
+without a terminal, makes or joins nothing), `tm_25_a_later_setting_is_unconfirmed_until_asked`,
+`tm_25_a_default_that_allows_more_is_unconfirmed_until_asked` (a recommended default changed to
+allow more, off to on, a more open hole-punch level or a wider coordinating value, leaves a setting
+at default unconfirmed; one changed to allow less applies at once) and
+`tm_25_the_command_line_reports_unconfirmed_settings` (its "no" sets nothing and prints each
+setting's default and command; `settings confirm` and a reset set the shown settings to default and
+print each with its value).
 
-**TM-26. Port mapping maps one port for this device, with a bounded lease, removed at exit.** UPnP,
-NAT-PMP and PCP requests name only this device's single listening port and a lease of bounded length,
-and the mapping is deleted on shutdown. Stops mappings injected or abused on home routers (UPnProxy
-2022; CallStranger 2020). Enforced by `net`.
+**TM-26. Port mapping is off until turned on, and maps one port for this device, with a bounded
+lease, removed at exit.** Asking the home router to forward a port is a setting of each device, not
+of a folder, off until its person turns it on: in the guided setup, whose recommended set turns it
+on (the owner's decision of 2026-11-13, "Yes, this feature should default to on (see the previous
+question) and advanced users can turn it off before the folder even starts to sync."; TM-25), or in
+the settings. UPnP, NAT-PMP and PCP requests name only this device's single listening port and a
+lease of bounded length, and the mapping is deleted on shutdown and when the setting is turned off.
+The client talks only to the default gateway that the system reports for the network it is on, by
+NAT-PMP or PCP at that address's port 5351, taking replies only from that address, and to SSDP's
+multicast address (239.255.255.250 port 1900, or ff02::c on IPv6) to find the gateway's UPnP
+service; it accepts a LOCATION or control URL only when the URL gives the gateway's own address
+itself, refusing, and never looking up, one that names a host (TM-31), bounds every reply
+before it allocates for it (TM-2, TM-22), and parses the UPnP descriptions' XML with no DTD and no
+external entities; each of these parsers is fuzzed (TM-3). With the setting on, the device asks the
+router of every network it joins, a café's or an office's among them, and that router, and anyone
+on that network who watches SSDP, sees it ask. While the port is mapped, anyone on the internet can
+reach it and learn what any connection to the device shows before a folder opens (section 5, "To a
+network observer"): that it runs Lickety-Sync, its libp2p peer ID, its device ID, the protocols it
+offers, its Hello and, from how long a refused folder proof takes, a coarse count of its folders;
+never a folder or a file without a key. Stops mappings injected or abused on home routers
+(UPnProxy 2022; CallStranger 2020), a router's answers steering the device to another host or
+exhausting it, and a port opened without its person's consent. Enforced by `net`, from phase 2.
 
 **TM-27. The Tauri shell uses the isolation pattern, a content security policy and per-window
 capabilities with the smallest command set.** Frontend code reaches the native core only through
@@ -1522,15 +1747,26 @@ the untrusted side (Seafile 2024) and cipher-suite downgrade (FREAK, Logjam, POO
 
 **TM-31. No host is contacted that `spec/allowed-hosts.txt` does not list.** A host is added only in
 the change that adds the feature contacting it, and only for a feature that is off until the user
-turns it on. `ci/no-hostnames.sh` checks hostnames and IPv4 addresses in one-line string literals in
-the `.rs` files under `crates/` against the list; it catches accidents, not adversaries, and states
-its limits (names under six top-level domains only; not IPv6, not hosts assembled from pieces, not
-`Cargo.toml` or included data files), which the reviewers cover. Of the project's own domains it
-exempts only the join-link prefix: it removes the exact text `https://licketysync.app/join#` and
-checks the rest of the string, so a URL that begins with it passes, and the reviewers confirm that
-the binary, which parses and writes join links, never requests it. Any other URL on those domains
-needs its line in the list like any other host. Stops telemetry, update checks and any contact the
-user did not choose. Enforced by `gate.sh` and CI.
+turns it on. Every connectivity setting starts unconfirmed, which acts as off, and the user turns
+one on by answering yes to the guided setup's recommended set, by confirming the settings screen
+with it at default or on, or by setting it on, and a setting a later release adds by answering the
+app's question about it (the owner's decisions of 2026-11-13, TM-25): so LAN discovery's multicast
+and broadcast addresses, which count as hosts and which the list will carry once phase 1 adds LAN
+discovery, are contacted only while it is on, and before that answer the device contacts nothing.
+Port mapping (TM-26) contacts the default gateway, whose address the system reports and no string
+holds, and SSDP's multicast address, 239.255.255.250, which the list will carry once phase 2 adds
+port mapping, and on IPv6 ff02::c, noted here rather than listed, since the list holds only
+hostnames and IPv4 addresses; the DHT's first nodes to ask join the list with the DHT, in phase 2.
+`ci/no-hostnames.sh` checks hostnames and IPv4 addresses in one-line string literals in the `.rs`
+files under `crates/` against the list; it catches accidents, not adversaries, and states its limits
+(names under six top-level domains only; not IPv6, not hosts assembled from pieces, not `Cargo.toml`
+or included data files), which the reviewers cover. Of the project's own domains it exempts only the
+join-link prefix: it removes the exact text `https://licketysync.app/join#` and checks the rest of
+the string, so a URL that begins with it passes, and the reviewers confirm that the binary, which
+parses and writes join links, never requests it. Any other URL on those domains needs its line in
+the list like any other host. Stops telemetry, update checks and any contact the user did not
+choose. Enforced by `gate.sh` and CI, and the settings' starting values by `daemon` and `cli` from
+phase 1, and by `app`.
 
 **TM-32. Each side proves it holds a key to the folder without sending it.** The handshake's folder
 proof is one proof for every tier (ruling S-1): a payload sealed under a key derived from the
@@ -1595,9 +1831,18 @@ There is no phrase and no owner key; within a folder, one-way derivation from th
 **TM-37. Key strings carry only the key and a checksum; invites are bare by default.** A key string
 carries the suite and the tier's key material (`keys.md` §6.1) and its checksum, and nothing else: no
 address, no name, no expiry. Addresses and the certificate hash are appended to a link only by the
-sender's choice, or automatically for browser invites and parcel links. Stops an invite putting the
-sender's home address into an email or chat. Enforced by `keys` (encoding) and `cli`, `app`, `web`
-(what is offered).
+sender's choice: when the sender adds them, or, automatically, when the sender makes a browser
+invite or a parcel link (phase 6). A browser invite is a link made for someone to open in the
+browser client, which cannot find a device by LAN discovery or the DHT (the spec author's reading of
+the plan's term, for the owner's review): a native device makes it when its person says the link is
+for a browser, and appends, as it makes the link, the addresses at which a browser can reach it then
+and the hash of its WebTransport listener's certificate, which lasts at most 14 days; that listener
+is a device setting, off until turned on (TM-25), which making a browser invite asks to turn on,
+saying what it shows (section 5, "To a network observer"; `keys.md` §6.3). The certificate's life is
+no expiry: a leaked browser invite gives the folder away like any key string (section 3.5). The app
+or the CLI says, as it makes a browser invite or a parcel link, that the link carries the device's
+addresses. Stops an invite putting the sender's home address into an email or chat unasked. Enforced
+by `keys` (encoding) and `cli`, `app`, `web` (what is offered).
 
 **TM-38. Retired 2026-10-22.** Was "A revoked key never learns a new epoch". There are no epochs: a
 folder's keys last its whole life, and anyone who held a key keeps what it opens until the others
@@ -1840,15 +2085,21 @@ that a device that cannot read a folder can still hold and serve it, which means
 data are visible to it. The list is honest because the plan's hardening review found that the systems
 it studied failed more often by promising too much than by leaking too much.
 
-**To anyone on the LAN.** That a device runs Lickety-Sync and which port it listens on; the device's
-address; in each beacon, under a salt fresh to that beacon, one hash per announced folder and one hash
-of the announcer's libp2p identity key (its peer tag), so that an observer who already knows the
-folder ID can confirm it is announced here, an observer who already knows the device's identity key
-(anyone it has connected to) can confirm that device is announcing, and an observer who knows neither
-cannot link two beacons to one folder or to one device from the beacons' contents (the source address
-links beacons from one interface, which no hashing hides); and, by replaying a captured beacon from
-its own address within the ±5-minute window listeners accept, which devices dial it and so hold the
-folder the beacon named, without knowing that folder's ID: the dial is the signal, and `keys.md`
+**To anyone on the LAN** (while LAN discovery is on, TM-25). That a device runs Lickety-Sync and
+which port it listens on; the device's address; in each beacon, under a salt fresh to that beacon,
+one hash per announced folder and one hash of the announcer's libp2p identity key (its peer tag), so
+that an observer who already knows the folder ID can confirm it is announced here, an observer who
+already knows the device's identity key (anyone it has connected to) can confirm that device is
+announcing, and an observer who knows neither cannot link two beacons to one folder or to one device
+by their hashes; but each beacon also carries in the clear the port and the number of folders it
+announces (one hash each), which change only when the device's port or its announced folders do, and
+its Unix minute, which shows how far the device's clock is off, to the minute and more closely from
+when the minute changes, an offset that stays about the same; these link a device's beacons from
+their contents, across a change of its source address too (a temporary IPv6 address that rotates, or
+a new address after its hardware address is randomised for the network, say), as the source address
+links the beacons from one interface, which no hashing hides; and, by replaying a captured beacon
+from its own address within the ±5-minute window listeners accept, which devices dial it and so hold
+the folder the beacon named, without knowing that folder's ID: the dial is the signal, and `keys.md`
 (discovery hashes) records it as the residual leak the design accepts.
 
 **To a network observer.** That two addresses talk, when, for how long and how much; the sizes and
@@ -1871,12 +2122,16 @@ folder has opened on the connection, in the first Status after the first folder 
 peer that has opened a folder with the device learns its name.
 
 **To the DHT and anyone crawling it.** Which addresses announce a given day's discovery hash; a
-signed address record under the device's DHT key. The hash does not reveal the folder ID and changes
-daily, but anyone who ever held the folder ID (any key holder, anyone who saw a key string) can
-compute every day's hash and watch who announces it, and a device is linkable across days by a
-stable address alone or by any stable identifier it publishes with the announcement: the BEP 44
-signing key its address record is signed with, or a persisted DHT node ID. The record carries no
-libp2p peer ID, and no list of the hole-punch coordinators the device keeps reservations with,
+signed address record under the device's DHT key; and, to each node a device asks, the device's
+address and each discovery hash it looks up (for each folder, the hashes of the day before, the
+day and the day after, `keys.md` §2.2): a node that knows the folder ID learns that this address
+looks for that folder, and nodes placed near a day's hash, which anyone who knows the folder ID can
+compute, are among those that lookups for it ask (section 3.9). The hash does not reveal the folder
+ID and changes daily, but anyone who ever held the folder ID (any key holder, anyone who saw a key
+string) can compute every day's hash and watch who announces it, and a device is linkable across
+days by a stable address alone or by any stable identifier it publishes with the announcement: the
+BEP 44 signing key its address record is signed with, or a persisted DHT node ID. The record carries
+no libp2p peer ID, and no list of the hole-punch coordinators the device keeps reservations with,
 whose addresses would name that peer ID (the owner's decision of 2026-11-10, "Peers now, alias
 later"; TM-25); the DeviceProof binds identity at the handshake. The libp2p identity key still gives
 every device a stable peer ID, which is a cross-folder tracking handle for anyone the device
@@ -1891,23 +2146,55 @@ names, keys or any record: the end-to-end channel runs inside the relayed connec
 anyone's device whose person turned relaying on, so whatever it sees, a stranger may see.
 
 **To a hole-punch coordinator** (any computer whose person turned coordinating on, theirs or a
-stranger's, never a phone, TM-25; the owner's decisions of 2026-11-08 and 2026-11-10). What both
-devices' settings let it learn: that the two are connecting, when, both their public addresses and
-libp2p peer IDs, and at most 64 KiB of their encrypted set-up a circuit; and, of a device that keeps
-a reservation with it, its peer ID and that it does. Not the folder, not a key, not a file: neither
-runs the sync protocol through it beyond the admission handshake, whose folder proof it cannot open
-(TM-32), and it needs no key to any folder. A folder at the default level, through peers of a
-shared folder, gives this only to such peers.
+stranger's, for anyone or for the devices of its own folders, and any public relay; never a phone;
+TM-25; the owner's decisions of 2026-11-08, 2026-11-10 and 2026-11-13). What both devices' settings
+let it learn: that the two are connecting, when, both their public addresses and libp2p peer IDs,
+and at most 64 KiB of their encrypted set-up a circuit; and, of a device that keeps a standing
+reservation with it, its peer ID, that it does, its public address as it changes, and when it is
+online. Not the folder, not a key, not a file: neither runs the sync protocol through it beyond the
+admission handshake, whose folder proof it cannot open (TM-32), and it needs no key to any folder.
+One that coordinates for the devices of its own folders (the owner's decision of 2026-11-13,
+"Narrow (Recommended)") joins only two peers of the same folder it holds, whose addresses and peer
+IDs it has already, and learns of them only that they connect to each other, and when; it is
+listed only to peers of that folder, and answers a request for a punch to a device of another
+folder as if that device held no reservation, so it shows no one a share they do not already see in
+the folder's own peer exchange. One residual remains: it serves no stranger only while its folders'
+keys stay secret, since anyone who holds a key to one, a widely shared read or sealed key among
+them, is a peer of that folder (TM-25). A folder at the second level,
+through peers of a shared folder, gives this only to such peers; one at the fourth, which the guided
+setup's recommended set picks, to every coordinator a punch for it uses, a stranger's public relay
+among them (below).
 
 **To the peers of a device's folders, and an invite's recipient.** Beyond what a key holder sees
 (below), by peer exchange over connections on which a folder is open, and in an invite that carries
 addresses: the device's addresses, its libp2p peer ID, and the coordinators it keeps reservations
 with, by their peer IDs, each only to the peers of a folder whose settings allow a punch through it
-and in an invite to such a folder (TM-25; the owner's decision of 2026-11-10, "Peers now, alias
-later"). Not
+and in an invite to such a folder, but a coordinator that is a peer of one of its folders, whatever
+its mode, only to the peers of the folders open between the two, and in no invite (TM-25; the
+owner's decision of 2026-11-10, "Peers now, alias later"). Not
 the DHT: a crawler learns none of these from it. A requester that is no peer of the device's folders
 and proves no key learns from a punch at most that the device is online, and what any connection to
 it shows before a folder opens (TM-25).
+
+**What the recommended set shows** (the guided setup's, TM-25; the owner's decisions of
+2026-11-13). Before the person answers, and while its settings are unconfirmed, the device
+contacts no one and listens only for the local API (TM-25, TM-31), and once on, however turned on,
+each service starts with the first folder that uses it and stops with the last. Turning the
+recommended set on adds: with LAN discovery, its beacons, to anyone on the same network, with
+their port, folder count and clock offset (above); with port mapping, its port, to anyone on the
+internet, who can then complete a connection and learn what the network-observer entry lists, its
+peer ID, device ID, protocols, Hello and a coarse count of its folders, never a folder or a file
+without a key, and its asking, to the router and anyone watching on every network it joins
+(TM-26); with the DHT in client mode, what the DHT entry lists; with public relays, what a relay
+sees, to whoever runs each relay used, a stranger among them; at the fourth hole-punch level, to
+every coordinator a punch uses, a stranger's public relay among them, that two devices are
+connecting, when, and their addresses and peer IDs, and, to the up to three coordinators the device
+keeps standing reservations with, strangers' public relays among them, its peer ID, its public
+address as it changes, and when it is online; and, as a coordinator for the devices of its own
+folders, only that two peers of one of its folders connect to each other, and when, with the one
+residual above. It never shows contents, names or keys, and sends no folder ID to anyone who has not
+proven a key to the folder; and it never makes the device a relay, a DHT server or a coordinator for
+strangers, so the device carries no one else's file data.
 
 **To a sealed peer** (stated in full; the owner's decision of 2026-10-25, "sealed peers see almost
 nothing"). Everything a relay sees, and: the folder ID and verification key (its key carries both);
@@ -1919,16 +2206,17 @@ of 2026-10-25 ("sealed peers see almost nothing") leaves in the clear (`protocol
 - the **fingerprints** of the versions each record replaces, so each file's branch and merge shape:
   where its history forked into concurrent versions and joined again, and, when it missed versions,
   roughly how many;
-- each record's **chunk IDs with their padded sizes**, so the size of each version to within about
-  3 % (`keys.md` §3.3), which chunks are identical across files and versions (convergent encryption,
-  the cost of letting sealed peers verify and deduplicate), and from that a copy, or a rename (a new
-  file ID with the chunks of a file just replaced at another); and, for a file the sealed peer
-  already has a copy of, a test of whether it is in the folder from the sequence of chunk lengths:
-  from phase 1 chunk boundaries come from a gear table keyed from the data key, which stops the
-  plain test, but published attacks recover such keys from the chunk lengths of files an attacker
-  knows or chose (Alexeev, Percival and Zhang 2025; Truong, Merz, Scarlata, Günther and Paterson
-  2025), after which the test works again in that folder (`keys.md` §3.2); phase 0's fixed-size
-  chunks show only each version's size;
+- each record's **chunk IDs with their padded sizes**, so the size of each version about as closely
+  as Padmé shows its chunks', to within about 3 % for chunks from 64 KiB, 6 % from 256 bytes and
+  12 % below that (`keys.md` §3.3), which chunks are identical across files and versions (convergent
+  encryption, the cost of letting sealed peers verify and deduplicate), and from that a copy, or a
+  rename (a new file ID with the chunks of a file just replaced at another); and, for a file the
+  sealed peer already has a copy of, a test of whether it is in the folder from the sequence of
+  chunk lengths: from phase 1 chunk boundaries come from a gear table keyed from the data key, which
+  stops the plain test, but published attacks recover such keys from the chunk lengths of files an
+  attacker knows or chose (Alexeev, Percival and Zhang 2025; Truong, Merz, Scarlata, Günther and
+  Paterson 2025), after which the test works again in that folder (`keys.md` §3.2); phase 0's
+  fixed-size chunks show only each version's size;
 - that a record with no chunks is a deletion, a tree delete, a directory or an empty file, without
   telling which;
 - the **size class of each sealed part**: it is padded to the least power of two of at least 256
@@ -1962,10 +2250,11 @@ Not the path, a directory's contents, the kind, the true size, any time stamp, t
 hashes, `written_at`, the device ID, counter or vector inside a record, nor whether a record is a
 tombstone, short of the old deletions a cleanup group with an empty `because` names and the tree
 deletes that cleanup groups are issued `because` of: those sit in the sealed part, padded to a power
-of two. Padmé padding reduces size fingerprinting of individual chunks to within 12%; it does not
-hide the number of chunks, the total volume, or when changes happen. A sealed peer can also show a
-stale snapshot to a peer that has no persisted state yet for a path, such as one on its first sync;
-the regression is found when that peer meets a fresher one (TM-17). And it can bring back, whenever
+of two. Padmé padding blurs each chunk's size, which still shows to within about 3% from 64 KiB, 6%
+from 256 bytes and 12% below that (`keys.md` §3.3); it does not hide the number of chunks, the
+total volume, or when changes happen. A sealed peer can also show a stale snapshot to a peer that
+has no persisted state yet for a path, such as one on its first sync; the regression is found
+when that peer meets a fresher one (TM-17). And it can bring back, whenever
 it likes, a file whose deletion a watermark has forgotten, a year or more after a write holder
 received it (sooner where that write holder's clock is wrong, TM-40), even at a path re-created
 since, as a conflict copy; keep and replay stale copies,

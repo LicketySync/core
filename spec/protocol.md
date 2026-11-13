@@ -6,7 +6,10 @@ coordinator's rulings R-K1 to R-K6 and S-1 to S-4 of that day, its index (4.4, 4
 2026-11-03 to 2026-11-08 (4.4's paths with no heads; 3.1's relayed connections and hole punches)
 and 2026-11-10 for the reviews of that amendment and the owner's decisions of that day, and
 2026-11-12 for the signed watermark, which replaces expiry by the folder's own time and the clock
-rule (the owner's decisions of 2026-11-08 and 2026-11-12). This file is what
+rule (the owner's decisions of 2026-11-08 and 2026-11-12), and 2026-11-13 for the owner's decisions
+of that day on the guided setup and on who coordinates punches (3.1, 8 item 15, 9; `threat-model.md`
+TM-25), and for 9's words on a sealed peer's copy and on what the recommended settings show.
+This file is what
 `licketysync-protocol`, `licketysync-index` and `licketysync-engine` implement on the wire, and
 what reviewers check them against. `keys.md` defines every key, record and derivation this file
 uses; `suites.md` the algorithms; `threat-model.md` the adversaries. Each section says in plain
@@ -104,6 +107,20 @@ order. `MAX_COUNTER` is now a fixed ceiling, 10 000 years after 1970, checked wi
 `CLOCK_FLOOR_MAX` lies below it. Added on the wire within major 1, since nothing has been released:
 `CleanupMeta.forget_before` (field 3), and cleanups with no group; Hello's field 11 and
 `CloseReason` 13 are now reserved, and step 4 of 4.4's verification is empty.
+
+**What changed on 2026-11-13** (the owner's decisions of that day: "Ask during setup", "Ask,
+suggest using recommended options", on port mapping "this feature should default to on", "Both
+(Recommended)", "Yes, relays help too (Recommended)", "Narrow (Recommended)", "Yes, the DHT
+(Recommended)", and on the settings' states and later settings, quoted in `threat-model.md` TM-25).
+Every connectivity setting is on, off, at default (the setting's default, `threat-model.md` TM-25,
+"Four states") or unconfirmed, and
+starts unconfirmed, which acts as off, until the person answers the guided setup, which suggests a
+recommended set (9; `threat-model.md` TM-25): asking for punches is no longer on before that
+answer; a computer may coordinate punches for the devices of its own folders only, beside
+coordinating for anyone, offering the punch's relay protocol only on connections where one of its
+folders is open, and joining two devices only when both have the same one of its folders open with
+it (3.1); and a public relay also coordinates punches, which the owner confirmed. Nothing on the
+wire changes.
 
 ## 1. Protocol identifier and major versions
 
@@ -336,8 +353,13 @@ spec author's choice, for the owner's review):
 
 **Admitting a punch's requester** (the owner's decision of 2026-11-10, "Known peers or key
 holders"). From phase 2 (the owner's answer to Q4 of 2026-11-04), by the owner's decision of
-2026-11-08, a device coordinates punches for others only if its person turned that on, and takes
-part in one only as its folders' settings allow (TM-25). At admission only the folders whose own
+2026-11-08, a device coordinates punches for others only if its person turned that on, for anyone,
+or, by their decisions of 2026-11-13, only for the devices of its own folders: those with one of
+its folders open on the connection that carries the reservation or the request, the only
+connections where it offers the punch's relay protocol, and only two devices that have the same
+one of its folders open with it ("Narrow (Recommended)"; how it admits is the spec author's
+choice, for the owner's review); and it takes part in one only as its folders' settings allow
+(TM-25). At admission only the folders whose own
 settings allow a punch through the coordinator in the middle count, on each side: the folder's
 direct-connections switch on and its hole-punch level allowing that coordinator ("Both must allow",
 the owner's decision of 2026-11-10; the coordinator's ruling of that day on the confirm review). The
@@ -386,7 +408,8 @@ direct-connections switch off, or its hole-punch level not allowing the coordina
 to any folder, and the direct connection a punch brings is like any other: nothing of a folder
 crosses it before both sides' folder proofs (3.5). `threat-model.md` TM-25 has the details, with the
 spec author's choices marked (the levels' names and meanings, how a coordinator announces itself,
-how many reservations a device keeps, which addresses a punch accepts, and the bounds).
+how a coordinator for the devices of its own folders admits, how many reservations a device keeps,
+which addresses a punch accepts, and the bounds).
 
 **Identity.** The transport authenticates each side's **libp2p identity**, the separate Ed25519 key
 of `keys.md` §8.1. Each Hello carries that key (`libp2p_identity`), and the transcript (3.3) covers
@@ -3754,9 +3777,9 @@ interval in section 5's constants is a vector.
     admission handshake on the stream the device to be reached opens, no folder open on the circuit,
     then the punch), and the other way round (the requester opens no stream and answers the other
     side's FolderProofs REJECTED, so no folder opens on the circuit, and an ACCEPTED proof of its
-    own admits it to the punch); on a punch-only circuit, with every public-relays switch off, as by
-    default: a requester that is a peer of a folder whose settings allow a punch through that
-    coordinator (no handshake: the punch starts at once), one that is a peer only of folders whose
+    own admits it to the punch); on a punch-only circuit, with every public-relays switch off: a
+    requester that is a peer of a folder whose settings allow a punch through that coordinator (no
+    handshake: the punch starts at once), one that is a peer only of folders whose
     settings do not (at never, or at a level that does not allow that coordinator: not known, so the
     handshake, in which those folders are paused and its proofs for them REJECTED), an unknown one
     whose FolderProof is ACCEPTED (admitted: no FolderProof sent back, no folder open, and an
@@ -3801,8 +3824,30 @@ interval in section 5's constants is a vector.
     (interface identifier 0) and RFC 2526 anycast addresses in each of its own /64s (refused); no
     SO_BROADCAST on any socket a punch uses; the caps, an attempt counted toward the caps in all
     only once its requester is admitted (four circuits in admission at once through two
-    coordinators, and a known peer's punch through a third still starts); and a coordinator's bounds
-    and answers.
+    coordinators, and a known peer's punch through a third still starts); a coordinator's bounds
+    and answers; and a coordinator for the devices of its own folders: its relay protocol listed in
+    identify and accepted in multistream-select only on a connection where one of its folders is
+    open, and listed there once one opens; a reservation and a request accepted on such a
+    connection; on one where none is open, where the only such folder is paused, or where the folder
+    is open only on another connection to the same device, a reservation refused and a request
+    answered NO_RESERVATION, alike for every target, before any table or cap, so that a stranger's
+    eleventh request in a minute is still NO_RESERVATION, never busy, and a stranger's flood of
+    requests leaves a peer's punch through it unaffected, a peer behind the stranger's own source
+    address included (counted by peer ID at most); a reservation dropped once the last such folder
+    closes on its connection; a device that wants a reservation there asking only once its folders'
+    proofs on the connection are answered and identify lists the protocol there, in either order
+    (the listing before the proof results, and after them), not asking while no folder is open
+    (the protocol unlisted), and asking again, once, when one opens and the listing follows, and
+    accepted; two devices that each share a folder with it, but not the same one, refused (the
+    request answered NO_RESERVATION, as for a device with no reservation, before any cap, then
+    counted only toward the requester's own caps, so that the eleventh such request in a minute is
+    still NO_RESERVATION, never busy, and the reserved device's punches through it are unaffected),
+    and two that share one joined; a device listing any coordinator that is a peer of one of its
+    folders, whatever its mode, only in the peer exchange of the folders open between the two (not
+    in that of another folder, nor in an invite), when identify lists the coordinator's relay
+    protocol before that folder opens between them (listed nowhere until it opens, then only there)
+    and after (listed there at once); and a requester refused there trying the next coordinator it
+    read.
 
 ## 9. The index in plain words
 
@@ -3951,7 +3996,8 @@ counter the device has seen.
   gives counters no later than that, so the limit never refuses an honest device.
 
 **What a device that cannot read the folder sees and keeps (a sealed peer, such as a NAS holding
-encrypted backups).** By the owner's decision ("sealed peers see almost nothing"), it sees, for each
+an encrypted copy, not a backup against mistakes: changes and deletions reach it too).** By the
+owner's decision ("sealed peers see almost nothing"), it sees, for each
 version: an opaque number standing for the file (it cannot tell the name), the fingerprints of the
 versions it replaces, the IDs and rounded sizes of its pieces, and a signature. From those it can
 tell how many files there are and how often each changes, where a file's history forked into a
@@ -4136,14 +4182,18 @@ And these lose nothing but limit the folder:
 
 **Relays and hole punching** (`threat-model.md` TM-25). A relay passes the encrypted traffic of two
 devices that cannot reach each other. Every relay is public, which means it may be anyone's
-computer, and none is used, and none relays for anyone, unless its person turns that on. Public
+computer, and none is used, and none relays for anyone, unless its person turns that on; the
+recommended settings (below) turn using public relays on, and never relaying for others. Public
 relays, which can carry whole transfers, come in phase 7.
 
 Hole punching, from phase 2, is much lighter. Two devices behind home routers ask a third device, a
 coordinator, to pass their first few messages, so that each learns the other's public address and
 both try to connect at the same moment, which most home routers then let through. By the owner's
 decision of 2026-11-08, any computer can be a coordinator, a friend's or a stranger's, once its
-person turns "allow acting as a hole-punch coordinator" on; it is off unless turned on, and a phone
+person turns "allow acting as a hole-punch coordinator" on, which helps anyone; by their decisions
+of 2026-11-13, a computer can instead help only two devices that share the same one of its
+folders ("Narrow (Recommended)"), which the recommended settings (below) turn on, and a public relay
+also helps ("Yes, relays help too"). Each of these starts unconfirmed, acting as off, and a phone
 never coordinates, though it can be helped (the owner's decision of 2026-11-10, "Computers only"). A
 coordinator needs no key to the folder.
 
@@ -4152,19 +4202,91 @@ individually configured for hole punch, plus there should be global configuratio
 direct connect, DHT, etc. global settings set defaults. Folders can override."). Every way of
 connecting has a setting for the whole device that each folder may override: finding devices on the
 local network, direct connections (hole punching among them), the internet-wide DHT, public relays,
-Tor, and whom a folder may use to coordinate a punch: never; only devices it shares a folder with
-(the default); also devices it is directly connected to; or also any device it knows and any public
-relay its person turned on. So asking for punches is on unless turned off, through devices that
-share a folder; coordinating for others, and using or serving relays, are off unless turned on. A
-punch serves a folder only if, on both devices, that folder's direct connections are on and its
-setting allows the coordinator used; a folder whose settings do not allow it does not sync over that
-connection, and the others do.
+Tor, and whom a folder may use to coordinate a punch: never; only devices it shares a folder with;
+also devices it is directly connected to; or also any device it knows and any public relay its
+person turned on. Asking the home router to open a port, relaying for others, coordinating,
+serving others in the DHT and the listeners a browser connects to are settings of the whole device
+only. A punch serves a folder only if, on
+both devices, that folder's direct connections are on and its setting allows the coordinator used;
+a folder whose settings do not allow it does not sync over that connection, and the others do.
+
+**The guided setup** (the owner's decisions of 2026-11-13: "Ask during setup", then "Ask, suggest
+using recommended options"; for the router's port, "this feature should default to on"; for who
+helps with punches, "Both (Recommended)" and "Narrow (Recommended)"; for "public trackers", "Yes,
+the DHT (Recommended)"; and for the settings themselves, "on/off/default/unconfirmed where default
+is the recommended settings and the unconfirmed state is where we didn't get confirmation"). Every
+setting is in one of four states: on or off, which the person chose; default, which follows its
+default, and the app always shows whether that is on or off; or unconfirmed, which acts as off. A
+device setting's default is its recommended default; a folder switch's is its device default, the
+device's setting. A new folder's switches start at default unless the person changes them while
+making or joining it, and confirming that confirms them, so a folder's switch is never unconfirmed
+itself. Changing a setting makes it on or off, and one button puts every setting back to default;
+the settings screen shows each default's value next to that button, and on the command line a reset
+and `settings confirm` each print every setting they set and its value, since either can turn on a
+later or raised default the person was never shown. A new device starts with every
+setting unconfirmed, and so do the listeners a browser would connect to, so it contacts nobody, and
+listens on no network, until its person answers one question, which the setup asks before the first
+folder is made or joined, explaining each setting. Closing the setup is no answer, and so is closing
+the settings screen without confirming it; the setup then asks again, and no folder is made or
+joined until it has an answer. Nothing is ever assumed. On the command line (the names here are
+examples only), the setup is answered once no shown setting is unconfirmed: after a "yes"
+(`licketysync setup --recommended`), which puts every shown setting at default; after
+`licketysync settings confirm`, which confirms the shown defaults; after a reset, which puts every
+setting at default; or once every setting has been set. A "no" prints each setting with its default
+and the command that sets it on, off or default, and sets nothing, so alone it is no answer. Until
+the setup is answered, a command that would make or join a folder makes or joins nothing: at a
+terminal it asks again, and without one it says which command answers. The command line lists the
+settings still unconfirmed, with the command that sets each. The setup suggests the
+recommended settings: finding devices on the local network; asking the home router to open a port;
+the DHT (the owner's "public trackers"), only to look up and announce, never serving others; direct
+connections and hole punching; using public relays; on a computer, helping with punches, but only
+for two devices that share the same one of its folders; and, for every folder, the most open helper
+setting, any device it knows and any public relay. "Yes" puts every setting it showed at default.
+"No" opens the settings with every setting at default, each showing whether that is on or off, and
+nothing works until the person confirms the screen (the coordinator's reading of the owner's words,
+for their review). Either way, each setting, once on, starts working only when the first folder that
+uses it starts to sync, and stops when the last one is paused or unlinked, and no folder syncs
+before the setup is closed and its person has confirmed making or joining it. Before a folder starts
+to sync, any of them can be turned off: the six above for the whole device or for one folder, and
+the router's port, relaying, helping with punches, serving in the DHT and the listeners a browser
+connects to for the whole device. A setting that a later release adds starts unconfirmed; an app
+with a window asks about it once, explaining it and suggesting its recommended value, which, if
+chosen, puts it at default (the owner: "When upgrading, we should be forthcoming with settings like
+this."), and the command line lists it as unconfirmed. A later release that changes a recommended
+default so that it allows more (off to on, a more open helper setting, helping more devices with
+punches) makes that setting unconfirmed on every device that keeps it at default, and asks about it
+the same way; one that allows less applies at once, and says so.
+The recommended settings never make a device a relay for others, a server in the DHT, or a helper
+for strangers.
+
+What they show (`threat-model.md` §5, "What the recommended set shows"): anyone on the same network
+sees that the device runs Lickety-Sync, its port, how many folders it announces and how far its
+clock is off, by which its announcements can often be told apart from another device's; someone who
+already knows a folder's ID can confirm that it is announced there, someone the device has
+connected to before can recognise it, and someone who replays an announcement can see which
+devices hold that folder without knowing which folder it is; while the port is open, anyone on the
+internet can reach it and learn that it runs Lickety-Sync, which device it is and roughly how many
+folders it holds, and every router it asks for a port, a café's included, sees the request; anyone
+who knows a folder's ID can see which addresses announce it in the DHT, and the DHT computers a
+device asks see its address and what it looks up; a public relay sees which two devices it carries,
+their addresses, when and how much; at the most open helper setting, every helper a punch uses, a
+stranger's public relay among them, learns that two devices are connecting, when, and their
+addresses, and the one to three helpers a device keeps a standing connection with, strangers'
+public relays among them, learn which device it is, its public address as it changes, and when it
+is online; and a computer that helps only two devices that share the same one of its folders
+learns only that two devices of that folder connect, and when, and it shows no one a
+share they could not already see in that folder. What remains is that "never strangers" holds only
+while its folders' keys stay secret. None of them learns a file, a name or a key, or, without
+already knowing a folder's ID, which folder is involved.
 
 How the two find the same coordinator: the device that wants to be reachable chooses in advance, and
 nothing is picked at random. It keeps a small standing connection with one to three coordinators its
 settings allow (devices it is connected to first, then public relays its person turned on) and lists
 them as "reach me through X", each only for the devices it shares a folder with whose settings allow
-that coordinator, and in invites to such a folder that carry addresses. It never puts them, or its
+that coordinator, and in invites to such a folder that carry addresses; but a helper that shares
+one of its folders, whatever kind of helper it is, it lists only to the devices of the folders it
+shares with that helper, and in no invite, since it cannot tell which kind a helper is. It never
+puts them, or its
 own network ID, in the public DHT (the owner's decision of 2026-11-10, "Peers now, alias later":
 phase 2 is to design a changing alias that coordinators accept, so that the DHT can carry them
 without the network ID). A device that wants to reach it picks one of those coordinators that its
@@ -4187,8 +4309,10 @@ ones among them, at most 160 a minute, which is all a punch can be used to send 
 What a coordinator learns: that the two are connecting, when, their public addresses and their
 network IDs (libp2p peer IDs), which both devices' settings let it learn. It learns no folder, no
 key and no file, and a punch opens nothing to the internet beyond each side's address to the other.
-The devices a device shares folders with, and whoever gets an invite with its addresses, also learn
-which coordinators it uses. A coordinator passes at most 64 KiB and 60 seconds of set-up for each
+A computer that helps only the devices it shares folders with learns this only of those devices,
+and so which of them connect to each other. The devices a device shares folders with, and whoever
+gets an invite with its addresses, also learn which coordinators it uses. A coordinator passes at
+most 64 KiB and 60 seconds of set-up for each
 punch, limits how often each device may ask and how many punches reach one device, and accepts
 requests only over direct connections; the two devices never sync through it, whatever their
 settings, so it never becomes a relay (the owner, on 2026-11-08: "I don't want random connected

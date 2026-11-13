@@ -3,7 +3,8 @@
 Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model), amended
 2026-11-10 for the security protocol of a relay's circuit (transport, "Circuits", and the approved
 crates' rows for it), and 2026-11-12 for why the cleanup record keeps its signature label when its
-layout gains a watermark (signatures, "Domain separation"). This file names
+layout gains a watermark (signatures, "Domain separation"), and 2026-11-13 for how closely Padmé
+shows a chunk's size at each length (data encryption, "Padding"). This file names
 every algorithm, parameter and crate that may perform cryptography in this workspace, the apps and
 the browser client. It is normative: first-party code uses nothing that is not listed here, and a
 change that needs something else adds it here first, with the reason, and is reviewed as a change to
@@ -199,8 +200,9 @@ suite only.
 **Padding (decision).** Chunks are padded before encryption with Padmé (Nikitin et al., PURBs 2019),
 exactly as `keys.md` defines it (Padmé padding). A chunk's padded size is the one size a sealed peer
 reads (`protocol.md` §4.4), so this is the padding scheme for chunk sizes: each size is shown to
-within about 3 %, at a cost of at most 12 % for the smallest lengths and 3 % on average, plus the 40
-bytes of nonce and tag (`keys.md` §3.3 tabulates it). Sealed metadata is padded to a power of two of
+within about 3 % from 64 KiB, about 6 % from 256 bytes to 64 KiB and about 12 % below that, at a
+cost of at most as much, 3 % on average, plus the 40 bytes of nonce and tag (`keys.md` §3.3
+tabulates it). Sealed metadata is padded to a power of two of
 at least 256 bytes, exactly the least one that holds it (the coordinator's ruling of 2026-10-25, for
 the owner's review, `keys.md` §3.4), so that its length shows a sealed peer only a size class, not
 how long the path is nor how many devices wrote the file; it costs up to half of the sealed part,
@@ -439,14 +441,14 @@ unless every crate that depends on rustls disables default features; the change 
   a path needs it because the second layer protects content and names regardless. A recorded Noise
   session is readable by a future quantum computer, and what it reveals is what a sealed peer sees;
   `threat-model.md` section 5 states it.
-- **Browser paths** (WebTransport with certificate hashes, WebRTC-direct, secure WebSocket to the
-  HTTPS listener) use the browser's own TLS and DTLS stacks, which this file does not govern, with the
-  libp2p Noise handshake above inside them. Chrome offers X25519MLKEM768, but the outer layer is
-  post-quantum only if the native end accepts it: the secure WebSocket listener is `libp2p-websocket`
-  on `ring`, so it does not (above), and the native WebTransport and WebRTC-direct stacks are checked
-  in the change that adds them. The HTTPS listener's certificate is the user's own or Let's Encrypt
-  through `rustls-acme` when turned on. `aws-lc-rs` does not build for wasm32-unknown-unknown, which
-  is harmless because the browser build uses no rustls at all.
+- **Browser paths** (WebTransport with certificate hashes, secure WebSocket to the HTTPS listener)
+  use the browser's own TLS stack, which this file does not govern, with the libp2p Noise handshake
+  above inside it. Chrome offers X25519MLKEM768, but the outer layer is post-quantum only if the
+  native end accepts it: the secure WebSocket listener is `libp2p-websocket` on `ring`, so it does
+  not (above), and the native WebTransport stack is checked below. The HTTPS listener's certificate
+  is the user's own or Let's Encrypt through `rustls-acme` when turned on. `aws-lc-rs` does not
+  build for wasm32-unknown-unknown, which is harmless because the browser build uses no rustls at
+  all.
 - **WebTransport, the native end (spike B; proposed; for review).** Checked 2026-11-03 and
   2026-11-04 with headless Chrome 156.0.8078.79 and Chrome for Testing 156.0.8078.80 on 127.0.0.1
   (`ci/webtransport-chrome.sh`, nightly in CI). It works: a page given only the multiaddr

@@ -6,6 +6,176 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Spec: make the specs agree where the documentation site's reviewers found them at odds, and narrow
+  three claims to what holds. Spec text only. TM-18 and TM-37, and `threat-model.md` §1, §3.1, §3.9
+  and §5; `keys.md` §1.3, §2.2, §3.2 to §3.4 and §6.3; `suites.md` ("Padding"); `protocol.md` §9.
+  - What a sealed holder can test (`keys.md` §1.3): the table said it "cannot … test whether the
+    folder holds a known file"; it now says it cannot by hashes, though chunk lengths can still
+    show it once the chunker's key is recovered from files it knows or chose, as TM-14, `keys.md`
+    §3.2 and `threat-model.md` §5 already said.
+  - Padmé's precision, from the definition in `keys.md` §3.3: a padded length shows the length to
+    within under 1/32 (about 3 %) from 64 KiB, under 1/16 (about 6 %) from 256 bytes to 64 KiB, and
+    at most 15/129 (about 12 %) below 256 bytes. `threat-model.md` §5 said "within 12%" and
+    `keys.md` and `suites.md` "about 3 %"; all three now give the three figures. The §3.3 table's
+    16 KiB row was wrong (512 bytes, 32 sizes, 3 %) and now reads 1 KiB, 16 and 6 %, and the 6 %
+    range is said to hold FastCDC's smaller chunks as well as small files and last chunks. A sealed
+    part's length (§3.4) would be shown to within 16 bytes at a typical record's size (128 to 511
+    bytes): about 8 % at about 200 bytes, up to about 12 % below 256 bytes; and under 1/16, about
+    6 %, from 256 bytes, where the text said 12 %. The vectors of `keys.md` §9 are unchanged.
+  - Browser invites (TM-37, `keys.md` §6.3, which now say the same; the spec author's reading of the
+    plan's term, for the owner's review): a link made for the browser client to open, which cannot
+    find a device by LAN discovery or the DHT; a native device makes one when its person says it is
+    for a browser, and appends then the addresses a browser can reach it at and, in `c`, the hash of
+    its WebTransport listener's certificate (valid at most 14 days). That listener is a device
+    setting, off until turned on, which making a browser invite asks to turn on, saying what it
+    shows (`threat-model.md` §5, "To a network observer"). The certificate's
+    life is no expiry: a leaked browser invite gives the folder away like any key. The app or the
+    CLI says, for a browser invite or a parcel link, that the link carries addresses. The browser
+    client dials only the invite's addresses, and relays as its own settings allow; its own setup
+    is phase 6's design.
+  - LAN beacons (`threat-model.md` §5, §3.1, §1; `keys.md` §2.2): they cannot be linked by their
+    hashes, but their port, number of folder hashes and Unix minute (which shows the sender's clock
+    offset) are in the clear and link a device's beacons, across a changed address too. DHT lookups
+    (§5, §3.9): the nodes a device asks see its address and the hashes it looks up.
+  - The link's fragment (TM-18; the spec author's choice, for the owner's review): the client
+    removes the fragment from the page's address whenever the page has one, a refused link's
+    included, after reading the key when there is one (`history.replaceState`); what the browser
+    recorded before, in its history and anything that syncs it, is a stated residual, so TM-18 no
+    longer claims to stop leaks through history outright.
+  - `protocol.md` §9 called a sealed peer's copy "encrypted backups"; it is an encrypted copy, not a
+    backup against mistakes, since changes and deletions reach it.
+  - Not decided here, for the coordinator: the archive's phase. `gates/phase-0.md` (the TM-35 and
+    TM-41 rows) and the README's engine row put it in phase 5, while this file's entry for ac0739c
+    ("to the archive (phase 1)"), CLAUDE.md's phase 1 list ("archived versions") and `keys.md` §7.3
+    and §7.4 (unlinking keeps the archive, removing someone restores from it, and §11 puts §7 in
+    phase 1) need it sooner.
+
+- Spec: every connectivity setting is on, off, at default or unconfirmed and starts unconfirmed,
+  the guided setup asks once and suggests a recommended set, a computer may coordinate hole punches
+  for two devices that share the same one of its folders, and a public relay also coordinates
+  punches (the owner's decisions of 2026-11-13: on finding devices on the local network, "Ask
+  during setup", then "Ask, suggest using recommended options"; on port mapping, "Yes, this feature
+  should default to on"; on who helps with punches, "Both (Recommended)" and then, on how broadly,
+  "Narrow (Recommended)"; on a relay helping, "Yes, relays help too (Recommended)"; on "public
+  trackers", "Yes, the DHT (Recommended)"; and on setup's "no" and on settings a later release
+  adds, a settings model of "on/off/default/unconfirmed" in which "Modifying them turns them into
+  on/off and a button would reset all settings to recommended defaults"). Spec text only: `net`,
+  `daemon`, `cli`, `app` and `web` implement it in their phases. Nothing on the wire changes; the
+  protocol stays major 1. TM-24, TM-25, TM-26 and TM-31, and `threat-model.md` §2, §3.9 and §5;
+  `protocol.md` §3.1, §8 item 15's punch vectors and §9; `keys.md` §6.3.
+  - The four states (TM-25). Every connectivity setting, the device's and each folder's, is on or
+    off (overriding the default), at default (following its default, which the app always shows as
+    on or off), or unconfirmed (not yet confirmed, acting as off). A device setting's default is its
+    recommended default; a folder switch's is its device default, the device's setting. A new
+    folder's switches start at default unless changed as it is made or joined, and confirming that
+    confirms them, so a folder's switch is never unconfirmed itself. Changing a setting makes it on
+    or off; a button resets every setting to default, and the settings screen shows each default's
+    value beside it, while on the command line a reset and `settings confirm` print every setting
+    they set and its value, since either can turn on a later or raised default never shown.
+    Coordinating is at a chosen value (off, for the devices of its own folders, or for anyone), at
+    default (for the devices of its own folders on a computer; not offered on a phone), or
+    unconfirmed.
+  - Before the answer (TM-25, TM-31). Every setting is unconfirmed: the six device-wide defaults
+    (LAN discovery, direct connections, the DHT, public relays, Tor, and the hole-punch level,
+    acting as never), port mapping, the DHT's server mode, relaying, coordinating, and the browser
+    listeners (WebTransport and the secure WebSocket listener with its certificate, the person's
+    own or Let's Encrypt's). WebRTC-direct, which the native side does not offer, is no longer named
+    as a browser listener here or as a browser path in `suites.md`. The device contacts no host,
+    opens no listening socket but the local API's and joins no multicast group; that keeps "The
+    binary contacts no host the user did not turn on" and `allowed-hosts.txt`'s rule for LAN
+    discovery's multicast and broadcast addresses. The owner's default of 2026-11-08, asking for
+    punches through peers of a shared folder on unless turned off, is replaced.
+  - The guided setup (TM-25). Its answer is a device setting, never assumed: closing the setup, or
+    the settings screen unconfirmed, is no answer, and the setup asks again; no folder is made or
+    joined until it has an answer. On the command line the setup is answered once no shown setting
+    is unconfirmed: after a "yes" (`licketysync setup --recommended`, say, which sets every shown
+    setting to default), after `licketysync settings confirm`, after a reset, or once every setting
+    has been set. A "no" prints each setting's default and the command that sets it, and sets
+    nothing, so alone it is no answer. Until then a command that would make or join a folder makes
+    nothing: it asks again at a terminal, and without one names the command that answers. The setup
+    explains each setting and what it shows, and suggests the recommended set: LAN discovery, port
+    mapping, the DHT in client mode ("public trackers", which the owner confirmed means the DHT),
+    direct connections and hole punching, using public relays, on computers coordinating for the
+    devices of its own folders, and each folder's hole-punch level at the fourth ("any device it
+    knows and any public relay"). "Yes" sets every setting it showed to default. "No" opens the
+    settings screen with every setting at default, each showing its value, and nothing is active
+    until the person confirms the screen, every setting staying unconfirmed until then (the
+    coordinator's reading, for the owner's review; it replaces "no opens the settings with
+    everything off"). Either way, a service that contacts a host or listens starts only when the
+    first folder that uses it starts to sync and stops when the last such folder is paused or
+    unlinked, and no folder syncs before the setup has closed and the person has confirmed making or
+    joining it. Before a folder syncs, the six per-folder switches can be turned off for the device
+    or a folder, and port mapping, coordinating, relaying, DHT server mode and the browser listeners
+    for the device. The set never makes the device a relay, a DHT server or a coordinator for
+    strangers; Tor stays off.
+  - Settings a later release adds (TM-25) start unconfirmed. With a graphical app, the app asks once
+    about each, explains it and suggests its recommended value, which, if chosen, makes it default
+    (the coordinator's reading, for the owner's review; the owner: "When upgrading, we should be
+    forthcoming with settings like this."); the command line reports it and suggests the flags. A
+    later release that changes a recommended default so that it allows more (off to on, a more open
+    hole-punch level, a wider coordinating value) makes that setting unconfirmed on every device
+    that keeps it at default, and asks about it as about a new setting; one that allows less applies
+    at once, and says so. Tests named in TM-25: nothing before the answer;
+    "yes" sets every shown setting to default; services follow their folders; "no" shows defaults
+    and turns on nothing until confirmed; a change overrides the default; reset sets every setting
+    to default; a folder at default follows the device; a new folder starts at the device default; a
+    phone coordinates for no one; no answer, a command-line "no" among them, makes no folder; a
+    later setting, and a default that allows more, is unconfirmed until asked; the command line
+    reports unconfirmed settings, and its reset and confirm print what they set.
+  - Coordinating for the devices of its own folders (TM-25; the owner's "Narrow (Recommended)"; its
+    admission is the spec author's choice, for the owner's review). A new value of the device's
+    coordinating setting, beside "off" and "for anyone" (which stays off). It offers the punch's
+    relay protocol, in identify and multistream-select, only on a direct connection where one of its
+    folders is open, accepts a reservation or a request for a punch only there, and joins two
+    devices only when both have the same one of its folders open with it, answering any other
+    request for a punch NO_RESERVATION before any cap and then counting it only toward the
+    requester's own caps, so it is never busy and the reserved device's punches are
+    unaffected. A request on a connection with no folder open is answered
+    first, RESERVATION_REFUSED or NO_RESERVATION, without regard to any table or cap, then counted
+    at most toward the requester's cap by peer ID, never a source address's nor any cap the peers of
+    its folders share, so a stranger learns nothing and uses up nothing a peer needs. It drops a
+    reservation when the last such folder closes there. A device asks for a reservation once its
+    folders' proofs there are answered and identify lists the protocol, in either order, and again,
+    once, when a folder opens. Since a device cannot tell a coordinator's mode, it lists any
+    coordinator that is a peer of one of its folders, whatever its mode, only in the peer exchange
+    of the folders open between the two, never in an invite. Every other coordinator rule applies
+    (64 KiB and 60 s, direct connections only, the same limits and tables); each side of a punch
+    still filters the addresses it receives, and the device to be reached still admits the
+    requester. It learns only that two devices of that folder connect, and when, and shows no one a
+    share they do not already see (the owner's words of 2026-11-08:
+    "B can safely coordinate if it is the same folder because B isn't going to get any information
+    it doesn't already have"); one residual remains, stated in TM-25, §5 and `protocol.md` §9:
+    "never strangers" holds only while its folders' keys stay secret. A removed person who still
+    holds the old key is served until this device unlinks the old folder. `protocol.md` §8 item 15
+    lists its vectors among `net`'s, two devices that share a folder with it but not the same one
+    refused among them.
+  - Port mapping (TM-26) is now a device-wide setting, unconfirmed until answered, in the
+    recommended set, from phase 2; turning it off deletes the mapping. The client talks only to the
+    default gateway (NAT-PMP and PCP on port 5351, replies only from it) and to SSDP's multicast
+    address, accepts a LOCATION or control URL only when it gives the gateway's address itself (one
+    that names a host is refused and never looked up), bounds every reply, parses XML with no DTD
+    or external entities, and is fuzzed; TM-31 names those hosts, noting ff02::c rather than listing
+    it. It asks the router of every network the device joins. While mapped, anyone on the internet
+    can reach the port and learn what any connection shows before a folder opens, the protocols
+    offered and a coarse folder count among it. The DHT (TM-24) is off until turned on, for the
+    device or a folder; server mode is a device setting the recommended set never turns on.
+  - A public relay also coordinates punches, within its limits, with no second switch: the owner's
+    decision now, where TM-25 marked it the spec author's reading for the owner's review.
+  - What the recommended set shows (`threat-model.md` §5, a new entry; TM-25's setup block; and
+    `protocol.md` §9 in plain words): beacons to the LAN, with their port, folder count and clock
+    offset, and what a LAN observer can confirm, recognise or learn by replay; the mapped port to
+    the internet, and the asking to each network's router; the DHT's announcements and lookups;
+    what a relay sees; at the fourth level, to every coordinator a punch uses, a stranger's public
+    relay among them, that two devices are connecting, when, and their addresses, and, to the up to
+    three coordinators a device keeps standing reservations with, its peer ID, its changing public
+    address and when it is online; and, as a coordinator for its own folders' devices, only that two
+    devices of one of its folders connect, and when, with the residual above.
+  - Also: the TM-25 list item "Abuse, and its bounds", which ran into the item before it, is its own
+    item again.
+  - For the plan (Decisions; "Connectivity per folder"): every setting has the four states and
+    starts unconfirmed; port mapping, the coordinating mode and the browser listeners are
+    device-wide settings; the make and join flows show a folder's settings before it starts to sync.
+
 - Index: remove by simpler code the two equivalent mutants that the second batch's tests left
   (`serve.rs` 123:56 and `index.rs` 964:44, equivalent by both reviews of that batch; the
   coordinator's ruling 5), rather than skip them.

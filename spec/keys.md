@@ -7,10 +7,12 @@ the owner's answer of 2026-11-03 that relays are public only (§2.1: a relay lea
 `threat-model.md` TM-25), and on 2026-11-10 for the owner's decision of that day on the list of a
 device's hole-punch coordinators (§2.2, §6.3: never in the DHT), and on 2026-11-12 for the signed
 watermark that replaces the clock rule and the folder's own time (§0, §3.4, §4, §9 item 8;
-`protocol.md` §4.4). This file is what `licketysync-keys` implements and what reviewers check it
-against. The plan ("Lickety-Sync: Project Plan") is the design; where this file and the plan
-disagree, raise it. `suites.md` fixes the algorithms and their crates; `threat-model.md` names the
-adversaries; `protocol.md` puts these keys and records on the wire. **Issues** is the list of
+`protocol.md` §4.4), and on 2026-11-13 for consistency with the threat model: what a sealed holder
+can test (§1.3), what a LAN beacon links (§2.2), how closely Padmé shows a size (§3.2 to §3.4), and
+what a browser invite is (§6.3). This file is what `licketysync-keys` implements and what reviewers
+check it against. The plan ("Lickety-Sync: Project Plan") is the design; where this file and the
+plan disagree, raise it. `suites.md` fixes the algorithms and their crates; `threat-model.md` names
+the adversaries; `protocol.md` puts these keys and records on the wire. **Issues** is the list of
 problems a device shows its person (the plan's Issues panel): every failure this file and
 `protocol.md` name raises one that states its cause, so nothing is dropped without trace.
 
@@ -190,7 +192,7 @@ keys is a new folder (§7).
 | --- | --- | --- | --- | --- |
 | Write | 1 | `ws` | Derive every key in §1.2; sign index records and cleanups; verify, decrypt, change and delete anything; give out any tier | — |
 | Read | 2 | `folder_vk`, `dk` | Verify every record; decrypt contents, names and structure; derive `ak` and every key under `dk`; give out read or sealed | Sign: every peer rejects a change it makes, and its own edits are never sent (what the engine shows for them is phase 1's design) |
-| Sealed | 3 | `folder_vk`, `ak` | Verify every record and every chunk against the hashes the signed records name; store, serve and forward ciphertext; give out sealed | Decrypt anything, test whether the folder holds a known file (TM-14), sign |
+| Sealed | 3 | `folder_vk`, `ak` | Verify every record and every chunk against the hashes the signed records name; store, serve and forward ciphertext; give out sealed | Decrypt anything; test by hashes whether the folder holds a known file (TM-14), though its chunk lengths can still show it once the chunker's key is recovered from files the holder knows or chose (§3.2, `threat-model.md` §5); sign |
 
 Read and sealed keys both carry `folder_vk`, so every holder verifies every update and computes the
 folder ID. The two halves of a read or sealed key are not bound to each other by the key itself: a
@@ -253,9 +255,14 @@ dials the beacon's source address; once the transport has authenticated the peer
 (`protocol.md` §3.1) the dialer checks `H("licketysync/v1/hash/discovery-peer", salt || p)[0..16] = peer_tag`
 and drops the connection before sending Hello otherwise, so a beacon replayed from another address
 cannot steer the dial to a different device. The beacon carries no identity in the clear: an
-observer without the folder ID learns nothing and cannot link two beacons, even seconds apart, to
-one folder or one device (libp2p's own mDNS would put the peer ID in every announcement, which is
-why Lickety-Sync uses its own beacon). An observer who knows the folder ID can confirm it is present
+observer without the folder ID or the announcer's identity key cannot link two beacons, even seconds
+apart, to one folder or one device by their hashes (libp2p's own mDNS would put the peer ID in every
+announcement, which is why Lickety-Sync uses its own beacon). What a beacon does carry in the clear
+links a device's beacons all the same, as their source address does (`threat-model.md` §5): its
+port and its number of folder hashes, which change only when the device's port or its announced
+folders do, and its minute, which shows how far the device's clock is off, to the minute and more
+closely from the moment the minute changes, an offset that stays about the same from beacon to
+beacon. An observer who knows the folder ID can confirm it is present
 on this LAN; and anyone can replay a fresh beacon from another address and learn, from the dial that
 follows, that the dialer holds the folder: the dial is the signal, and that residual leak is the
 one the plan accepts ("What stays visible"). Listeners rate-limit beacons per source address.
@@ -314,7 +321,8 @@ and deduplicate. With FastCDC's published table, a sealed peer could cut a file 
 the chunk lengths and compare them with the `stored_len` list of a record, which for a file of
 several chunks confirms that the file is in the folder (TM-14); with the keyed table it cannot
 compute the boundaries. What still shows, keyed or not (`threat-model.md` §5): each version's total
-size to about 3 % and its number of chunks. And keying the gear table is no full defence: Alexeev,
+size, about as closely as Padmé shows its chunks' (about 3 % for chunks from 64 KiB, §3.3), and its
+number of chunks. And keying the gear table is no full defence: Alexeev,
 Percival and Zhang (2025, IACR ePrint 2025/532) and Truong, Merz, Scarlata, Günther and Paterson
 (2025, IACR ePrint 2025/558) recover the keys of such chunkers from the chunk lengths of files the
 attacker knows or chose, after which known files can again be confirmed by their chunk lengths, in
@@ -372,9 +380,12 @@ cipher_hash    = H("licketysync/v1/hash/chunk", stored)          # 32 bytes; wha
 
 Padmé (Nikitin et al., PURBs 2019) rounds a length up to a multiple of `2^(E - S)`, where `E =
 floor(log2 L)` and `S` is the number of bits in `E`: the low `E - S` bits of the padded length are
-zero and only about `log2(log2 L) + 1` bits of it carry information. Overhead is at most 12 %, 3 %
-on average. It pads chunks; sealed metadata takes a power of two instead (§3.4). Both are written in
-the keys crate (`suites.md` §2.3).
+zero and only about `log2(log2 L) + 1` bits of it carry information. It adds less than `2^-S` of the
+length, and so shows the length to within that: under 1/32, about 3 %, from 64 KiB (`E` from 16 to
+31); under 1/16, about 6 %, from 256 bytes to 64 KiB (`E` from 8 to 15); and at most 15/129, about
+12 %, below 256 bytes. Overhead is therefore at most 12 %, 3 % on average. It pads chunks; sealed
+metadata takes a power of two instead (§3.4). Both are written in the keys crate (`suites.md`
+§2.3).
 
 ```
 padme(L):
@@ -396,15 +407,17 @@ FastCDC produces:
 
 | Chunk of about | Padded to a multiple of | Distinct padded sizes per doubling | Most bytes added |
 | --- | --- | --- | --- |
-| 16 KiB | 512 bytes | 32 | 3 % |
+| 16 KiB | 1 KiB | 16 | 6 % |
 | 64 KiB | 2 KiB | 32 | 3 % |
 | 1 MiB | 32 KiB | 32 | 3 % |
 | 4 MiB | 128 KiB | 32 | 3 % |
 
-So a sealed peer learns each chunk's size to within about 3 %, and the total size of a file version
-to the same precision; the cost is at most 12 % for the smallest lengths and 3 % on average, plus 40
-bytes per chunk for the nonce and tag. A coarser scheme (powers of two, at up to 100 % and 33 % on
-average) would hide more and cost more; suite 1 keeps Padmé (`suites.md` §2.3).
+So a sealed peer learns each chunk's size to within about 3 % from 64 KiB, about 6 % from 256 bytes
+to 64 KiB (FastCDC's smaller chunks, a small file, or a file's last chunk) and about 12 % below
+that, and the total size of a file version about as closely as its chunks'; the bytes added are at
+most as much, 3 % on average, plus 40 bytes per chunk for the nonce and tag. A coarser scheme
+(powers of two, at up to 100 % and 33 % on average) would hide more and cost more; suite 1 keeps
+Padmé (`suites.md` §2.3).
 
 ### 3.4 Sealed metadata
 
@@ -441,15 +454,18 @@ or vector among them, are writer faults (`protocol.md` §4.4 step 7).
 
 **Why powers of two, and what they cost** (the coordinator's ruling of 2026-10-25, for the owner's
 review, so that sealed peers see almost nothing). Padmé, which pads chunks, would show a sealed
-part's length to within 12 %, and with it how long the path is and how many entries the vector has,
-that is roughly how many devices wrote the file. Rounded up to a power of two of at least 256 bytes,
-the length shows only its class: for a path of about 90 bytes, a one-chunk record whose dot and
-vector name one or two devices fills 256 bytes, three to seven 512, eight to eighteen 1 024, and
-nineteen or more, up to a full vector, 2 048; a shorter path moves each boundary up by about one
-device for every 46 bytes, and every 34 bytes of plaintext hashes (one per chunk) pushes it the same
-way, so the class cannot be told apart into those causes. The cost is up to half of the sealed part,
-about a quarter on average, against Padmé's 3 %: a typical record grows from about 470 to about 520
-bytes (`protocol.md` §2, `threat-model.md` §5).
+part's length to within 16 bytes at a typical record's size (128 to 511 bytes): about 8 % at about
+200 bytes, up to about 12 % below 256 bytes; and under 1/16, about 6 %, from 256 bytes (§3.3); and
+with it how long the path is and how many entries the vector has, that is roughly how many devices
+wrote the file.
+Rounded up to a power of two of at least 256 bytes, the length shows only its class: for a path of
+about 90 bytes, a one-chunk record whose dot and vector name one or two devices fills 256 bytes,
+three to seven 512, eight to eighteen 1 024, and nineteen or more, up to a full vector, 2 048; a
+shorter path moves each boundary up by about one device for every 46 bytes, and every 34 bytes of
+plaintext hashes (one per chunk) pushes it the same way, so the class cannot be told apart into
+those causes. The cost is up to half of the sealed part, about a quarter on average, against Padmé's
+3 %: a typical record grows from about 470 to about 520 bytes (`protocol.md` §2, `threat-model.md`
+§5).
 
 ### 3.5 Path tags (file IDs)
 
@@ -675,14 +691,30 @@ https://licketysync.app/join#k=<key_string>[&a=<multiaddr>]...[&c=<base64url(cer
 Rules: a link begins with exactly `https://licketysync.app/join#`, on the browser client's own
 domain, and any other beginning, whatever its host, is refused (TM-18). A secret appears **only
 after `#`**, never in the path or query, and the client never puts the fragment into a request,
-referrer or log. `a` and `c` are appended only when the sender chooses, or automatically for
-browser invites and parcel links (phase 6); `c` is base64url without padding. The folder is the one
-the key string names: its ID derives from the key, and `a` is a hint for dialling, never an
-identity. From phase 2 an `a` may be an address through a hole-punch coordinator, which names the
-sender's libp2p peer ID and the coordinator's, and only one that the folder's own settings allow a
-punch through; an invite and the peer exchange of a folder's peers are the only places the sender's
-coordinators travel (`threat-model.md` TM-25). The drafts' `g=` (a
-grant chain) is gone with grants.
+referrer or log, and removes it from the page's address whenever the page has one, a refused link's
+included (TM-18). `a` and `c` are appended only when the sender chooses, or automatically for
+browser invites and parcel links (phase 6); `c` is base64url without padding. A **browser invite**
+is a link made for someone to open in the browser client, which cannot use LAN discovery or the DHT
+and so must be told where to dial (the spec author's reading of the plan's term, for the owner's
+review): a native device makes one when its person says, as they make the link, that it is for a
+browser, and appends then the addresses at which a browser can reach it at that moment (its
+WebTransport listener's, phase 6) and, in `c`, the hash of the certificate that listener serves,
+which lasts at most 14 days (`suites.md`, transport). That listener is a setting of the device, off
+until its person turns it on (`threat-model.md` TM-25), and making a browser invite asks to turn it
+on, saying what it shows (`threat-model.md` §5, "To a network observer"). The link reaches the
+device only while that certificate and one of those addresses hold, but that is no expiry: its key
+string is the folder's key, and a leaked browser invite gives the folder away like any other key
+(`threat-model.md` §3.5). The app or the CLI says, as it makes a browser invite or a parcel link,
+that the link carries the device's addresses (`threat-model.md` TM-37). The browser client that
+opens a browser invite dials only that invite's addresses, and relays only as its own settings
+allow; its own setup is phase 6's design. The folder is the one the key string names: its ID derives
+from the key, and `a` is a hint for dialling, never an identity. From phase 2 an `a` may be an
+address through a hole-punch coordinator, which names the sender's libp2p peer ID and the
+coordinator's, and only one that the folder's own settings allow a punch through, never one that is
+a peer of one of the sender's folders, which travels only in the peer exchange of the folders open
+between the two, whatever its mode; an invite
+and the peer exchange of a folder's peers are the only places the sender's coordinators travel
+(`threat-model.md` TM-25). The drafts' `g=` (a grant chain) is gone with grants.
 
 ### 6.4 File form
 
