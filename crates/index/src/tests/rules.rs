@@ -800,3 +800,237 @@ fn written_at_is_the_clock_in_microseconds_i6() {
     let v = d.put("f", 1);
     assert_eq!(d.ix.s.held[&v].meta().unwrap().written_at, T0 + 123_456);
 }
+
+// Counters, names and pages of a write and of a round's end.
+
+/// The counters of the records `w` signed, in the order it signed them: the
+/// dots of the records `d` now holds.
+fn counters(d: &Dev, w: &crate::Written) -> Vec<u64> {
+    w.records
+        .iter()
+        .map(|(h, _)| d.ix.record(h).and_then(|r| r.dot).unwrap().counter)
+        .collect()
+}
+
+/// A write holder that holds the newest of three versions at each of
+/// `paths` and has noted the oldest of each, which a peer offered: a stale
+/// copy, covered by the newest and named by no record held (the second is
+/// the newest's base, which it names). The noted copies, in `paths` order.
+fn noting(paths: &[&str]) -> (Dev, Vec<RecordHash>) {
+    let mut d = Dev::writer(0xd0);
+    let mut newest = Vec::new();
+    let mut stale = Vec::new();
+    for p in paths {
+        stale.push(d.put(p, 1));
+        d.put(p, 2);
+        newest.push(d.put(p, 3));
+    }
+    let mut w = Dev::writer(0xa0);
+    w.take(&d, &newest);
+    for v in &stale {
+        assert!(w.accept(d.signed(v)).unwrap().noted, "a stale copy noted");
+    }
+    (w, stale)
+}
+
+/// An empty batch signs no record and drops none, and is no error.
+#[test]
+fn an_empty_batch_writes_no_record() {
+    let mut d = Dev::writer(0xd0);
+    let a = d.put("a", 1);
+    let w = d.write(&[]).unwrap();
+    assert!(w.records.is_empty() && w.dropped.is_empty() && !w.cleanup);
+    assert_eq!(d.all(), [a].into_iter().collect());
+}
+
+/// The writer's rule (4.4): the records of one commit take consecutive
+/// counters from the next one, cleanups last, in the order they are paged,
+/// each its own; the high-water mark is then the last, and the next write
+/// takes the one after it. A tree delete over five files whose cleanup
+/// takes two names a record: three cleanups after it.
+#[test]
+fn the_records_of_one_write_take_consecutive_counters_its_cleanups_last() {
+    let mut d = Dev::writer(0xd0);
+    d.ix.bounds.cleanup_entries = 2;
+    for i in 0..5u8 {
+        d.put(&format!("t/{i}"), i);
+    }
+    d.apply_all();
+    let next = d.ix.next_counter(d.clock).unwrap();
+    let w = d.tree_delete("t");
+    let cleanups: Vec<bool> = w
+        .records
+        .iter()
+        .map(|(h, _)| d.ix.record(h).unwrap().cleanup)
+        .collect();
+    assert_eq!(
+        cleanups,
+        [false, true, true, true],
+        "the tree delete, then its cleanup in three pages"
+    );
+    let counters = counters(&d, &w);
+    assert_eq!(
+        counters,
+        (next..next + 4).collect::<Vec<_>>(),
+        "consecutive, each its own"
+    );
+    assert_eq!(d.ix.hw(), next + 3, "the mark at the last");
+    let after = d.put("u", 9);
+    assert_eq!(
+        d.ix.record(&after).unwrap().dot.unwrap().counter,
+        next + 4,
+        "the next write after them all"
+    );
+}
+
+/// A round's end gives its cleanups the next counters, one each,
+/// consecutive, and leaves the high-water mark at the last (4.4, the
+/// writer's rule): two notes, each because another version, at one name a
+/// cleanup record make two.
+#[test]
+fn a_rounds_end_gives_each_cleanup_its_own_counter_and_the_mark_the_last() {
+    let (mut w, stale) = noting(&["f", "g"]);
+    w.ix.bounds.cleanup_entries = 1;
+    let next = w.ix.next_counter(w.clock).unwrap();
+    let end = w.end_round();
+    assert!(end.cleanup);
+    assert_eq!(counters(&w, &end), [next, next + 1]);
+    assert_eq!(w.ix.hw(), next + 1);
+    let mut named: Vec<RecordHash> = end
+        .records
+        .iter()
+        .flat_map(|(h, _)| held_record(&w, h).groups()[0].forget.clone())
+        .collect();
+    named.sort_unstable();
+    let mut want = stale;
+    want.sort_unstable();
+    assert_eq!(named, want, "each note named once");
+    let after = w.put("u", 9);
+    assert_eq!(w.ix.record(&after).unwrap().dot.unwrap().counter, next + 2);
+}
+
+/// The counter ceiling at a round's end (4.4): its cleanups may take every
+/// counter up to `MAX_COUNTER`, that one included; a round's end whose
+/// cleanups would pass it signs none and stages nothing, its notes kept for
+/// a later round.
+#[test]
+fn a_rounds_end_takes_counters_up_to_max_counter_and_none_past_it() {
+    // Two cleanups, the last at MAX_COUNTER.
+    let (mut w, _) = noting(&["f", "g"]);
+    w.ix.bounds.cleanup_entries = 1;
+    w.ix.s.meta.hw = MAX_COUNTER - 2;
+    let end = w.end_round();
+    assert_eq!(counters(&w, &end), [MAX_COUNTER - 1, MAX_COUNTER]);
+    assert_eq!(w.ix.hw(), MAX_COUNTER);
+    assert!(w.ix.s.notes.is_empty());
+    // One counter short: refused whole.
+    let (mut w, _) = noting(&["f", "g"]);
+    w.ix.bounds.cleanup_entries = 1;
+    w.ix.s.meta.hw = MAX_COUNTER - 1;
+    let clock = w.clock;
+    let mut txn = w.ix.begin();
+    assert_eq!(
+        txn.end_round(clock, &mut |b| b.fill(1)),
+        Err(WriteError::CounterExhausted)
+    );
+    // Within the transaction, before it ends (ending it undoes it).
+    assert_eq!(txn.index().s.notes.len(), 2, "the notes kept");
+    assert_eq!(txn.index().hw(), MAX_COUNTER - 1, "the mark where it was");
+    assert!(txn.finish().0.is_empty(), "nothing staged");
+}
+
+/// A write names the noted stale copies at its path that its vector covers
+/// (4.4, "Its names": the noted copies the vector covers), and no other: a
+/// write that builds on no base there covers nothing, so the copy that a
+/// version it does not build on covers stays noted, and the round's end
+/// names it `because` that version.
+#[test]
+fn a_write_names_only_the_noted_copies_its_vector_covers() {
+    let (mut w, stale) = noting(&["f"]);
+    let newest = w.heads("f");
+    assert!(w.ix.bases("f").is_empty(), "nothing applied at f");
+    let mine = w.put("f", 9);
+    assert!(
+        !held_record(&w, &mine).replaces().contains(&stale[0]),
+        "not covered: not named"
+    );
+    assert_eq!(w.ix.s.notes.len(), 1, "still noted");
+    let end = w.end_round();
+    assert!(end.cleanup);
+    let c = held_record(&w, &end.records[0].0);
+    assert_eq!(c.groups().len(), 1);
+    assert_eq!(
+        (c.groups()[0].because, c.groups()[0].forget.clone()),
+        (Some(newest[0]), stale)
+    );
+}
+
+/// A round's end pages its groups into cleanup records of at most
+/// `MAX_CLEANUP_ENTRIES` names across their groups (4.4, "Cleanup"; lowered
+/// to 2, the test parameter of ruling Q7): three notes, each because
+/// another version, make a record of two names and one of one; a group of
+/// three names beside one of one is split where it passes a record's.
+#[test]
+fn a_rounds_end_pages_its_names_across_groups_by_the_record() {
+    let (mut w, stale) = noting(&["f", "g", "h"]);
+    w.ix.bounds.cleanup_entries = 2;
+    let end = w.end_round();
+    let groups: Vec<Vec<usize>> = end
+        .records
+        .iter()
+        .map(|(h, _)| {
+            held_record(&w, h)
+                .groups()
+                .iter()
+                .map(|g| g.forget.len())
+                .collect()
+        })
+        .collect();
+    assert!(groups.iter().flatten().all(|&n| n == 1), "one name a group");
+    // The spec fixes how many records and the names in each, not their
+    // order.
+    let mut sizes: Vec<usize> = groups.iter().map(|g| g.iter().sum()).collect();
+    sizes.sort_unstable();
+    assert_eq!(sizes, [1, 2], "a record of two names and one of one");
+    let mut named: Vec<RecordHash> = end
+        .records
+        .iter()
+        .flat_map(|(h, _)| held_record(&w, h).groups().to_vec())
+        .flat_map(|g| g.forget)
+        .collect();
+    named.sort_unstable();
+    let mut want = stale;
+    want.sort_unstable();
+    assert_eq!(named, want);
+    // Five versions of f, the three oldest noted (the fourth is the
+    // newest's base, named by it), and the oldest of g's three.
+    let mut d = Dev::writer(0xd0);
+    let f: Vec<RecordHash> = (1..=5).map(|i| d.put("f", i)).collect();
+    let g: Vec<RecordHash> = (1..=3).map(|i| d.put("g", i)).collect();
+    let mut w = Dev::writer(0xa0);
+    w.take(&d, &[f[4], g[2]]);
+    for v in [f[0], f[1], f[2], g[0]] {
+        assert!(w.accept(d.signed(&v)).unwrap().noted);
+    }
+    w.ix.bounds.cleanup_entries = 2;
+    let end = w.end_round();
+    let mut named = Vec::new();
+    for (h, _) in &end.records {
+        let groups = held_record(&w, h).groups().to_vec();
+        let names: usize = groups.iter().map(|g| g.forget.len()).sum();
+        assert!((1..=2).contains(&names), "{names} names in one record");
+        for grp in groups {
+            let because = if grp.forget.contains(&g[0]) {
+                g[2]
+            } else {
+                f[4]
+            };
+            assert_eq!(grp.because, Some(because));
+            named.extend(grp.forget);
+        }
+    }
+    named.sort_unstable();
+    let mut want = vec![f[0], f[1], f[2], g[0]];
+    want.sort_unstable();
+    assert_eq!(named, want, "each named once");
+}

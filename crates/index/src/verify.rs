@@ -60,6 +60,14 @@ pub(crate) fn authentic<T>(
     (records, failed)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The worker threads [`verified`] has spawned from this thread, for the
+    /// test that the open verifies across the threads it is given: a count
+    /// per calling thread, since the tests run concurrently in one process.
+    pub(crate) static SPAWNED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
 /// Whether each record's signature verifies under `folder`, in the records'
 /// order, on up to `threads` threads.
 fn verified(records: &[&Record], folder: &FolderVerifier, threads: usize) -> Vec<bool> {
@@ -76,6 +84,10 @@ fn verified(records: &[&Record], folder: &FolderVerifier, threads: usize) -> Vec
         let others: Vec<_> = slices
             .map(|slice| {
                 let worker = Builder::new().spawn_scoped(scope, move || verify(slice));
+                #[cfg(test)]
+                if worker.is_ok() {
+                    SPAWNED.with(|n| n.set(n.get() + 1));
+                }
                 (slice, worker.ok())
             })
             .collect();

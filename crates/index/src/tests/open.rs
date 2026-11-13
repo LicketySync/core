@@ -631,3 +631,136 @@ fn the_crash_after_the_records_keeps_the_write_as_its_paths_base() {
         "the write is the base of its path"
     );
 }
+
+/// The open reports the count of entries a phase 1 store could no longer
+/// decode (4.4 "Opening a folder"; 4.7 item 8), and an open that found any
+/// is not clean.
+#[test]
+fn the_open_reports_the_entries_the_store_could_not_decode() {
+    let mut d = Dev::writer(0xd0);
+    let a = d.put("a", 1);
+    let (ix, report) = open_changed(&d, |s| s.undecodable = 3);
+    assert_eq!(report.undecodable, 3);
+    assert!(!report.is_clean(), "{report:?}");
+    assert!(ix.record(&a).is_some(), "what did decode is held");
+    let (_, report) = open_changed(&d, |_| {});
+    assert_eq!(report.undecodable, 0);
+    assert!(report.is_clean());
+}
+
+/// `MAX_LOCAL_SEQ` itself is a local sequence number (4.5: "at most
+/// `MAX_LOCAL_SEQ`"): a record stored under it, the next number
+/// `MAX_LOCAL_SEQ + 1`, is held under it, nothing numbered afresh, the epoch
+/// kept (IS-3's bound, from below).
+#[test]
+fn a_stored_local_sequence_number_of_max_local_seq_is_kept_is3() {
+    use licketysync_protocol::limits::MAX_LOCAL_SEQ;
+    let mut d = Dev::writer(0xd0);
+    let a = d.put("a", 1);
+    let b = d.put("b", 2);
+    let (ix, report) = open_changed(&d, |s| {
+        for (r, seq) in &mut s.records {
+            if r.hash() == b {
+                *seq = MAX_LOCAL_SEQ;
+            }
+        }
+        s.meta = s.meta.map(|m| StoredMeta {
+            next_seq: MAX_LOCAL_SEQ + 1,
+            ..m
+        });
+    });
+    assert!(!report.renumbered && !report.epoch_redrawn, "{report:?}");
+    assert!(report.is_clean());
+    assert_eq!(ix.record(&b).unwrap().seq, MAX_LOCAL_SEQ);
+    assert_eq!(ix.record(&a).unwrap().seq, d.ix.record(&a).unwrap().seq);
+    assert_eq!(ix.local_seq(), MAX_LOCAL_SEQ);
+    assert_eq!(ix.epoch(), d.ix.epoch());
+}
+
+/// Per-peer state goes after `PEER_STATE_HORIZON` without a round that
+/// ended (4.5), not at it: an entry exactly that old stays at the open, one
+/// a microsecond older goes.
+#[test]
+fn per_peer_state_at_its_horizon_stays_at_open_and_goes_past_it() {
+    let mut d = Dev::writer(0xd0);
+    let mut txn = d.ix.begin();
+    txn.round_ended(dev(1), true, Some((1, 2)), T0);
+    let (ch, pending) = txn.finish();
+    d.store.commit(&ch).unwrap();
+    pending.commit();
+    d.clock = T0 + PEER_STATE_HORIZON;
+    let report = d.reopen();
+    assert!(d.ix.peer(&dev(1)).is_some(), "at the horizon: kept");
+    assert!(report.changes.peers.is_empty(), "nothing to store");
+    d.clock += 1;
+    let report = d.reopen();
+    assert!(d.ix.peer(&dev(1)).is_none(), "past it: gone");
+    assert_eq!(report.changes.peers, vec![(dev(1), None)]);
+}
+
+/// A base slot whose record the store no longer has, neither held nor kept
+/// only as a base (a store that lost a record it held), is cleared, and the
+/// open draws a new epoch, since the local sequence lost that record (4.5,
+/// "Local sequence and epoch": drawn again whenever it may have lost
+/// records), so that every peer reconciles once and sends it again.
+#[test]
+fn a_base_whose_record_the_store_lost_is_cleared_under_a_new_epoch() {
+    let mut d = Dev::writer(0xd0);
+    let a = d.put("a", 1);
+    let b = d.put("b", 2);
+    let (ix, report) = open_changed(&d, |s| s.records.retain(|(r, _)| r.hash() != a));
+    assert!(report.dropped.is_empty(), "nothing failed its check");
+    assert!(!report.renumbered);
+    assert!(report.epoch_redrawn, "{report:?}");
+    assert_ne!(ix.epoch(), d.ix.epoch());
+    assert!(ix.record(&a).is_none() && ix.record(&b).is_some());
+    assert!(ix.bases("a").is_empty(), "no base at a");
+    assert!(
+        report
+            .changes
+            .bases
+            .contains(&((super::kit::tag("a"), Place::Path), None)),
+        "cleared in the store"
+    );
+    assert_eq!(ix.bases("b"), vec![(Place::Path, b)], "b's base kept");
+}
+
+/// The open verifies the stored records' signatures across the threads it
+/// is given (4.4 "Opening a folder": "verified across the processor's
+/// cores, and the result does not depend on how many"; 4.7 item 8; TM-9):
+/// eight records, one of them changed at rest, on four threads take worker
+/// threads beside the calling one, at most three, and open exactly as on one
+/// thread, which takes none.
+#[test]
+fn the_open_verifies_signatures_across_the_threads_it_is_given() {
+    let mut d = Dev::writer(0xd0);
+    for i in 0..8u8 {
+        d.put(&format!("f{i}"), i);
+    }
+    let mut stored = d.store.load().unwrap();
+    assert_eq!(stored.records.len(), 8);
+    stored.records[3].0 = flipped_body(&stored.records[3].0);
+    let open = |threads: usize| {
+        crate::verify::SPAWNED.with(|n| n.set(0));
+        let mut rng = super::kit::Rng(1);
+        let (ix, report) = Index::open_with_threads(
+            folder_key(Tier::Write),
+            d.id(),
+            stored.clone(),
+            d.clock,
+            &mut |b| rng.fill(b),
+            threads,
+        );
+        let spawned = crate::verify::SPAWNED.with(core::cell::Cell::get);
+        (snapshot(&ix), report, spawned)
+    };
+    let (one, one_report, none) = open(1);
+    assert_eq!(none, 0, "one thread: the calling thread alone");
+    assert_eq!(one_report.dropped.len(), 1, "the record changed at rest");
+    let (four, four_report, spawned) = open(4);
+    assert!(
+        (1..=3).contains(&spawned),
+        "{spawned} worker threads beside the calling one"
+    );
+    assert_eq!((four, four_report), (one, one_report), "the same open");
+}

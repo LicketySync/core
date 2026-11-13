@@ -102,6 +102,273 @@ proptest! {
     }
 }
 
+/// The greatest height of an AVL tree of `n` nodes: the sparsest AVL tree of
+/// height `h`, a Fibonacci tree, has `N(h) = N(h - 1) + N(h - 2) + 1` nodes
+/// (`N(0) = 0`, `N(1) = 1`), and no AVL tree of height `h` has fewer, so a
+/// tree of `n` nodes is at most the greatest `h` with `N(h) <= n` high (about
+/// `1.44 log2 n`, the bound `bypath` states).
+fn avl_max_height(n: usize) -> u8 {
+    let (mut sparsest, mut next, mut h) = (0usize, 1usize, 0u8);
+    while next <= n {
+        (sparsest, next) = (next, sparsest + next + 1);
+        h += 1;
+    }
+    h
+}
+
+/// The record of device 1 numbered `k`, at `d/<k>`: its path and hash.
+fn numbered(k: u16) -> (String, RecordHash) {
+    let mut h = [0u8; 32];
+    h[..2].copy_from_slice(&k.to_be_bytes());
+    (format!("d/{k:05}"), RecordHash(h))
+}
+
+/// Holds and drops the records numbered by `ops` (`true` holds, `false`
+/// drops) at device 1, checking after each that its tree is no higher than
+/// an AVL tree of as many records can be; the records held at the end.
+fn hold_and_drop_staying_avl(ix: &mut ByPath, ops: &[(bool, u16)]) -> BTreeSet<u16> {
+    let mut held = BTreeSet::new();
+    for (step, &(hold, k)) in ops.iter().enumerate() {
+        let (path, hash) = numbered(k);
+        if hold && held.insert(k) {
+            ix.insert(dev(1), path.as_bytes(), hash, u64::from(k) + 1);
+        } else if !hold && held.remove(&k) {
+            ix.remove(&dev(1), path.as_bytes(), &hash);
+        }
+        let (height, bound) = (ix.height(&dev(1)), avl_max_height(held.len()));
+        assert!(
+            height <= bound,
+            "step {step} ({}{k}): {} records {height} high, an AVL tree of as many at most {bound}",
+            if hold { "+" } else { "-" },
+            held.len(),
+        );
+    }
+    held
+}
+
+/// The bound the tests of the trees by path use: an AVL tree of height `h`
+/// has at least 0, 1, 2, 4, 7, 12, 20, 33, 54, 88 … nodes for `h` = 0, 1, 2 ….
+#[test]
+fn the_avl_height_bound_is_the_fibonacci_trees() {
+    let bounds: Vec<u8> = [0, 1, 2, 3, 4, 6, 7, 11, 12, 20, 33, 54, 88]
+        .iter()
+        .map(|&n| avl_max_height(n))
+        .collect();
+    assert_eq!(bounds, [0, 1, 2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(avl_max_height(20_000), 20);
+}
+
+/// The trees by path are AVL trees (`bypath`; `protocol.md` 4.4, "Judging a
+/// tree delete without a walk": each query `O(log n)` whatever the order of
+/// the records): held in each of five orders (ascending, descending, outside
+/// in, inside out, every other one first) and dropped in each, and dropped
+/// half way and held again, each tree stays no higher than an AVL tree of as
+/// many records can be, after every record held or dropped.
+#[test]
+fn the_trees_by_path_stay_avl_trees_in_every_order_of_holding_and_dropping() {
+    let n: u16 = 300;
+    let up: Vec<u16> = (0..n).collect();
+    let down: Vec<u16> = (0..n).rev().collect();
+    // 0, 299, 1, 298, …: outside in.
+    let zigzag: Vec<u16> = (0..n / 2).flat_map(|i| [i, n - 1 - i]).collect();
+    // 150, 149, 151, 148, …: inside out.
+    let middle_out: Vec<u16> = (0..n / 2)
+        .flat_map(|i| [n / 2 + i, n / 2 - 1 - i])
+        .collect();
+    // Every other one, then the rest.
+    let alternate: Vec<u16> = (0..n).step_by(2).chain((1..n).step_by(2)).collect();
+    let orders = [&up, &down, &zigzag, &middle_out, &alternate];
+    for hold in orders {
+        for drop in orders {
+            let mut ix = ByPath::default();
+            let mut ops: Vec<(bool, u16)> = hold.iter().map(|&k| (true, k)).collect();
+            ops.extend(drop.iter().map(|&k| (false, k)));
+            let left = hold_and_drop_staying_avl(&mut ix, &ops);
+            assert!(left.is_empty());
+            assert!(ix.entries().is_empty(), "every record dropped");
+        }
+        // Dropped half way, then held again: the trees rebalance both ways.
+        let mut ix = ByPath::default();
+        let mut ops: Vec<(bool, u16)> = hold.iter().map(|&k| (true, k)).collect();
+        ops.extend(hold.iter().step_by(2).map(|&k| (false, k)));
+        ops.extend(down.iter().step_by(3).map(|&k| (true, k)));
+        ops.extend(up.iter().step_by(5).map(|&k| (false, k)));
+        hold_and_drop_staying_avl(&mut ix, &ops);
+    }
+}
+
+/// Holds (`+k`) and drops (`-k`) of the records numbered `k`.
+fn steps(s: &str) -> Vec<(bool, u16)> {
+    s.split_whitespace()
+        .map(|t| (t.starts_with('+'), t[1..].parse().unwrap()))
+        .collect()
+}
+
+/// The rebalancing cases of an AVL tree, each in an order of holds and
+/// drops that ends six records four high, one higher than any AVL tree of
+/// six can be, when the case is handled otherwise (found by a search over
+/// random orders; random orders reach them rarely): a node one higher on
+/// its left, or on its right, is balanced and stays as it is; and a drop
+/// that leaves a node two higher on its left (right) over a left (right)
+/// child whose two sides are equal takes one rotation, not two (two would
+/// leave that child two higher on one side). After every step each tree is
+/// no higher than an AVL tree of as many records.
+#[test]
+fn the_trees_by_path_stay_avl_trees_through_each_rebalancing_case() {
+    for (case, order) in [
+        (
+            "one higher on the left: no rotation",
+            "+2 +4 +9 +1 +3 +0 +6 +7 +8 +5 -8 -1 -9 -0",
+        ),
+        (
+            "one higher on the right: no rotation",
+            "+1 +9 +8 +4 +5 +3 +7 +0 +2 +6 -2 -8 -0 -9",
+        ),
+        (
+            "two higher on the left over a balanced child: one rotation",
+            "+5 +7 +2 +1 +3 +6 +0 +4 -6 -5",
+        ),
+        (
+            "two higher on the right over a balanced child: one rotation",
+            "+1 +2 +5 +4 +0 +7 +6 +3 -0 -1",
+        ),
+    ] {
+        let mut ix = ByPath::default();
+        let held = hold_and_drop_staying_avl(&mut ix, &steps(order));
+        assert_eq!(held.len(), 6, "{case}");
+        assert_eq!(ix.height(&dev(1)), 3, "{case}: six records three high");
+    }
+}
+
+proptest! {
+    #![proptest_config(super::proptest_config(256))]
+
+    /// The trees by path stay AVL trees through any sequence of records held
+    /// and dropped: after each, no higher than an AVL tree of as many
+    /// records can be (`N(h)` records at least for a height `h`).
+    #[test]
+    fn the_trees_by_path_stay_avl_trees_through_any_holds_and_drops(
+        holding in 1u8..4,
+        ops in proptest::collection::vec((0u8..4, 0u16..48), 1..400),
+    ) {
+        // `holding` in 4 of the steps hold, the others drop: trees that grow,
+        // hover and shrink.
+        let ops: Vec<(bool, u16)> = ops.into_iter().map(|(o, k)| (o < holding, k)).collect();
+        let mut ix = ByPath::default();
+        let held = hold_and_drop_staying_avl(&mut ix, &ops);
+        let ours: BTreeSet<String> = ix.entries().into_iter().map(|e| e.1).collect();
+        let want: BTreeSet<String> = held.iter().map(|&k| numbered(k).0).collect();
+        prop_assert_eq!(ours, want);
+    }
+}
+
+/// The count of nodes a query reads, by which the tests bound a query's cost
+/// (`O(log n)`, 4.4 "Judging a tree delete without a walk"), counts every
+/// node read, in each of the three walks a query makes. Records of one
+/// device at `c` and `e` at counter 1 and at `d/x` at 50 make a tree of
+/// three (an AVL tree of three is perfect, whatever their order: `d/x` at
+/// the root). Asked whether a record at or beneath `d` has a counter of at
+/// most 10, which none has, a search answers no only after both runs: the
+/// run at `d` (nothing there) reads the root and the leaf its search passes,
+/// and the run beneath `d` reads the root, which lies in it, and both leaves,
+/// whose counters of 1 it must find outside the run. So any correct search
+/// reads at least five nodes, whichever run it walks first, and no query
+/// reads a node twice: at most three each, six for the two. Without the
+/// count, the bounds of `visited` would hold for a query that read the
+/// whole tree.
+#[test]
+fn a_query_counts_every_node_it_reads() {
+    let records = [("c", 1u64), ("d/x", 50), ("e", 1)];
+    for order in [[0usize, 1, 2], [2, 1, 0], [1, 0, 2], [0, 2, 1]] {
+        let mut ix = ByPath::default();
+        for i in order {
+            let (path, counter) = records[i];
+            let mut h = [0u8; 32];
+            h[0] = u8::try_from(i).unwrap();
+            ix.insert(dev(1), path.as_bytes(), RecordHash(h), counter);
+        }
+        assert_eq!(ix.height(&dev(1)), 2, "{order:?}");
+        ix.queries.set(0);
+        ix.visited.set(0);
+        assert!(!ix.any_at_most(&dev(1), "d", 10), "{order:?}");
+        assert_eq!(ix.queries.get(), 2, "{order:?}: both runs");
+        let visited = ix.visited.get();
+        assert!(
+            (5..=6).contains(&visited),
+            "{order:?}: {visited} nodes read, at least the five any search reads"
+        );
+        // A device with nothing reads nothing; the count goes on from 0.
+        ix.visited.set(0);
+        assert!(!ix.any_at_most(&dev(2), "d", u64::MAX));
+        assert_eq!(ix.visited.get(), 0);
+    }
+}
+
+/// Tree-delete directories whose trie paths share components: `a` above
+/// `a/b` above `a/b/c` above `a/b/c/d`, `a/bc` beside `a/b`, `b` beside `a`.
+const TREE_DIRS: [&str; 6] = ["a", "a/b", "a/b/c", "a/b/c/d", "a/bc", "b"];
+
+/// Paths looked up: at, beneath and beside those directories.
+const LOOKUPS: [&str; 9] = [
+    "a",
+    "a/b",
+    "a/b/c/d",
+    "a/b/c/d/e",
+    "a/bc/x",
+    "a/bcd",
+    "b/x",
+    "ab",
+    "c",
+];
+
+proptest! {
+    #![proptest_config(super::proptest_config(256))]
+
+    /// 4.4 step 3: the trie of held tree deletes finds, for any path, the
+    /// tree deletes held at the path itself and at each of its ancestor
+    /// directories, deepest first, after any sequence of tree deletes held
+    /// and dropped, whichever of them share components; dropping one at a
+    /// directory loses none at the directories beneath or above it; and once
+    /// every one is dropped the trie is as new.
+    #[test]
+    fn the_trie_of_tree_deletes_finds_those_at_and_above_a_path(
+        ops in proptest::collection::vec((any::<bool>(), 0usize..TREE_DIRS.len(), 0u8..3), 1..60),
+    ) {
+        let mut dirs = Dirs::default();
+        let mut held: BTreeSet<(&str, RecordHash)> = BTreeSet::new();
+        for (hold, di, n) in ops {
+            let dir = TREE_DIRS[di];
+            let mut h = [n; 32];
+            h[0] = u8::try_from(di).unwrap();
+            let hash = RecordHash(h);
+            if hold {
+                held.insert((dir, hash));
+                dirs.insert(dir, hash);
+            } else {
+                held.remove(&(dir, hash));
+                dirs.remove(dir, &hash);
+            }
+            for path in LOOKUPS {
+                // The definition: the path itself and every directory above
+                // it, deepest first, each with the tree deletes held there.
+                let parts: Vec<&str> = path.split('/').collect();
+                let want: Vec<BTreeSet<RecordHash>> = (1..=parts.len())
+                    .rev()
+                    .map(|k| parts[..k].join("/"))
+                    .map(|at| held.iter().filter(|(d, _)| *d == at).map(|(_, h)| *h).collect::<BTreeSet<_>>())
+                    .filter(|set| !set.is_empty())
+                    .collect();
+                let got: Vec<BTreeSet<RecordHash>> = dirs.at_and_above(path).into_iter().cloned().collect();
+                prop_assert_eq!(&got, &want, "at {}", path);
+            }
+        }
+        for (dir, hash) in core::mem::take(&mut held) {
+            dirs.remove(dir, &hash);
+        }
+        prop_assert_eq!(format!("{dirs:?}"), format!("{:?}", Dirs::default()));
+    }
+}
+
 /// The tree by path stays balanced however the records come: 20 000 records
 /// at paths in ascending order, the case a naive search tree degrades on.
 #[test]

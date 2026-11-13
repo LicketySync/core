@@ -6,6 +6,48 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Index: tests that catch 31 of the 33 mutants of the index crate's first batch that the Mutants
+  run of 2026-11-12 (43341050834, on 59783b1) found surviving, under the owner's mutation-testing
+  mandate of 2026-11-08 ("It's a mandate that we must be safe and secure."). Tests, and one count
+  kept for them; no production behaviour changed. Each test checks what the spec states, and each
+  kill was shown by cargo-mutants on its function under `ci/mutants.sh`'s caps.
+  - The trees by path (`protocol.md` §4.4, "Judging a tree delete without a walk") are AVL trees:
+    after every record held or dropped, no higher than an AVL tree of as many records can be (the
+    Fibonacci trees' bound; the old check let one record stand three high), in five orders of
+    holding and dropping, in random ones, and in the four rebalancing cases that random orders
+    rarely reach (a node one higher on either side stays as it is; a drop over a balanced child
+    takes one rotation), each found by a search over random orders against the mutated code. The
+    count of nodes a query reads counts every node: a query that finds nothing reads at least the
+    five nodes any correct search of its two runs reads, so that the cost bounds the tests put on
+    the count cannot hold for a query that counts nothing. The trie of held tree deletes (§4.4
+    step 3) finds those at and above a path as their definition does after any holds and drops:
+    dropping one at a directory loses none beneath it.
+  - Opening (§4.4, "Opening a folder"; §4.5; §4.7 item 8; TM-9): the open verifies the stored
+    signatures across the threads it is given, and opens as on one thread (a count of the worker
+    threads it spawns, kept per calling thread and only in test builds, shows it); the count of
+    entries a store could not decode is reported; a record stored under `MAX_LOCAL_SEQ` itself is
+    kept, not renumbered; per-peer state exactly `PEER_STATE_HORIZON` old stays and goes a
+    microsecond later; a base whose record the store lost is cleared under a new epoch.
+  - Writing and the round's end (§4.4, the writer's rule, "Its names", "Cleanup", the counter
+    ceiling): an empty batch signs no record and drops none; the records of one write take
+    consecutive counters, its cleanups last, and the high-water mark ends at the last; a round's
+    end gives each cleanup its own counter, may take every counter up to `MAX_COUNTER` and refuses
+    whole past it, its notes kept and its mark where it was; a write names only the noted copies
+    its vector covers; a round's end pages its names by the record across groups.
+  - Equivalent, not skipped: `write.rs` 851 and 998, the deletion of the high-water mark's raise
+    after a write's and a round's end's records (holding each record already raises the mark to
+    its counter), except, for 851, an empty batch. The change that follows removes both raises.
+  - Two bugs found, both confirmed by the reviews and fixed in the change that follows: an empty
+    batch raises the high-water mark to the clock less one when the clock is ahead of it, stages
+    that, and is refused at the counter ceiling (F-1); an open that counts entries the store could
+    not decode draws no new epoch, though §4.4 and §4.7 item 8 say an open that dropped anything
+    draws one (F-2).
+  - Reviewed 2026-11-12 and 2026-11-13 by aa7f4f11073e67597 (blocked by two, checks made after the
+    transaction was undone and an empty batch's comment, now fixed; confirm: clean) and
+    a72b69d321b34b4e7 (blocked by two, `verify.rs` 70:19 killable and a node-count test a correct
+    refactor would break, now fixed; confirm: clean; a wording nit taken). Author
+    aa9752a99cf60b7ae. Landed as one squashed commit.
+
 - Spec: count the six connectivity switches in TM-25, and say what a folder keeps once deletions
   stop. Spec text only. TM-25 listed "the first five" of the plan's per-folder switches; it now says
   the plan lists all six (the hole-punch level too) and that a new folder starts from the
