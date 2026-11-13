@@ -295,6 +295,92 @@ fn undecodable_stored_bytes_are_counted_and_alone_make_the_folder_misconfigured(
 }
 
 #[test]
+fn misconfigured_when_every_stored_record_and_base_is_another_folders() {
+    // protocol.md 4.4, "Opening a folder": the store returned something
+    // (here one record and one record kept only as a base, as many of each)
+    // and nothing passed, so the folder is misconfigured and never proven.
+    let mut storage = FakeStorage::default();
+    let changes = licketysync_index::ChangeSet {
+        put: vec![(records_of(2, 1, 1).remove(0), 1)],
+        base_only_put: records_of(2, 2, 1),
+        ..licketysync_index::ChangeSet::default()
+    };
+    stage_changes(&mut storage, &folder(), &changes).unwrap();
+    storage.commit().unwrap();
+    let net = engine_over(storage);
+    let v = net.nodes[0].engine.folder(&folder()).unwrap();
+    assert!(
+        matches!(v.state, FolderState::Misconfigured { .. }),
+        "{:?}",
+        v.state
+    );
+    assert!(!v.credentialed);
+}
+
+#[test]
+fn reopening_a_store_its_open_does_not_change_commits_nothing() {
+    // protocol.md 4.7 item 1 and the `work` module: what an open changed is
+    // staged with the folder's first transaction; an open that changed
+    // nothing has nothing to stage, and a handler whose change sets are all
+    // empty makes no storage commit.
+    let mut net = Net::new(vec![config(0, vec![folder_key(1, 1)])]);
+    write(&mut net, 0, "a.txt", b"a").unwrap();
+    let commits = net.nodes[0].cx.storage.commits;
+    net.restart(0, config(0, vec![folder_key(1, 1)]));
+    let n = &net.nodes[0];
+    assert_eq!(n.engine.folder(&folder()).unwrap().records.len(), 1);
+    assert_eq!(n.cx.storage.commits, commits, "no commit at the open");
+    assert!(n.cx.storage.staged.is_empty(), "nothing staged either");
+}
+
+#[test]
+fn a_file_of_max_chunks_is_written_and_one_chunk_more_is_too_large() {
+    // licketysync_protocol::limits::MAX_CHUNKS: a record names at most that
+    // many chunks, so a file that needs one more is refused up front.
+    let mut c = config(0, vec![folder_key(1, 1)]);
+    c.chunk_size = 1;
+    let mut net = Net::new(vec![c]);
+    let max = licketysync_protocol::limits::MAX_CHUNKS;
+    let content: Vec<u8> = (0..=max).map(|i| (i % 251) as u8).collect();
+    assert_eq!(
+        write(&mut net, 0, "over.bin", &content),
+        Err(WriteFailure::TooLarge)
+    );
+    let held = net.nodes[0].engine.folder(&folder()).unwrap().records;
+    assert!(held.is_empty(), "nothing recorded");
+    let hash = write(&mut net, 0, "max.bin", &content[..max]).unwrap();
+    let v = net.nodes[0].engine.folder(&folder()).unwrap();
+    let record = v.records.iter().find(|r| r.hash == hash).unwrap();
+    assert_eq!(record.chunks.len(), max);
+}
+
+#[test]
+fn a_connection_that_closes_drops_its_index_sync_tables_at_once() {
+    // TM-22: every per-connection table is freed when the connection ends;
+    // once its close is recorded nothing more is sent on it, so its index
+    // sync tables go then, before the transport's `on_disconnected`: here
+    // the reply under way, with the page it keeps back.
+    let mut net = pair();
+    let peer = PeerId::new(1);
+    net.disconnect(0, 1);
+    // Node 0's transport reports its send budget to node 1 full, so the
+    // page of its reply to node 1's request waits.
+    net.nodes[0]
+        .cx
+        .extra_unsent
+        .insert(peer, crate::config::DEFAULT_SEND_BUDGET);
+    net.connect(0, 1);
+    let c = &net.nodes[0].engine.conns[&peer];
+    assert!(c.sync.serving().is_some(), "a reply under way");
+    let n = &mut net.nodes[0];
+    n.engine.on_stop(&mut n.cx);
+    // Kept until `on_disconnected`, which nothing has called yet.
+    let c = &n.engine.conns[&peer];
+    assert!(c.closed_noted, "the close was recorded");
+    assert_eq!(c.sync.serving(), None, "no reply kept");
+}
+
+#[test]
 fn the_open_issue_gives_the_counts_and_at_most_sixteen_hashes() {
     // protocol.md section 5, "Stored record fails its check": one issue, the
     // counts, at most 16 record hashes (a fixed engine constant, ruling F4).

@@ -226,3 +226,43 @@ impl Engine {
         true
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod tests {
+    use super::*;
+    use crate::tests::{folder, pair};
+
+    #[test]
+    fn a_reply_the_engine_holds_for_a_request_the_connection_does_not_know_ends_and_counts_no_bug()
+    {
+        // The connection refuses a page of a reply for a request it does not
+        // know (`SendError::UnknownRequest`, its own state, as `Closed` and
+        // `FolderNotOpen` are): the reply ends there, nothing is sent, and
+        // no engine bug is counted. The branch is defensive: in an honest
+        // run the engine holds a reply only for a request the connection
+        // handed it, so it is never reached.
+        let mut net = pair();
+        let peer = PeerId::new(1);
+        let n = &mut net.nodes[0];
+        let bugs = n.engine.counters.internal_errors;
+        n.cx.outbox.clear();
+        let (went_on, _) = n.engine.run(&mut n.cx, |e, cx, w| {
+            // A reset for request 99, which the peer never sent.
+            let reply = Reply {
+                serving: Serving::Reset {
+                    request_id: 99,
+                    redrew: false,
+                },
+                built: None,
+            };
+            let c = e.conns.get_mut(&peer).unwrap();
+            c.sync.replies.insert(folder(), reply);
+            e.serve_page(cx, w, peer, folder())
+        });
+        assert!(went_on, "the caller may go on to the next frame");
+        assert_eq!(n.engine.conns[&peer].sync.serving(), None, "it ended");
+        assert!(n.cx.outbox.is_empty(), "nothing sent");
+        assert_eq!(n.engine.counters.internal_errors, bugs, "no bug counted");
+    }
+}

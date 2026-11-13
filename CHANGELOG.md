@@ -6,6 +6,56 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Engine: tests that catch the 25 mutants of the engine crate's first batch that the Mutants run
+  on 9349d4f found surviving, and two more in the same functions that the unit tests alone let
+  through. Tests only, and one test helper, `plant_and_restart`, which plants records and restarts
+  under any config; no production behaviour changed. Each test checks what the spec states, and
+  each kill was shown by cargo-mutants on its function.
+  - The store (`store.rs`, 9; `protocol.md` §4.7 item 1, gap G6): a per-peer state loads back
+    whether or not its last round was caught up; an entry that does not decode is counted once,
+    whatever its kind (a record, a record kept only as a base, a base slot, the metadata, a
+    per-peer state, a pending free), alone or all together.
+  - Opening (`open.rs`, 3; §4.4, "Opening a folder"): a store of another folder's records and
+    bases, as many of each, is misconfigured; reopening a store whose open changes nothing makes
+    no commit.
+  - The commit (`sync/commit.rs`, 6; §4.7 items 1 and 4; section 5, "Store failure"): a folder
+    paused for a store failure frees no chunk until it resumes; a failed commit pauses only the
+    folders its handler meant to change; the frees an open finishes are committed at that open; a
+    round's end that drops nothing leaves the chunk book as it is, since the book is computed
+    again only when the index changed what it is computed from; a write the index refuses keeps
+    its own reason though its handler's commit failed (the first engine test to reach
+    `WriteFailure::CounterExhausted`: a record held at `MAX_COUNTER`, under clocks just below it).
+  - The disk, the connection and serving (3): a resolved conflict leaves no copy slot beside its
+    path on any disk (§4.4, "Bases"); a connection that closes drops its index-sync tables at
+    once, a reply under way with its page kept back over the send budget included (TM-22); a
+    reply the engine holds for a request the connection does not know ends there and counts no
+    engine bug (a defensive branch no honest run reaches).
+  - Writes (`write.rs`, 4; §4.4, "What becomes of a conflict copy"; `MAX_CHUNKS`): the index's
+    path refusal maps to `WriteFailure::Path`; a rename over a conflict first turns each copy into
+    an ordinary file; a file of `MAX_CHUNKS` chunks is written, and one chunk more is too large.
+  - Two more, which the unit tests alone let through: a write over a conflict keeps each copy's
+    own size, kind and time (`write.rs` 406:63, `replace == with !=` in `Engine::promotions`); a
+    version becomes its path's base in the handler that stores its last chunk (`sync/commit.rs`
+    133:49, `delete !` in `Engine::run_transactions`, which put it there one handler late).
+  - Mutants (cargo-mutants 27.1.0, `--timeout-multiplier 2 --minimum-test-timeout 300`, lints
+    capped, the unit tests, every test process under `ci/mutants.sh`'s caps): every mutant of
+    `decode_peer`, `load`, `Engine::open_one`, `Engine::run_transactions`, `run_folder`,
+    `round_cleanups`, `Engine::failed_commit`, `apply_path`, `ConnSync::clear`,
+    `Engine::reply_failed`, `write_error`, `Engine::promotions` and `Engine::seal`: 84 in their
+    bodies, 82 caught and the two above missed, then caught; 24 that replace a whole function, 14
+    caught and 10 unviable (a `Default` the type lacks). In those runs one, `Engine::reply_failed`
+    replaced with `true`, ran until the memory cap stopped it; a third run over
+    `Engine::failed_commit`, `ConnSync::clear` and `Engine::reply_failed`, with the tests as they
+    are now, caught all 9 of their mutants by assertions, none timed out or stopped by a cap. Each
+    of the 27 is caught by the test written for it. No mutant was found equivalent.
+  - Two defects found while testing, each left for a change of its own: a write, delete, rename
+    or mkdir at a path of 4 077 bytes or more that has a conflict copy is refused with
+    `WriteFailure::Path(TooLong)`, since phase 0's copy name (the path, ` (conflict ` and eight
+    hex digits) passes the 4 096 bytes of the path grammar, so that conflict cannot be resolved
+    by writing the path; and a rename of a path to itself returns `WriteFailure::Internal` and
+    counts an engine bug, since the index refuses a batch that names one path twice
+    (`DuplicatePath`).
+
 - Engine: tests that catch the engine crate's second batch of surviving and timed-out mutants
   (Mutants run 43341050834, on 59783b1: 26 in `engine.rs`, `transfer.rs`, `issues/`, `pacing.rs`,
   `chunks.rs`, `conn.rs`, `pause.rs` and `runtime.rs`, 6 of them timed out), so that no mutant of

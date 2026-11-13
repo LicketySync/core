@@ -472,6 +472,73 @@ mod tests {
     }
 
     #[test]
+    fn a_peer_state_loads_back_whether_or_not_its_last_round_was_caught_up() {
+        // The layout: the per-peer state ends with "caught up (1 byte)",
+        // either value of which loads back as staged.
+        let f = FolderId([9; 32]);
+        for caught_up in [false, true] {
+            let state = PeerState {
+                epoch: 1,
+                cursor: 2,
+                round_ended_us: 3,
+                caught_up,
+                names_window_us: 4,
+                names: 5,
+            };
+            let mut s = FakeStorage::default();
+            let c = ChangeSet {
+                peers: vec![(DeviceId([5; 32]), Some(state))],
+                ..ChangeSet::default()
+            };
+            stage_changes(&mut s, &f, &c).unwrap();
+            s.commit().unwrap();
+            let loaded = load(&s, &f).unwrap();
+            assert_eq!(
+                loaded.stored.peers,
+                vec![(DeviceId([5; 32]), state)],
+                "caught up: {caught_up}"
+            );
+            assert_eq!(loaded.stored.undecodable, 0, "caught up: {caught_up}");
+        }
+    }
+
+    #[test]
+    fn every_kind_of_entry_that_does_not_decode_is_counted_once() {
+        // Gap G6: an entry that does not decode is counted in
+        // `Stored::undecodable` and left out, whatever its kind; one of each
+        // kind counts one each, alone or all together.
+        let f = FolderId([9; 32]);
+        let mut slot = [4u8; 32].to_vec();
+        slot.push(2); // a place that is neither the path (0) nor a copy (1)
+        let mut peer = vec![0u8; 40];
+        peer.push(2); // caught up neither 0 nor 1
+        let bad: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (record_key(&f, &RecordHash([1; 32])), b"x".to_vec()),
+            (key_of(BASE_ONLY, &f, &[2; 32]), signed_record(1).to_bytes()),
+            (key_of(SLOTS, &f, &slot), [3; 32].to_vec()),
+            (meta_key(&f), b"short".to_vec()),
+            (key_of(PEERS, &f, &[5; 32]), peer),
+            (key_of(FREES, &f, b"short"), Vec::new()),
+        ];
+        let load_of = |entries: &[(Vec<u8>, Vec<u8>)]| {
+            let mut s = FakeStorage::default();
+            for (key, value) in entries {
+                s.put(key, value).unwrap();
+            }
+            s.commit().unwrap();
+            load(&s, &f).unwrap()
+        };
+        for entry in &bad {
+            let loaded = load_of(core::slice::from_ref(entry));
+            assert_eq!(loaded.stored.undecodable, 1, "{:?}", entry.0);
+            assert!(loaded.stored.records.is_empty() && loaded.stored.base_only.is_empty());
+            assert!(loaded.stored.bases.is_empty() && loaded.stored.peers.is_empty());
+            assert!(loaded.stored.meta.is_none() && loaded.pending_free.is_empty());
+        }
+        assert_eq!(load_of(&bad).stored.undecodable, bad.len());
+    }
+
+    #[test]
     fn the_layout_keeps_folders_and_kinds_apart() {
         let (f, g) = (FolderId([1; 32]), FolderId([2; 32]));
         let c = CipherHash([3; 32]);

@@ -2,10 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The rules of `protocol.md` 4.7 ("What the engine needs") that the other
-//! tests do not pin, one test each, named by the rule: the pending-free list
-//! (item 1), the bases and conflicts of a write (item 6) and the clock rule
-//! (items 6 and 8).
+//! The rules of `protocol.md` 4.7 ("What the engine needs") and section 5
+//! that the other tests do not pin, one test each, named by the rule: the
+//! pending-free list, the chunk book and the bases of what arrives (item 1),
+//! the store-failure pause and the failed commit (item 4, section 5, "Store
+//! failure"), the bases and conflicts of a write (item 6), and phase 0's
+//! clock rule, which the code keeps until phase 1 removes it.
 
 #![allow(
     clippy::unwrap_used,
@@ -1393,6 +1395,18 @@ fn crafted(
 /// Puts `records` in node `i`'s committed store, as held there, and
 /// restarts it over them as a read holder.
 fn plant(net: &mut Net, i: usize, records: &[licketysync_keys::records::SignedRecord]) {
+    let tier_2 = config(u8::try_from(i).unwrap(), vec![folder_key(1, 2)]);
+    plant_and_restart(net, i, records, tier_2);
+}
+
+/// Puts `records` in node `i`'s committed store, as held there in folder 1,
+/// and restarts it over them with `config`.
+fn plant_and_restart(
+    net: &mut Net,
+    i: usize,
+    records: &[licketysync_keys::records::SignedRecord],
+    config: crate::config::EngineConfig,
+) {
     for (seq, r) in (1u64..).zip(records) {
         let mut value = seq.to_be_bytes().to_vec();
         value.extend_from_slice(&r.to_bytes());
@@ -1402,7 +1416,7 @@ fn plant(net: &mut Net, i: usize, records: &[licketysync_keys::records::SignedRe
             .committed
             .insert(crate::store::record_key(&folder(), &r.hash()), value);
     }
-    net.restart(i, config(u8::try_from(i).unwrap(), vec![folder_key(1, 2)]));
+    net.restart(i, config);
 }
 
 #[test]
@@ -1434,4 +1448,282 @@ fn a_page_that_only_drops_a_record_stops_wanting_its_chunks() {
     assert_eq!(v.bytes_needed, 0);
     net.settle();
     assert!(lacking(&net).is_empty(), "nor once node 0 answered");
+}
+
+#[test]
+fn a_resolved_conflict_leaves_no_copy_slot_beside_its_path_on_any_disk() {
+    // Item 6, Bases, and the `disk` module: a copy slot goes once its record
+    // is no conflict copy any more. Once node 0's write over the conflict
+    // reaches node 1, the copy's version lies at its own path on both disks
+    // and the path's one base is the write.
+    let (mut net, _, _) = conflict();
+    let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
+    let name = copy_name("f.txt", &copy);
+    let v4 = write(&mut net, 0, "f.txt", &[4u8; 2000]).unwrap();
+    net.advance(Duration::from_secs(5));
+    for i in 0..2 {
+        assert_eq!(
+            file(&net, i, "f.txt").unwrap().bases,
+            vec![(Place::Path, v4)],
+            "node {i}: no copy slot beside the path"
+        );
+        let c = file(&net, i, &name).unwrap();
+        assert_eq!(c.bases, vec![(Place::Path, c.heads[0].hash)], "node {i}");
+    }
+}
+
+#[test]
+fn a_write_over_a_conflict_writes_each_copy_with_its_own_size_and_time() {
+    // 4.4, "What becomes of a conflict copy": the copy is written at its own
+    // path as the version it was, its chunks and so its size, its kind and
+    // its modification time, never the shown version's. Node 1's edit is
+    // later by `mtime_ns`, so it is shown first and V2 is the copy (4.4,
+    // display order).
+    let mut net = pair();
+    let f = folder();
+    write(&mut net, 0, "f.txt", &[1u8; 2000]).unwrap();
+    net.advance(Duration::from_secs(3));
+    net.hold = Some(Hold::new(0, 1, MessageType::ChunkReply));
+    let v2 = write(&mut net, 0, "f.txt", &[2u8; 2000]).unwrap();
+    net.advance(Duration::from_secs(3));
+    let mine = net
+        .with(1, |e, cx| e.write_file(cx, f, "f.txt", &[3u8; 1500], 7))
+        .unwrap();
+    net.release();
+    net.advance(Duration::from_secs(5));
+    let view = file(&net, 0, "f.txt").unwrap();
+    assert_eq!(view.current, Some(mine), "the later edit is shown");
+    assert_eq!(view.conflict_copies, vec![v2]);
+    write(&mut net, 0, "f.txt", &[4u8; 100]).unwrap();
+    net.advance(Duration::from_secs(5));
+    let name = copy_name("f.txt", &v2);
+    for i in 0..2 {
+        let c = file(&net, i, &name).unwrap();
+        assert_eq!(c.heads.len(), 1, "node {i}: an ordinary file");
+        let head = c.heads[0];
+        assert_eq!(
+            (head.kind, head.size, head.mtime_ns),
+            (licketysync_protocol::record::Kind::File, 2000, 0),
+            "node {i}: V2's own"
+        );
+        let n = &net.nodes[i];
+        let bytes = n.engine.read_file(&n.cx.storage, &f, &head.hash).unwrap();
+        assert_eq!(bytes, vec![2u8; 2000], "node {i}");
+    }
+}
+
+#[test]
+fn a_rename_over_a_conflict_turns_each_copy_into_an_ordinary_file() {
+    // Item 6, Conflicts, for a rename: its tombstone writes the old path
+    // over every head on the disk there, so each conflict copy beside it is
+    // first written as a version at its own path, in the same commit, and
+    // is never lost with the path (4.4, "What becomes of a conflict copy").
+    let (mut net, v2, _) = conflict();
+    let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
+    let name = copy_name("f.txt", &copy);
+    let (shown, copied) = if copy == v2 {
+        ([3u8; 2000], [2u8; 2000])
+    } else {
+        ([2u8; 2000], [3u8; 2000])
+    };
+    let f = folder();
+    net.with(0, |e, cx| e.rename(cx, f, "f.txt", "g.txt", 0))
+        .unwrap();
+    net.advance(Duration::from_secs(5));
+    for i in 0..2 {
+        let old = file(&net, i, "f.txt").unwrap();
+        assert!(old.deleted, "node {i}: the old path is deleted");
+        assert_eq!(old.heads.len(), 1, "node {i}: its conflict covered");
+        let n = &net.nodes[i];
+        let read = |path: &str| {
+            let v = file(&net, i, path).unwrap();
+            assert_eq!(v.heads.len(), 1, "node {i}: {path} is an ordinary file");
+            n.engine
+                .read_file(&n.cx.storage, &f, &v.heads[0].hash)
+                .unwrap()
+        };
+        assert_eq!(read("g.txt"), shown.to_vec(), "node {i}: the file renamed");
+        assert_eq!(read(&name), copied.to_vec(), "node {i}: the copy's content");
+    }
+}
+
+#[test]
+fn a_folder_paused_for_a_store_failure_frees_no_chunk_until_it_resumes() {
+    // Item 1 and section 5, "Store failure": a folder held paused takes no
+    // change into its store until it resumes, the chunk frees the free tick
+    // makes due included. They wait, and go once it has resumed.
+    let (mut net, c1) = dropped_version();
+    net.disconnect(0, 1);
+    net.nodes[0].cx.storage.full = true;
+    assert!(write(&mut net, 0, "x.txt", b"x").is_err());
+    // The store takes puts again, but not the probe's: the folder stays
+    // paused.
+    net.nodes[0].cx.storage.full = false;
+    net.nodes[0].cx.storage.fail_prefix = Some((crate::store::PROBE.to_vec(), u64::MAX));
+    let commits = net.nodes[0].cx.storage.commits;
+    net.advance(Duration::from_secs(61));
+    assert!(matches!(state(&net, 0), FolderState::Paused(_)));
+    assert!(
+        net.nodes[0].engine.folders.get(&folder()).unwrap().free_due,
+        "the free tick made the free due"
+    );
+    assert!(
+        pending(&net, 0, &c1) && stored(&net, 0, &c1),
+        "nothing freed while paused"
+    );
+    assert_eq!(
+        net.nodes[0].cx.storage.commits, commits,
+        "nothing committed"
+    );
+    net.nodes[0].cx.storage.fail_prefix = None;
+    net.advance(Duration::from_secs(5));
+    assert!(!matches!(state(&net, 0), FolderState::Paused(_)));
+    assert!(
+        !pending(&net, 0, &c1) && !stored(&net, 0, &c1),
+        "freed once it resumed"
+    );
+}
+
+#[test]
+fn a_failed_commit_pauses_only_the_folders_it_meant_to_change() {
+    // Section 5, "Store failure", and item 4: a failed commit pauses every
+    // folder its handler meant to change, and no other. At this start
+    // folder 2 is new, so its creation is staged and lost with the commit;
+    // folder 1's store opens as it was, with nothing to change, and stays
+    // usable.
+    let (f1, f2) = (folder_key(1, 1).folder_id(), folder_key(2, 1).folder_id());
+    let mut net = Net::new(vec![config(0, vec![folder_key(1, 1)])]);
+    write(&mut net, 0, "a.txt", b"a").unwrap();
+    net.nodes[0].cx.storage.commit_fails = true;
+    net.restart(0, config(0, vec![folder_key(1, 1), folder_key(2, 1)]));
+    let state_of = |f: &licketysync_keys::FolderId| net.nodes[0].engine.folder(f).unwrap().state;
+    assert!(
+        matches!(state_of(&f2), FolderState::Paused(_)),
+        "{:?}",
+        state_of(&f2)
+    );
+    assert!(
+        !matches!(state_of(&f1), FolderState::Paused(_)),
+        "{:?}",
+        state_of(&f1)
+    );
+}
+
+#[test]
+fn the_frees_an_open_finishes_are_committed_at_that_open() {
+    // Item 1: "an open finishes whatever it lists before the folder syncs",
+    // in on-start's one commit: the blob, its marker and its entry on the
+    // list are gone from what is committed, so the next start finds nothing
+    // left to free.
+    let (mut net, c1) = dropped_version();
+    net.restart(1, config(1, vec![folder_key(1, 1)]));
+    let f = folder();
+    let committed = &net.nodes[1].cx.storage.committed;
+    for key in [
+        crate::store::chunk_key(&f, &c1),
+        crate::store::held_key(&f, &c1),
+        crate::store::free_key(&f, &c1),
+    ] {
+        assert!(!committed.contains_key(&key), "{key:?}");
+    }
+    net.restart(1, config(1, vec![folder_key(1, 1)]));
+    assert!(!pending(&net, 1, &c1) && !stored(&net, 1, &c1));
+}
+
+#[test]
+fn a_rounds_end_that_drops_nothing_recomputes_no_chunk_state() {
+    // The chunk book is computed again only when the index changed what it
+    // is computed from, a round's end included. A reconnect's rounds end
+    // with no cleanup to write and nothing dropped, so they change nothing
+    // of it.
+    let mut net = pair();
+    write(&mut net, 0, "a.bin", &[1u8; 3000]).unwrap();
+    net.advance(Duration::from_secs(3));
+    let devices = [net.nodes[1].engine.own, net.nodes[0].engine.own];
+    let look = |net: &Net| -> Vec<(u64, Option<u64>)> {
+        (0..2)
+            .map(|i| {
+                let f = net.nodes[i].engine.folders.get(&folder()).unwrap();
+                let ended = f.index.peer(&devices[i]).map(|p| p.round_ended_us);
+                (f.book.refreshes, ended)
+            })
+            .collect()
+    };
+    let before = look(&net);
+    net.disconnect(0, 1);
+    net.connect(0, 1);
+    net.advance(Duration::from_secs(3));
+    let after = look(&net);
+    for i in 0..2 {
+        assert_eq!(state(&net, i), FolderState::UpToDate, "node {i}");
+        assert!(after[i].1 > before[i].1, "node {i}: a round ended");
+        assert_eq!(after[i].0, before[i].0, "node {i}: no refresh");
+    }
+}
+
+#[test]
+fn a_write_the_index_refuses_reports_its_refusal_though_its_handlers_commit_failed() {
+    // Section 5, "Store failure", and the `write` module: a write that made
+    // no record says why, and a failed commit in its handler is not the
+    // reason. Node 1 holds a record of folder 1 at `MAX_COUNTER`, so its
+    // next counter there would pass it and the index refuses the write (4.4,
+    // "The counter ceiling"; section 5, a device's next counter would pass
+    // `MAX_COUNTER`); the same handler commits folder 2's cursor that node
+    // 0's counted push raised, which waited for the next commit, and that
+    // commit fails.
+    //
+    // The clocks are set just below `MAX_COUNTER` only for phase 0's clock
+    // rule, which the code keeps: it keeps a store more than a year ahead of
+    // the clock closed (the index's open, `CLOCK_RULE_LIMIT`) and compares
+    // the Hellos' clocks. 4.4, "Opening a folder", opens such a store
+    // whatever the clock; phase 1 removes the rule, and these lines with it.
+    let max = licketysync_protocol::limits::MAX_COUNTER;
+    let (f1, f2) = (folder(), folder_key(2, 1).folder_id());
+    let both = || config(1, vec![folder_key(1, 1), folder_key(2, 1)]);
+    let mut net = Net::new(vec![config(0, vec![folder_key(2, 1)]), both()]);
+    for n in &mut net.nodes {
+        n.cx.wall = max / 1_000_000;
+    }
+    plant_and_restart(&mut net, 1, &[crafted("z", 0x99, max, &[], None)], both());
+    assert_eq!(net.nodes[1].engine.high_water(&f1), Some(max));
+    net.connect(0, 1);
+    net.advance(Duration::from_secs(2));
+    net.with(0, |e, cx| e.mkdir(cx, f2, "d", 0)).unwrap();
+    assert!(
+        !net.nodes[1].engine.deferred.is_empty(),
+        "the push's cursor waits for the next commit"
+    );
+    net.nodes[1].cx.storage.commit_fails = true;
+    let n = &mut net.nodes[1];
+    let written = n.engine.write_file(&mut n.cx, f1, "a.txt", b"a", 0);
+    assert_eq!(written, Err(WriteFailure::CounterExhausted));
+    let state_of = |f: &licketysync_keys::FolderId| net.nodes[1].engine.folder(f).unwrap().state;
+    assert!(
+        matches!(state_of(&f2), FolderState::Paused(_)),
+        "the commit failed: {:?}",
+        state_of(&f2)
+    );
+}
+
+#[test]
+fn a_version_becomes_its_paths_base_in_the_handler_that_stores_its_last_chunk() {
+    // The `disk` module and item 1: a path whose heads are not all on the
+    // disk is applied again as their chunks arrive, so a version received
+    // is its path's base, its file in place, in the handler that stores and
+    // verifies its last chunk.
+    let mut net = pair();
+    net.hold = Some(Hold::new(0, 1, MessageType::ChunkReply));
+    let h = write(&mut net, 0, "p.txt", b"hello there").unwrap();
+    net.advance(Duration::from_secs(3));
+    assert_eq!(
+        file(&net, 1, "p.txt").unwrap().bases,
+        vec![],
+        "its chunk is held back"
+    );
+    net.release_unsettled();
+    assert!(stored(&net, 1, &chunks_of(&net, 1, &h)[0]));
+    assert_eq!(
+        file(&net, 1, "p.txt").unwrap().bases,
+        vec![(Place::Path, h)]
+    );
 }

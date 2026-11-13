@@ -548,6 +548,11 @@ mod tests {
             WriteFailure::CounterExhausted
         );
         assert_eq!(
+            write_error(&WriteError::Path(PathError::TooLong(5_000))),
+            WriteFailure::Path(PathError::TooLong(5_000)),
+            "the index's path refusal keeps its reason"
+        );
+        assert_eq!(
             write_error(&WriteError::DuplicatePath("a".into())),
             WriteFailure::Internal
         );
