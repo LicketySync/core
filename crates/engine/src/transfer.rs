@@ -9,13 +9,14 @@
 //!
 //! - **Passes** run per connection and folder, in ascending `cipher_hash`
 //!   order from the connection's position, skipping a hash already asked of
-//!   another connection until its patience runs out (`crate::inflight`), and
-//!   end (`pass_done`) when no lacking hash lies above the position; the
-//!   connection keeps the backoff, the waits after a `CHUNK_NOT_FOUND` and
-//!   their triggers. Any peer with the folder open may be asked for any hash
-//!   (ruling S-3). A paused folder asks for nothing. A chunk that arrives for
-//!   a hash stored already (a slow connection's answer) is dropped and
-//!   counted.
+//!   another connection until its patience runs out and until the turn of the
+//!   connections that could ask now goes round to this one
+//!   (`crate::inflight`), and end (`pass_done`) when no lacking hash lies
+//!   above the position; the connection keeps the backoff, the waits after a
+//!   `CHUNK_NOT_FOUND` and their triggers. Any peer with the folder open may
+//!   be asked for any hash (ruling S-3). A paused folder asks for nothing. A
+//!   chunk that arrives for a hash stored already (a slow connection's
+//!   answer) is dropped and counted.
 //! - **Serving.** A request is answered only as its turn comes: the blob is
 //!   read from storage then, and sent when this device holds it for the
 //!   folder (stored, and named by a held record), `CHUNK_NOT_FOUND`
@@ -29,6 +30,8 @@
 //!   connection where the folder is open, after the commit: it feeds each
 //!   peer's trigger for its next pass. No chunk is freed in phase 0.
 
+use std::collections::BTreeMap;
+
 use licketysync_keys::{CipherHash, FolderId};
 use licketysync_protocol::connection::{ChunkAnswer, SendError};
 use licketysync_protocol::limits::{MAX_REQUESTS_IN_FLIGHT, MAX_STORED_LEN};
@@ -36,7 +39,7 @@ use licketysync_protocol::Cause;
 
 use crate::chunks::Finding;
 use crate::engine::{tick, Engine};
-use crate::inflight::patience;
+use crate::inflight::{patience, Asker};
 use crate::issues::{bump, Issue, IssueKind, Subject};
 use crate::pacing::{chunk_estimate, within_budget};
 use crate::runtime::{Context, PeerId};
@@ -394,14 +397,51 @@ impl Engine {
             return;
         }
         self.fresh(cx, work, folder);
-        for peer in self.open_on(&folder) {
-            self.drive(cx, work, peer, folder);
+        // A connection whose turn a hash is may not ask for it: its room
+        // fills first, or its pass, past the hash, comes to wait. Within one
+        // handler a connection can only stop being able to ask, so the passes
+        // run again over those still able, with the turns worked out again,
+        // until none drops out: at most once more than there are connections.
+        let mut ready = self.ready_on(cx, folder);
+        for _ in 0..=ready.len() {
+            let turns = self.in_flight.turns(folder, &ready);
+            for me in &ready {
+                self.drive(cx, work, *me, folder, &turns);
+            }
+            let still = self.ready_on(cx, folder);
+            if still.len() >= ready.len() {
+                return;
+            }
+            ready = still;
         }
+        self.counters.bug();
     }
 
-    /// One connection's pass for `folder`, as far as it may go now.
-    fn drive(&mut self, cx: &mut dyn Context, work: &mut Work, peer: PeerId, folder: FolderId) {
-        let (now, wait) = (cx.now(), patience(&self.settings.timing));
+    /// The connections where `folder` is open that may ask for a chunk of
+    /// it now: in flight not full, not backing off, not waiting for a
+    /// trigger.
+    fn ready_on(&mut self, cx: &mut dyn Context, folder: FolderId) -> Vec<Asker> {
+        self.open_on(&folder)
+            .into_iter()
+            .filter_map(|peer| {
+                let made = self.conns.get(&peer)?.made;
+                let position = self.with_conn(cx, peer, |c, t| c.chunk_position(t, &folder));
+                matches!(position, Some(Ok(_))).then_some(Asker { peer, made })
+            })
+            .collect()
+    }
+
+    /// One connection's pass for `folder`, as far as it may go now, taking
+    /// its turns (`turns`, from `InFlight::turns`).
+    fn drive(
+        &mut self,
+        cx: &mut dyn Context,
+        work: &mut Work,
+        me: Asker,
+        folder: FolderId,
+        turns: &BTreeMap<CipherHash, PeerId>,
+    ) {
+        let (now, wait, peer) = (cx.now(), patience(&self.settings.timing), me.peer);
         for _ in 0..DRIVE_STEPS {
             let Some(Ok(position)) = self.with_conn(cx, peer, |c, t| c.chunk_position(t, &folder))
             else {
@@ -409,7 +449,7 @@ impl Engine {
                 return;
             };
             let in_flight = &self.in_flight;
-            let free = |h: &CipherHash| in_flight.free(folder, h, peer, now, wait);
+            let free = |h: &CipherHash| in_flight.free(folder, h, peer, now, wait, turns);
             let next = self
                 .folders
                 .get(&folder)
@@ -418,7 +458,7 @@ impl Engine {
                 (Some(hash), _) => {
                     match self.with_conn(cx, peer, |c, t| c.request_chunk(t, folder, hash)) {
                         Some(Ok(out)) => {
-                            self.in_flight.asked(folder, hash, peer, now);
+                            self.in_flight.asked(folder, hash, me, now);
                             self.apply(cx, work, peer, out);
                         }
                         Some(Err(
@@ -443,7 +483,7 @@ impl Engine {
                     let in_flight = &self.in_flight;
                     let more = self.folders.get(&folder).is_some_and(|f| {
                         f.book
-                            .any_lacking(|h| in_flight.free(folder, h, peer, now, wait))
+                            .any_lacking(|h| in_flight.free(folder, h, peer, now, wait, turns))
                     });
                     if !more {
                         return;

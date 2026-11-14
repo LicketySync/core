@@ -16,9 +16,10 @@
 
 use core::time::Duration;
 
+use licketysync_keys::chunk::seal_chunk;
 use licketysync_keys::{CipherHash, FolderId, RecordHash};
 use licketysync_protocol::connection::Timing;
-use licketysync_protocol::frame::{Frame, MessageType};
+use licketysync_protocol::frame::{Frame, FrameKind, MessageType};
 
 use crate::config::EngineConfig;
 use crate::inspect::Place;
@@ -27,7 +28,7 @@ use crate::rules::{conflict, file};
 use crate::runtime::{Instant, Peer, PeerId, Storage};
 use crate::store::{chunk_key, held_key};
 use crate::sync::disk::copy_name;
-use crate::testkit::{config, folder_key, Hold, Net};
+use crate::testkit::{chunk_hash, config, folder_key, write_key, Hold, Net};
 use crate::tests::{folder, pair, state, write};
 use crate::timers::Purpose;
 use crate::{FolderState, WriteFailure};
@@ -781,6 +782,477 @@ fn a_chunk_whose_patience_runs_out_while_another_handler_runs_is_offered_elsewhe
         })
         .collect();
     assert!(fetched.iter().all(|(_, ok)| *ok), "{fetched:?}");
+}
+
+/// What node 1 of [`withheld_by_two`], which lacks the chunk, does a second
+/// after each minute to be asked for it again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rejoin {
+    /// Nothing: after its refusal its pass waits for a trigger.
+    Nothing,
+    /// It reconnects, which starts its pass afresh.
+    Reconnect,
+    /// It reports one more chunk stored in its next Status, a count a peer
+    /// may raise at will, which triggers its next pass.
+    MoreStored,
+}
+
+/// The hashes node `from` asked node `to` for, across every connection
+/// between them, in order.
+fn requested(net: &Net, from: usize, to: usize) -> Vec<CipherHash> {
+    use licketysync_protocol::frame::FrameDecoder;
+    let bytes = net.streams.get(&(from, to)).cloned().unwrap_or_default();
+    let mut decoder = FrameDecoder::new(licketysync_protocol::limits::MAX_MESSAGE_SIZE);
+    let mut input = bytes.as_slice();
+    let mut out = Vec::new();
+    while let Ok(Some(frame)) = decoder.next_frame(&mut input) {
+        if frame.kind() == FrameKind::Known(MessageType::ChunkRequest) {
+            out.extend(chunk_hash(&frame));
+        }
+    }
+    out
+}
+
+/// The chunk requests node `from` sent node `to`, across every connection
+/// between them.
+fn chunk_requests(net: &Net, from: usize, to: usize) -> usize {
+    requested(net, from, to).len()
+}
+
+/// Node 0 holds the one chunk of a file and never answers node 2's request
+/// for it; node 1 lacks it and answers `CHUNK_NOT_FOUND`; node 3 holds it
+/// and is honest. Node 2 meets them in that order, so node 1 is offered the
+/// hash before node 3 whenever both may ask. Node 1 does `rejoin` a second
+/// after each minute since node 2 asked node 0, for five minutes. Returns
+/// whether node 2 held the file a second after the patience first ran out
+/// and at the end, and the chunk requests it sent node 1 and node 3.
+fn withheld_by_two(rejoin: Rejoin) -> (bool, bool, usize, usize) {
+    let mut net = Net::new((0..4).map(key_config).collect());
+    let content = vec![5u8; 500];
+    net.connect(0, 3);
+    for i in [0, 1, 3] {
+        net.connect(i, 2);
+    }
+    net.advance(Duration::from_secs(2));
+    net.hold = Some(Hold::new(0, 2, MessageType::ChunkReply));
+    let record = write(&mut net, 0, "p.bin", &content).unwrap();
+    assert_eq!(
+        read(&net, 3, record),
+        Ok(content.clone()),
+        "node 3 holds it"
+    );
+    assert!(read(&net, 1, record).is_err(), "node 1 lacks it");
+    assert!(chunk_requests(&net, 1, 2) > 0, "node 2 refused node 1");
+    assert_eq!(
+        net.nodes[1].engine.in_flight.entries(),
+        0,
+        "a request refused goes once its handler ends"
+    );
+    let asked = net.now;
+    let wait = crate::inflight::patience(&Timing::SPEC);
+    assert_eq!(
+        net.nodes[2]
+            .engine
+            .in_flight
+            .next_expiry(wait, Instant::from_nanos(asked)),
+        Some(Instant::from_nanos(asked).saturating_add(wait)),
+        "node 2 asked node 0 now"
+    );
+    let mut first = false;
+    for minute in 1..=5 {
+        let at = asked + minute * wait.as_nanos() as u64 + 1_000_000_000;
+        net.advance(Duration::from_nanos(at - net.now));
+        if minute == 1 {
+            first = read(&net, 2, record) == Ok(content.clone());
+        }
+        match rejoin {
+            Rejoin::Nothing => {}
+            Rejoin::Reconnect => {
+                net.disconnect(1, 2);
+                net.connect(1, 2);
+            }
+            Rejoin::MoreStored => {
+                net.with(1, |e, cx| {
+                    e.run(cx, |e, cx, w| e.notify_stored(cx, w, folder(), 1))
+                });
+            }
+        }
+    }
+    assert!(
+        net.nodes[2].cx.connected.contains(&PeerId::new(0)),
+        "node 0 stayed connected"
+    );
+    let last = read(&net, 2, record) == Ok(content);
+    (
+        first,
+        last,
+        chunk_requests(&net, 2, 1),
+        chunk_requests(&net, 2, 3),
+    )
+}
+
+#[test]
+fn a_chunk_one_peer_withholds_is_asked_of_an_honest_holder_once_another_refuses_it() {
+    // The control for the two below: node 1 refuses once and does nothing
+    // more. Its refusal dropped its request but left its ask time as the
+    // whole hash's (`inflight`), so node 3 was asked only a second patience
+    // later.
+    let (first, last, to_1, to_3) = withheld_by_two(Rejoin::Nothing);
+    assert!(
+        first,
+        "fetched as node 1 refused; at the end {last}; asked node 1 {to_1}, node 3 {to_3}"
+    );
+    assert_eq!((to_1, to_3), (1, 1));
+}
+
+#[test]
+fn two_peers_never_keep_a_chunk_from_an_honest_holder_by_reconnecting() {
+    // Node 0 takes the request and stays silent; node 1, which sorts before
+    // node 3, is asked first at each expiry, refuses, and reconnects so that
+    // its pass may ask again before node 3's. Each ask of node 1 restarted
+    // the patience for every connection (`inflight`), so node 3 was never
+    // asked: two key holders of any tier (ruling S-3) kept the hash from an
+    // honest holder for as long as they liked.
+    let (first, last, to_1, to_3) = withheld_by_two(Rejoin::Reconnect);
+    assert!(first && last, "fetched; asked node 1 {to_1}, node 3 {to_3}");
+    assert_eq!((to_1, to_3), (1, 1), "node 3 asked as node 1 refused");
+}
+
+#[test]
+fn two_peers_never_keep_a_chunk_from_an_honest_holder_by_raising_chunks_stored() {
+    // As above, but node 1 stays connected and triggers its next pass with
+    // a Status that reports one more chunk stored (`protocol.md` 4.6,
+    // "Passes").
+    let (first, last, to_1, to_3) = withheld_by_two(Rejoin::MoreStored);
+    assert!(first && last, "fetched; asked node 1 {to_1}, node 3 {to_3}");
+    assert_eq!((to_1, to_3), (1, 1), "node 3 asked as node 1 refused");
+}
+
+/// How each of nodes 0 and 1 of [`taking_turns`] ends its turn holding the
+/// hash, so that the other is asked next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndTurn {
+    /// It reconnects, which drops its request and starts its pass afresh.
+    Reconnect,
+    /// It answers `CHUNK_NOT_FOUND`, then reports one more chunk stored so
+    /// that its pass may ask again.
+    Refuse,
+}
+
+/// Node 3 writes a file of one chunk; nodes 0 and 1 lack it and take turns
+/// holding node 2's request for it without answering, each ending its turn
+/// (`end`) every 30 s, before its patience runs out, so that the other is
+/// asked next. Node 2 met them in the order 0, 1, 3. Returns the turn after
+/// which node 2 first held the file, if it did within five minutes, and the
+/// chunk requests it sent each of nodes 0, 1 and 3.
+fn taking_turns(end: EndTurn) -> (Option<u32>, [usize; 3]) {
+    let mut net = Net::new((0..4).map(key_config).collect());
+    let content = vec![6u8; 500];
+    for i in [0, 1, 3] {
+        net.connect(i, 2);
+    }
+    net.advance(Duration::from_secs(2));
+    net.hold = Some(Hold::new(0, 2, MessageType::ChunkReply));
+    let record = write(&mut net, 3, "q.bin", &content).unwrap();
+    let asked = |net: &Net| [0, 1, 3].map(|to| chunk_requests(net, 2, to));
+    assert_eq!(asked(&net), [1, 0, 0], "node 0 asked first");
+    let mut held = None;
+    for turn in 1..=10 {
+        net.advance(Duration::from_secs(30));
+        let (holder, other) = if turn % 2 == 1 { (0, 1) } else { (1, 0) };
+        match end {
+            EndTurn::Reconnect => {
+                net.hold = Some(Hold::new(other, 2, MessageType::ChunkReply));
+                net.disconnect(holder, 2);
+                net.connect(holder, 2);
+            }
+            EndTurn::Refuse => {
+                net.release_unsettled();
+                net.hold = Some(Hold::new(other, 2, MessageType::ChunkReply));
+                net.settle();
+                net.with(holder, |e, cx| {
+                    e.run(cx, |e, cx, w| e.notify_stored(cx, w, folder(), 1))
+                });
+            }
+        }
+        if held.is_none() && read(&net, 2, record) == Ok(content.clone()) {
+            held = Some(turn);
+        }
+    }
+    (held, asked(&net))
+}
+
+#[test]
+fn two_peers_never_keep_a_chunk_from_an_honest_holder_by_taking_turns_reconnecting() {
+    // Nodes 0 and 1, which node 2 met before node 3, hand the request back
+    // and forth by reconnecting, each before its patience runs out: the
+    // hash went to the first connection free to ask whenever the other's
+    // request ended, so node 3 was never asked.
+    let (held, asked) = taking_turns(EndTurn::Reconnect);
+    assert_eq!(held, Some(2), "node 3 asked at the second turn: {asked:?}");
+    assert_eq!(asked[2], 1, "{asked:?}");
+}
+
+#[test]
+fn two_peers_never_keep_a_chunk_from_an_honest_holder_by_taking_turns_refusing() {
+    // As above, each ending its turn with `CHUNK_NOT_FOUND` and a Status
+    // that triggers its next pass.
+    let (held, asked) = taking_turns(EndTurn::Refuse);
+    assert_eq!(held, Some(2), "node 3 asked at the second turn: {asked:?}");
+    assert_eq!(asked[2], 1, "{asked:?}");
+}
+
+/// What node `i` lacks of the folder.
+fn lacking(net: &Net, i: usize) -> usize {
+    net.nodes[i].engine.folder(&folder()).unwrap().lacking.len()
+}
+
+/// Node 3 writes a file of eight chunks, which node 1 fetches; then node 2
+/// meets nodes 0, 1 and 3, in that order. Node 0 takes every request and
+/// never answers. Node 1 advertises `max_requests_in_flight` 1 and, when
+/// `slow`, answers each request 59 s after it was asked, inside the
+/// patience. Returns, at 60 s and every 59 s after, until 296 s: the
+/// seconds since node 2 met them, the chunk requests it sent nodes 0, 1 and
+/// 3, and what it lacks.
+fn one_slot_ahead(slow: bool) -> Vec<(u64, [usize; 3], usize)> {
+    let mut configs: Vec<EngineConfig> = (0..4).map(key_config).collect();
+    configs[1].max_requests_in_flight = 1;
+    let mut net = Net::new(configs);
+    net.connect(1, 3);
+    net.advance(Duration::from_secs(2));
+    let eight: Vec<u8> = (0..8 * 1024usize)
+        .map(|i| (i.wrapping_mul(7) + i / 1024) as u8)
+        .collect();
+    write(&mut net, 3, "eight.bin", &eight).unwrap();
+    net.advance(Duration::from_secs(2));
+    assert_eq!(lacking(&net, 1), 0, "node 1 holds it");
+    net.gate.rules.push((0, 2, MessageType::ChunkReply, None));
+    if slow {
+        net.gate.rules.push((1, 2, MessageType::ChunkReply, None));
+    }
+    for i in [0, 1, 3] {
+        net.connect(i, 2);
+    }
+    let start = net.now;
+    let step = |net: &Net| {
+        let asked = [0, 1, 3].map(|to| chunk_requests(net, 2, to));
+        ((net.now - start) / 1_000_000_000, asked, lacking(net, 2))
+    };
+    assert_eq!(step(&net), (0, [8, 0, 0], 8), "node 0 holds them all");
+    net.advance(Duration::from_secs(60));
+    let mut log = vec![step(&net)];
+    for _ in 0..4 {
+        net.advance(Duration::from_secs(59));
+        net.deliver(1, 2, |_| true);
+        log.push(step(&net));
+    }
+    assert_eq!(net.nodes[2].engine.counters().internal_errors, 0);
+    log
+}
+
+#[test]
+fn a_one_slot_peer_that_serves_slowly_keeps_no_batch_from_the_honest_holder() {
+    // Review R1's probe C. Once node 0's patience ran out, node 1 was first
+    // in line for all eight hashes. Counted as able to ask while its one
+    // slot was taken, it kept the turn at the seven it could not ask for:
+    // node 3 was never asked, and node 2 got one chunk every 59 s.
+    let log = one_slot_ahead(true);
+    assert!(log[0].1[2] > 0, "node 3 asked at 60 s: {log:?}");
+    assert_eq!((log[1].0, log[1].2), (119, 0), "all held by 119 s: {log:?}");
+}
+
+#[test]
+fn a_one_slot_peer_next_in_line_leaves_the_rest_of_a_batch_to_the_honest_holder() {
+    // Review R1's probe B: as above with node 1 answering at once. It took
+    // the hashes one at a time while node 3, with room for all, was asked
+    // for none.
+    let log = one_slot_ahead(false);
+    assert!(log[0].1[2] > 0, "node 3 asked at 60 s: {log:?}");
+    assert_eq!((log[0].0, log[0].2), (60, 0), "all held at 60 s: {log:?}");
+}
+
+#[test]
+fn a_turn_passes_on_when_a_pass_past_the_hash_comes_to_wait() {
+    // Review R2's probe. Node 1's passes in folder one were driven while
+    // node 3, first in line for h, still counted as able to ask; its pass,
+    // past h after an earlier `CHUNK_NOT_FOUND`, came to wait without asking
+    // for it, and nothing drove the passes again, so node 4, the honest
+    // holder after it, was never asked. Node 3's pass got past h because
+    // folder two's passes ran first in the handler that brought its refusal
+    // and filled its room, and later handlers drove folder two alone.
+    let ids = [1u8, 2].map(|s| folder_key(s, 1).folder_id());
+    let (s1, s2) = if ids[0] > ids[1] { (1u8, 2u8) } else { (2, 1) };
+    let (f1, f2) = (folder_key(s1, 1).folder_id(), folder_key(s2, 1).folder_id());
+    assert!(f2 < f1, "folder two's passes run first");
+    // Three one-chunk files of folder one, by cipher hash: h < j < p.
+    let keys = write_key(s1).chunk_keys();
+    let hash = |c: &Vec<u8>| seal_chunk(&keys, c).unwrap().cipher_hash;
+    let mut contents: Vec<Vec<u8>> = (0u8..12).map(|i| vec![i; 600]).collect();
+    contents.sort_by_key(hash);
+    let (hc, jc, pc) = (
+        contents[0].clone(),
+        contents[1].clone(),
+        contents[2].clone(),
+    );
+    let (h, j, p) = (hash(&hc), hash(&jc), hash(&pc));
+    // The writer, the requester, a holder that never answers it, a peer
+    // that lacks j, and an honest holder.
+    let (writer, asker, silent, partial, honest) = (0, 1, 2, 3, 4);
+    let both = |n: u8| config(n, vec![folder_key(s1, 1), folder_key(s2, 1)]);
+    let mut configs = vec![
+        config(0, vec![folder_key(s1, 1)]),
+        both(1),
+        config(2, vec![folder_key(s1, 1)]),
+        both(3),
+        config(4, vec![folder_key(s1, 1)]),
+    ];
+    configs[silent].max_requests_in_flight = 1;
+    configs[partial].max_requests_in_flight = 2;
+    let mut net = Net::new(configs);
+    let write_in = |net: &mut Net, i: usize, f: FolderId, path: &str, content: &[u8]| {
+        net.with(i, |eng, cx| eng.write_file(cx, f, path, content, 0))
+            .unwrap();
+    };
+    let holds = |net: &Net, i: usize, f: FolderId, c: CipherHash| {
+        let view = net.nodes[i].engine.folder(&f).unwrap();
+        view.stored_chunks.contains(&c)
+    };
+    for i in [silent, partial, honest] {
+        net.connect(writer, i);
+    }
+    net.advance(Duration::from_secs(2));
+    write_in(&mut net, writer, f1, "h.bin", &hc);
+    write_in(&mut net, writer, f1, "p.bin", &pc);
+    net.advance(Duration::from_secs(5));
+    net.disconnect(writer, partial);
+    write_in(&mut net, writer, f1, "j.bin", &jc);
+    net.advance(Duration::from_secs(5));
+    net.disconnect(writer, silent);
+    net.disconnect(writer, honest);
+    assert!(
+        holds(&net, partial, f1, h) && holds(&net, partial, f1, p) && !holds(&net, partial, f1, j)
+    );
+    assert!([h, j, p]
+        .iter()
+        .all(|c| holds(&net, silent, f1, *c) && holds(&net, honest, f1, *c)));
+    // Node 2 never answers node 1; node 3's chunk replies to node 1 wait,
+    // and its chunk requests never arrive.
+    net.gate.rules.extend([
+        (silent, asker, MessageType::ChunkReply, None),
+        (partial, asker, MessageType::ChunkReply, None),
+        (partial, asker, MessageType::ChunkRequest, None),
+    ]);
+    net.connect(asker, silent);
+    let t0 = net.now;
+    assert_eq!(requested(&net, asker, silent), vec![h], "node 2 holds h");
+    net.connect(asker, partial);
+    assert_eq!(
+        requested(&net, asker, partial),
+        vec![j, p],
+        "node 3 holds j and p"
+    );
+    net.connect(asker, honest);
+    assert!(
+        requested(&net, asker, honest).is_empty(),
+        "nothing free for node 4"
+    );
+    // Node 3 writes eight chunks in folder two; its push of the records
+    // waits too.
+    net.gate
+        .rules
+        .push((partial, asker, MessageType::IndexRecords, None));
+    let eight: Vec<u8> = (0..8 * 1024usize).map(|b| (b * 7 % 251) as u8).collect();
+    write_in(&mut net, partial, f2, "q.bin", &eight);
+    // Its `CHUNK_NOT_FOUND` for j and the records, in one message: folder
+    // two's passes run first and fill its room.
+    let refusal_and_records = |f: &Frame| {
+        f.kind() == FrameKind::Known(MessageType::IndexRecords) || chunk_hash(f) == Some(j)
+    };
+    assert!(net.deliver(partial, asker, refusal_and_records) >= 2);
+    net.gate.rules.retain(|r| r.2 != MessageType::IndexRecords);
+    // Its other answers, as they come: each drives one folder's passes.
+    for _ in 0..20 {
+        let is_reply = |f: &Frame| f.kind() == FrameKind::Known(MessageType::ChunkReply);
+        if net.deliver(partial, asker, is_reply) == 0 {
+            break;
+        }
+    }
+    // From here node 3 answers as it is asked.
+    net.gate
+        .rules
+        .retain(|r| (r.0, r.2) != (partial, MessageType::ChunkReply));
+    assert!(!holds(&net, asker, f1, h));
+    let wait = crate::inflight::patience(&Timing::SPEC);
+    let deadline = t0 + 2 * wait.as_nanos() as u64;
+    net.advance(Duration::from_nanos(deadline - net.now));
+    assert!(
+        holds(&net, asker, f1, h),
+        "fetched within two patiences; asked node 4 for {:?}",
+        requested(&net, asker, honest)
+    );
+    assert_eq!(net.nodes[asker].engine.counters().internal_errors, 0);
+}
+
+/// Node 3 writes x.bin, and node 2, which met node 1 first, asks node 1 for
+/// its chunk; node 1, a read holder, never answers for it when `silent`
+/// and answers everything else. Node 0 then writes y.bin and goes before
+/// anyone fetched its chunk, so node 2 asks node 3 for y, which node 3 lacks
+/// too, and node 3's pass waits for a trigger. Returns whether node 2 holds
+/// x.bin `minutes` later, and the requests for x it sent nodes 1 and 3.
+fn behind_a_waiting_pass(minutes: u64, silent: bool) -> (bool, usize, usize) {
+    let (x_content, y_content) = (vec![7u8; 500], vec![8u8; 500]);
+    let x = seal_chunk(&write_key(1).chunk_keys(), &x_content)
+        .unwrap()
+        .cipher_hash;
+    let tier = |n: u8, t: u8| config(n, vec![folder_key(1, t)]);
+    let mut net = Net::new(vec![tier(0, 1), tier(1, 2), tier(2, 1), tier(3, 1)]);
+    if silent {
+        net.gate
+            .rules
+            .push((1, 2, MessageType::ChunkReply, Some(x)));
+    }
+    net.connect(1, 2);
+    net.connect(3, 2);
+    net.advance(Duration::from_secs(2));
+    let x_record = write(&mut net, 3, "x.bin", &x_content).unwrap();
+    assert_eq!(first_chunk(&net, 3, x_record), x);
+    net.advance(Duration::from_secs(10));
+    net.gate.rules.extend([
+        (0, 2, MessageType::ChunkReply, None),
+        (0, 3, MessageType::ChunkReply, None),
+    ]);
+    net.connect(0, 2);
+    net.connect(0, 3);
+    net.advance(Duration::from_secs(2));
+    let y_record = write(&mut net, 0, "y.bin", &y_content).unwrap();
+    net.advance(Duration::from_secs(1));
+    net.disconnect(0, 2);
+    net.disconnect(0, 3);
+    assert!(read(&net, 2, y_record).is_err() && read(&net, 3, y_record).is_err());
+    net.advance(Duration::from_secs(minutes * 60));
+    assert!([1, 3]
+        .map(PeerId::new)
+        .iter()
+        .all(|p| net.nodes[2].cx.connected.contains(p)));
+    let asked = |to| requested(&net, 2, to).iter().filter(|c| **c == x).count();
+    (read(&net, 2, x_record) == Ok(x_content), asked(1), asked(3))
+}
+
+#[test]
+fn a_chunk_comes_from_an_honest_holder_whose_pass_waits_when_nobody_withholds_it() {
+    // The control for the residual below.
+    let (fetched, to_1, to_3) = behind_a_waiting_pass(5, false);
+    assert!(fetched, "asked node 1 {to_1}, node 3 {to_3}");
+}
+
+#[test]
+#[ignore = "residual (TM-22): a holder whose pass waits for a trigger is never asked, so one silent \
+            peer keeps the chunk from it in a quiet folder; a third pass trigger closes it next"]
+fn one_silent_peer_keeps_a_chunk_from_an_honest_holder_whose_pass_waits() {
+    // The security review's probe P1: in an hour node 2 asks node 3 for x
+    // not once, its pass waiting after node 3's `CHUNK_NOT_FOUND` for y.
+    let (fetched, to_1, to_3) = behind_a_waiting_pass(60, true);
+    assert!(fetched, "asked node 1 {to_1}, node 3 {to_3}");
 }
 
 /// The bases on node `i`'s disk at `path`, and the records it holds.

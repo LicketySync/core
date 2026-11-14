@@ -26,8 +26,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use licketysync_index::{Change, Index, Put};
 use licketysync_keys::records::SignedRecord;
 use licketysync_keys::secret::{DeviceSeed, WriteSecret};
-use licketysync_keys::{DeviceId, FolderKey, Suite, WriteKey};
+use licketysync_keys::{CipherHash, DeviceId, FolderKey, Suite, WriteKey};
+use licketysync_protocol::frame::{Frame, FrameDecoder, FrameKind, MessageType};
+use licketysync_protocol::limits::MAX_MESSAGE_SIZE;
+use licketysync_protocol::messages::{ChunkReply, ChunkRequest};
 use licketysync_protocol::record::Kind;
+use licketysync_protocol::Parse;
 
 use crate::config::EngineConfig;
 use crate::engine::Engine;
@@ -367,8 +371,7 @@ impl Hold {
             return false;
         }
         if !self.started {
-            use licketysync_protocol::frame::{FrameDecoder, FrameKind};
-            let mut decoder = FrameDecoder::new(licketysync_protocol::limits::MAX_MESSAGE_SIZE);
+            let mut decoder = FrameDecoder::new(MAX_MESSAGE_SIZE);
             let mut input = bytes;
             while let Ok(Some(frame)) = decoder.next_frame(&mut input) {
                 if frame.kind() == FrameKind::Known(self.from_frame) {
@@ -383,6 +386,56 @@ impl Hold {
     }
 }
 
+/// Frames held back on chosen streams until a test delivers them, one
+/// handler a delivery ([`Net::deliver`]): a peer that answers late, or never.
+#[derive(Debug, Default)]
+pub(crate) struct Gate {
+    /// What is held: the frames of a kind on a stream (from, to), and of a
+    /// chunk request or reply only those for the hash, when one is named.
+    pub(crate) rules: Vec<(usize, usize, MessageType, Option<CipherHash>)>,
+    held: BTreeMap<(usize, usize), Vec<Frame>>,
+}
+
+impl Gate {
+    /// What of `bytes` (from, to) is delivered now: the frames no rule holds.
+    fn pass(&mut self, from: usize, to: usize, bytes: Vec<u8>) -> Vec<u8> {
+        if !self.rules.iter().any(|r| (r.0, r.1) == (from, to)) {
+            return bytes;
+        }
+        let mut decoder = FrameDecoder::new(MAX_MESSAGE_SIZE);
+        let mut input = bytes.as_slice();
+        let mut out = Vec::new();
+        while let Ok(Some(frame)) = decoder.next_frame(&mut input) {
+            let held = self.rules.iter().any(|&(f, t, kind, hash)| {
+                (f, t) == (from, to)
+                    && frame.kind() == FrameKind::Known(kind)
+                    && hash.is_none_or(|h| chunk_hash(&frame) == Some(h))
+            });
+            if held {
+                self.held.entry((from, to)).or_default().push(frame);
+            } else {
+                out.extend(frame.encode());
+            }
+        }
+        assert!(input.is_empty(), "whole frames only");
+        out
+    }
+}
+
+/// The hash a chunk request or reply names.
+pub(crate) fn chunk_hash(frame: &Frame) -> Option<CipherHash> {
+    let hash = match frame.kind() {
+        FrameKind::Known(MessageType::ChunkRequest) => {
+            ChunkRequest::parse(frame.body()).ok()?.cipher_hash
+        }
+        FrameKind::Known(MessageType::ChunkReply) => {
+            ChunkReply::parse(frame.body()).ok()?.cipher_hash
+        }
+        _ => return None,
+    };
+    Some(CipherHash(hash.try_into().ok()?))
+}
+
 /// A few engines, ids `0..n`, every byte delivered at once.
 #[derive(Debug)]
 pub(crate) struct Net {
@@ -392,6 +445,8 @@ pub(crate) struct Net {
     pub(crate) streams: BTreeMap<(usize, usize), Vec<u8>>,
     /// A stream held back, if any.
     pub(crate) hold: Option<Hold>,
+    /// Frames held back by kind.
+    pub(crate) gate: Gate,
 }
 
 impl Net {
@@ -416,7 +471,35 @@ impl Net {
             now: 0,
             streams: BTreeMap::new(),
             hold: None,
+            gate: Gate::default(),
         }
+    }
+
+    /// Delivers the frames the gate holds on (from, to) that `pick` takes,
+    /// in order, in one message (one handler), then settles. Returns how
+    /// many it delivered.
+    pub(crate) fn deliver(
+        &mut self,
+        from: usize,
+        to: usize,
+        pick: impl Fn(&Frame) -> bool,
+    ) -> usize {
+        let held = self.gate.held.remove(&(from, to)).unwrap_or_default();
+        let (take, keep): (Vec<Frame>, Vec<Frame>) = held.into_iter().partition(|f| pick(f));
+        self.gate.held.insert((from, to), keep);
+        let bytes: Vec<u8> = take.iter().flat_map(Frame::encode).collect();
+        assert!(bytes.len() <= crate::runtime::MAX_CHUNK, "one handler");
+        if !bytes.is_empty() {
+            self.streams
+                .entry((from, to))
+                .or_default()
+                .extend_from_slice(&bytes);
+            let n = &mut self.nodes[to];
+            n.engine
+                .on_message(&mut n.cx, PeerId::new(from as u64), &bytes);
+        }
+        self.settle();
+        take.len()
     }
 
     /// Delivers what the hold kept back, in order, and settles.
@@ -472,8 +555,11 @@ impl Net {
         self.settle();
     }
 
-    /// Disconnects `a` and `b`, both hearing `on_disconnected`.
+    /// Disconnects `a` and `b`, both hearing `on_disconnected`; what the
+    /// gate held between them goes with the connection.
     pub(crate) fn disconnect(&mut self, a: usize, b: usize) {
+        self.gate.held.remove(&(a, b));
+        self.gate.held.remove(&(b, a));
         let (pa, pb) = (PeerId::new(a as u64), PeerId::new(b as u64));
         self.nodes[a].cx.connected.remove(&pb);
         self.nodes[b].cx.connected.remove(&pa);
@@ -497,6 +583,10 @@ impl Net {
                         continue;
                     }
                     if self.hold.as_mut().is_some_and(|h| h.takes(i, j, &bytes)) {
+                        continue;
+                    }
+                    let bytes = self.gate.pass(i, j, bytes);
+                    if bytes.is_empty() {
                         continue;
                     }
                     moved = true;
@@ -573,10 +663,8 @@ impl Net {
         from: usize,
         to: usize,
     ) -> Vec<licketysync_protocol::messages::Status> {
-        use licketysync_protocol::frame::{FrameDecoder, FrameKind, MessageType};
-        use licketysync_protocol::Parse;
         let bytes = self.streams.get(&(from, to)).cloned().unwrap_or_default();
-        let mut decoder = FrameDecoder::new(licketysync_protocol::limits::MAX_MESSAGE_SIZE);
+        let mut decoder = FrameDecoder::new(MAX_MESSAGE_SIZE);
         let mut input = bytes.as_slice();
         let mut out = Vec::new();
         while let Ok(Some(frame)) = decoder.next_frame(&mut input) {

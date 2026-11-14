@@ -36,7 +36,8 @@
 //!   disk's bases (`sync::disk`).
 //! - `chunks` and `transfer`: what a folder lacks, per-record chunk judging,
 //!   passes, chunk serving, `chunk_stored`; `inflight`: the chunk requests
-//!   outstanding and their patience; `status`: the Status sent.
+//!   outstanding, their patience and the connections' turns; `status`: the
+//!   Status sent.
 //! - `store`: the storage layout, the index's stored state and change sets;
 //!   `open`: the folders opened at start (Checking, the open issue,
 //!   Misconfigured, the clock rule's Closed); `pause`: the store-failure

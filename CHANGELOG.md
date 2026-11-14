@@ -5,6 +5,62 @@ changed and why.
 
 ## Unreleased
 
+- Engine: two peers can no longer keep a chunk from an honest holder by taking turns (severity
+  Medium). The in-flight table kept one ask time per hash, which every ask reset and a refusal or a
+  disconnect left in place, and whenever a hash was free the first connection in handle order with
+  room took it. So two cooperating key holders of any tier (ruling S-3; device identities cost
+  nothing, threat model §3.2) that sorted before an honest holder could keep a hash from it for as
+  long as they liked: one took the request and never answered, and the other was asked first each
+  time the patience ran out, answered `CHUNK_NOT_FOUND`, which left its ask time as the hash's, and
+  made its pass ready to ask again before the next expiry, by reconnecting or by reporting more
+  chunks stored in its Status. Each entry now keeps one ask time per connection the request is
+  outstanding on, a refusal or a disconnect drops only its own, the hash goes to another connection
+  once every one of them was asked at least the patience ago, and the patience timer is armed for
+  the latest ask still outstanding. That alone, the shape first proposed, still let the two peers
+  hand the hash back and forth, each before its patience ran out, by reconnecting or by refusing
+  and raising its count, since the first connection free to ask still took it each time. So a free
+  hash now also goes round the connections that could ask for it then, in the order the engine made
+  them, from the one after the connection asked last; one made since the round began, a reconnect
+  included, or passed by it waits for the next round. Whose turn each hash is is worked out once per
+  run of a folder's passes, not for each hash a pass looks at. The reviews of the first version
+  found that a connection whose turn it was kept it without asking when it could not ask after all:
+  its one slot taken by another hash, its pass past the hash coming to wait, or room it got in
+  another folder's handler. A peer with one slot that answered within the patience then let the
+  requester fetch one chunk of a withheld batch per patience, an honest peer with one slot left the
+  honest holder idle, and a pass that came to wait kept a hash from the honest holder for good.
+  Within one handler a connection can only stop being able to ask, so the passes now run again over
+  those still able, with the turns worked out again, until none drops out: a connection that can no
+  longer ask is passed over. Each connection gets at most one turn a round, of at most about the
+  patience, and an honest holder that can be asked when its turn comes is asked within one round. An
+  entry whose requests all ended stays until the end of its handler, so that the passes the handler
+  drives keep the round, and the engine drops it then; each entry adds two numbers, and each
+  connection one, so the tables keep their bounds. The threat model states the requirement and its
+  residual (TM-22, cited from §3.3): a holder whose pass waits for a trigger after a
+  `CHUNK_NOT_FOUND` cannot be asked, so one peer that takes the request and never answers keeps the
+  hash from it until a trigger comes, which a quiet folder may never bring. That residual predates
+  this change; a third pass trigger is a phase 1 question (the engine entry's "For phase 1").
+  Freeing the hash to every connection once any ask of it was a patience old was the other shape
+  considered: it ends the turns but has every connection ask for the hash at each expiry, so a peer
+  that withholds can make each honest holder send every chunk. Found and reproduced by a security
+  review of the chunk patience fix; the turns were found while fixing it, and the turns kept without
+  asking by this change's reviews. Regression tests, each timed:
+  `two_peers_never_keep_a_chunk_from_an_honest_holder_by_reconnecting` and
+  `..._by_raising_chunks_stored` (the review's probe: before this change, node 2 asked the refusing
+  peer five times in five minutes and the honest holder never; now at the first expiry);
+  `..._by_taking_turns_reconnecting` and `..._by_taking_turns_refusing` (before, and with
+  per-connection times alone, the honest holder never asked; now at the second turn); the control
+  `a_chunk_one_peer_withholds_is_asked_of_an_honest_holder_once_another_refuses_it` (before, a
+  patience late); and, from the reviews, failing on the first version:
+  `a_one_slot_peer_that_serves_slowly_keeps_no_batch_from_the_honest_holder` (one chunk every 59 s
+  and the honest holder never asked; now all eight by 119 s),
+  `a_one_slot_peer_next_in_line_leaves_the_rest_of_a_batch_to_the_honest_holder` (the honest holder
+  asked for none; now for seven at 60 s) and
+  `a_turn_passes_on_when_a_pass_past_the_hash_comes_to_wait` (two folders: not fetched in an hour;
+  now within two patiences). The residual's probe,
+  `one_silent_peer_keeps_a_chunk_from_an_honest_holder_whose_pass_waits`, is ignored until the third
+  trigger, beside its control. The test kit's `Gate` holds chosen frames on a stream and delivers
+  them in one handler.
+
 - Docs: spell the product's name "LicketySync", one word, as its domains and the slug
   `licketysync` do, throughout core, including the message that refuses a key of a newer suite:
   "this key needs a newer release of LicketySync" (`keys.md` §0.1 and §6.1). The `key_string` test
@@ -3107,6 +3163,12 @@ changed and why.
     - how a rename on the disk between a path and one of its conflict copies is recorded;
     - a directory move: versions at every new path, then a tree delete; none into itself;
     - normalising both paths before `refuse_up_front` compares them.
+    And one from the chunk-withhold fix's security review: a holder whose pass waits for a trigger
+    cannot be asked, so one peer that takes a request and never answers keeps the hash from it in a
+    quiet folder (TM-22's residual); proposed, a third pass trigger (`protocol.md` §4.6 and the
+    protocol crate, one bit per folder per connection), set when a pass skips a lacking hash another
+    connection holds and fired when that hash comes free with the waiting connection first in line,
+    at least 1 s after its latest `CHUNK_NOT_FOUND` and at most once per `STATUS_INTERVAL`.
   - Dependencies: none new; the engine depends on the workspace's keys, protocol and index crates,
     dev-depends on the simulator and `proptest`; the simulator depends on the keys crate;
     `ci/geiger-baseline.txt`'s `engine` and `sim` lines now count the keys crate's dependencies.

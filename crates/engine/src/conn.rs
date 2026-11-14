@@ -37,11 +37,15 @@ pub(crate) struct Conn {
     pub(crate) chunk_requests: VecDeque<(FolderId, CipherHash)>,
     /// The `Event::Closed` outcome was recorded.
     pub(crate) closed_noted: bool,
+    /// Its place in the order this device made its connections, which the
+    /// chunk passes take their turns in (`crate::inflight`).
+    pub(crate) made: u64,
 }
 
 impl Conn {
-    pub(crate) fn new(protocol: Connection) -> Self {
+    pub(crate) fn new(protocol: Connection, made: u64) -> Self {
         Self {
+            made,
             protocol,
             device: None,
             hung_up: false,

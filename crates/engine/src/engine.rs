@@ -457,12 +457,14 @@ impl Engine {
     /// armed that the folders' state needs: the resume probe while a folder
     /// is paused, the deferred commit while phase C left index work, the
     /// free tick while chunks wait to be freed or re-read, and the chunk
-    /// patience. A patience timer that is due is left armed: a handler that
-    /// runs at or after its deadline before it fires (a message, or another
-    /// timer due at that instant) would find its expiry left out of
-    /// `next_expiry`, and moving or cancelling the timer then would skip the
-    /// passes it drives. Once it fires the timer is armed only after `now`,
-    /// so it never fires twice at one instant (TM-22).
+    /// patience, once the entries of chunk requests that all ended in this
+    /// handler are gone (`InFlight::sweep`). A patience timer that is due is
+    /// left armed: a handler that runs at or after its deadline before it
+    /// fires (a message, or another timer due at that instant) would find
+    /// its expiry left out of `next_expiry`, and moving or cancelling the
+    /// timer then would skip the passes it drives. Once it fires the timer is
+    /// armed only after `now`, so it never fires twice at one instant
+    /// (TM-22).
     fn settle_states(&mut self, cx: &mut dyn Context) {
         let now = cx.now();
         let ids: Vec<FolderId> = self.folders.keys().copied().collect();
@@ -494,6 +496,7 @@ impl Engine {
         {
             arm(cx, Purpose::FreeTick, now.saturating_add(FREE_TICK));
         }
+        self.in_flight.sweep();
         let next = self
             .in_flight
             .next_expiry(patience(&self.settings.timing), now);
@@ -563,7 +566,8 @@ impl Engine {
             self.counters.bug();
             return;
         };
-        self.conns.insert(peer, Conn::new(conn));
+        let order = self.in_flight.connected();
+        self.conns.insert(peer, Conn::new(conn, order));
         self.apply(cx, work, peer, out);
         let folders: Vec<FolderId> = self
             .credentials

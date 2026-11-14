@@ -242,7 +242,9 @@ which records a cleanup named together, at a deletion or a cleanup; and when eac
 from which peer, which usually shows which device wrote it. Besides: device IDs and names of the
 peers it connects to, and folder IDs (no Hello carries a clock).
 It can ask any peer for any chunk by its ciphertext hash; tell that two chunks are identical
-(convergent encryption, section 5); withhold data, go offline, or serve slowly; store far more than
+(convergent encryption, section 5); withhold data, go offline, or serve slowly (delaying a chunk
+another peer holds by about the chunk patience per connection ahead of the honest holder, while
+it can be asked; one peer keeps it from a holder whose pass waits, TM-22); store far more than
 asked; **keep stale copies and replay them**: a sealed peer cannot tell an old version from a
 concurrent one, so it keeps every version no signed record or cleanup names, and a hostile holder of
 the sealed key (or the read key) that kept the folder's history can replay every genuine old version
@@ -1114,10 +1116,28 @@ one monotonic time per folder per connection; a reconcile pass sends at most
 `MAX_PASS_REQUESTS` requests, whatever the responder answers; chunk requests are bounded by
 `max_requests_in_flight`, a queued request holds only its hash and the chunk is read from storage
 only as it is sent, a requester keeps one `CHUNK_BUSY` backoff timer per connection and no state per
-hash after `CHUNK_NOT_FOUND`; a key holder of any tier, under any number of device identities, can
-still make a device queue up to `MAX_SEND_QUEUE` (128 MiB) of chunk replies per connection by
-reading them slowly, for as long as it keeps the connection alive (a reader that trickles is never
-closed by `IDLE_TIMEOUT`), so what bounds the total is the phase 1 connection limit; and a write
+hash after `CHUNK_NOT_FOUND`; a hash outstanding on one connection goes to another only once every
+connection holding it was asked at least the chunk patience ago (two `STATUS_INTERVAL`s, 60 s) or a
+chunk for it arrived, one ask time kept per connection and dropped by its refusal or disconnect, and
+then round the connections that could ask for it now (room in flight, no backoff, a pass not waiting
+for a trigger) in the order the device made them, from the one after the connection asked last, one
+made since the round began or passed by it waiting for the next round, two numbers per hash; so key
+holders of any tier, under any number of device identities, that take requests and never answer, or
+refuse, reconnect or report more chunks stored to be asked again, even by turns, have at most one
+turn each a round, of at most about the patience: N connections ahead of an honest holder delay a
+hash it holds about N times the patience, bounded by the connection limits, while the honest holder
+can be asked; a connection that can no longer ask when its turn comes (its room filled, backing off,
+or its pass past the hash or waiting) is passed over, the passes running again in the same handler
+until none drops out, and a hash freed in a handler where no connection can ask for it starts its
+round again with the first that does. Residual: an honest holder whose pass waits for a trigger,
+after a `CHUNK_NOT_FOUND` for another hash it lacks, cannot be asked, so one peer that takes the
+request and never answers keeps the hash from it until the folder brings a trigger (a Status with
+more chunks stored, or a completed round, `protocol.md` §4.6), which a quiet folder may never do; a
+third pass trigger, which fires when a hash the pass skipped comes free, is to close it, a phase 1
+item. A key holder of any tier, under any number of device identities, can still make a device queue
+up to `MAX_SEND_QUEUE` (128 MiB) of chunk replies per connection by reading them slowly, for as
+long as it keeps the connection alive (a reader that trickles is never closed by `IDLE_TIMEOUT`), so
+what bounds the total is the phase 1 connection limit; and a write
 holder can make every peer store as many concurrent versions, tombstones and tree deletes as it
 signs (section 3.6), and keep every deletion held past its year, without bound, by holding
 forgetting back (section 3.6; a peer that is a write holder's only link, or a network attacker that
@@ -1141,7 +1161,7 @@ which could make a sealed peer drop a live version only it holds; the sealed pee
 its Status, `protocol.md` §4.4, "Stale copies at a sealed peer, and their bound"); this costs
 storage, time and bandwidth, not per-connection memory, and lengthens every later open of the folder
 on every peer by one signature verification per record held, the same cost class. Enforced by `net`,
-`protocol` and `index`; the flood test is in `sim`.
+`protocol`, `index` and `engine`; the flood test is in `sim`.
 
 **TM-23. No `unwrap`, `expect`, `panic` or unchecked index on untrusted input.**
 `clippy::unwrap_used`, `expect_used` and `panic` are denied workspace-wide, `indexing_slicing` warns
