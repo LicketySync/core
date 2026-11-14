@@ -478,10 +478,10 @@ jobs:
   # its own; and the tests of ci/rustc-wrapper.sh, which picks sccache for
   # gate.sh and ci/mutants.sh when it is installed (here it is not). gate.sh
   # runs the same.
-  # timeout-minutes: the steps take about 10 seconds together, and
-  # ci/test-download.sh ends a hung download test after 60 seconds, so 10
-  # minutes is ample and a hung step cannot hold the runner for the default 6
-  # hours; ci/test-download.sh checks it.
+  # timeout-minutes: the steps take about 30 seconds together (measured on
+  # the development machine), and ci/test-download.sh ends a hung download
+  # test after 60 seconds, so 10 minutes is ample and a hung step cannot hold
+  # the runner for the default 6 hours; ci/test-download.sh checks it.
   ci-scripts:
     name: tests of the CI scripts and .gitattributes; the toolchain check
     runs-on: ubuntu-latest

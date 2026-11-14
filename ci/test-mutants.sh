@@ -17,8 +17,18 @@
 # --no-config or --config says otherwise). Each case's repository root gets a
 # copy of this repository's .cargo/mutants.toml, as the real one has it. The
 # expected exit code and the expected lines of output are the assertions.
-# Needs python3 (3.11 or later, for tomllib) and prlimit (util-linux). Run by
-# gate.sh, ci.yml and mutants.yml. Exit 1 if any case fails.
+#
+# Each case starts ci/mutants.sh as a CI step does, whatever this suite
+# inherited: no signal ignored or blocked, no descriptor open but stdin,
+# stdout and stderr (as_ci, below). When it ends, any process it started that
+# is still running is killed and fails the case; the EXIT trap kills those of
+# the case running when the suite stops. Last, the suite runs itself: once
+# with SIGINT ignored, SIGTERM blocked and under two locks, to check that it
+# still passes, leaves no process running and frees both locks; and three
+# times stopped by a signal while a case blocks.
+# Needs python3 (3.11 or later, for tomllib), prlimit and flock (util-linux),
+# and Linux's /proc. Run by gate.sh, ci.yml and mutants.yml. Exit 1 if any
+# case fails.
 set -euo pipefail
 # The stand-in cargo reads TOML with Python's tomllib, new in 3.11.
 if ! python3 -I -c 'import tomllib' 2> /dev/null; then
@@ -26,11 +36,54 @@ if ! python3 -I -c 'import tomllib' 2> /dev/null; then
     "python3 --version says: $(python3 --version 2>&1 || true)" >&2
   exit 1
 fi
+self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 script="$(cd "$(dirname "$0")" && pwd)/mutants.sh"
 # The configuration ci/mutants.sh's cargo-mutants reads, which each case gets.
 config="$(cd "$(dirname "$0")/.." && pwd)/.cargo/mutants.toml"
+
+# survivors <NAME=value>: kill every process of this user whose environment
+# holds that variable, and print each once, as "  <pid> <command line>". Each
+# case's processes carry a variable of their own (case_ below), which they keep
+# whatever process group they move to: timeout(1) moves to one of its own, so
+# the outer timeout's signal to its group never reaches the inner timeout of
+# ci/mutants.sh or the stand-ins. Each pass stops (SIGSTOP) every process it
+# finds, so that none forks again, then kills them (SIGKILL); neither signal
+# can be caught, blocked or ignored. A child forked before its parent stopped
+# is found by the next pass. Passes repeat until one finds none, at most 50;
+# past that, a last line says so.
+survivors() {
+  local file pid pass
+  local -a found
+  local -A seen=()
+  for ((pass = 1; pass <= 50; pass++)); do
+    found=()
+    while IFS= read -r file; do
+      pid=${file#/proc/}
+      found+=("${pid%/environ}")
+    done < <(grep -lxzF -- "$1" /proc/[0-9]*/environ 2> /dev/null || true)
+    [ "${#found[@]}" -gt 0 ] || return 0
+    kill -STOP "${found[@]}" 2> /dev/null || true
+    for pid in "${found[@]}"; do
+      [ -n "${seen[$pid]:-}" ] || echo "  $pid $(tr '\0' ' ' 2> /dev/null < "/proc/$pid/cmdline")"
+      seen[$pid]=1
+    done
+    kill -KILL "${found[@]}" 2> /dev/null || true
+  done
+  echo "  (still finding processes after 50 passes)"
+}
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+# The variable (NAME=value) that marks the processes running now, a case's or
+# those of a test below, which the cleanup kills.
+running=
+cleanup() {
+  [ -z "$running" ] || survivors "$running" > /dev/null
+  running=
+  rm -rf "$tmp"
+}
+# Stopped by SIGHUP, SIGINT or SIGTERM, bash (5.2 and 5.3, measured) runs this
+# EXIT trap too, then ends by that signal, so that its caller sees why; a
+# signal ignored on entry stays ignored. The stop tests below check it.
+trap cleanup EXIT
 mkdir "$tmp/bin"
 # The runner variables come only from ci/mutants.sh, and so does the rustc
 # wrapper (ci/rustc-wrapper.sh, which it sources): each case runs with
@@ -143,10 +196,20 @@ if [ -n "${FAKE_BASELINE:-}" ]; then
     'BEGIN { t = b * m; if (t > int(t)) t = int(t) + 1; if (t < f) t = f; print "INFO Auto-set test timeout to " t "s" }'
 fi
 if [ -n "${FAKE_HANG:-}" ]; then
-  # Block until a signal comes; record SIGINT and stop as cargo-mutants does.
-  trap 'echo INT > signal; kill "$pid" 2> /dev/null; exit 130' INT
+  # What it inherited: the signals ignored and blocked, and the descriptors
+  # open, read by grep and ls (bash's own status would show its own traps);
+  # 3 is ls's own, open on /proc/self/fd.
+  grep -E '^Sig(Blk|Ign):' /proc/self/status > inherited
+  ls /proc/self/fd >> inherited
+  # Block until a signal comes; record SIGINT and stop as cargo-mutants does,
+  # its child ended first (its status recorded). bash cannot trap a signal
+  # that was ignored when it started, while cargo-mutants handles SIGINT
+  # whatever it inherited, so as_ci starts each case with no signal ignored.
+  trap 'echo INT > signal; kill "$pid" 2> /dev/null; wait "$pid"; echo "$?" > child; exit 130' INT
   tail -f /dev/null &
   pid=$!
+  # Say where it blocks, on the fifo FAKE_READY names (the stop tests below).
+  [ -z "${FAKE_READY:-}" ] || echo "$PWD" > "$FAKE_READY"
   wait "$pid"
   exit 1
 fi
@@ -262,28 +325,68 @@ chmod +x "$tmp/bin/cargo" "$tmp/bin/rustc" "$tmp/bin/hog"
 PATH="$tmp/bin:$PATH"
 tmo=/usr/bin/timeout # as ci/mutants.sh finds it
 [ -x "$tmo" ] || tmo=timeout
+# python3 -I -c "$as_ci" <command>: run the command as a CI step starts one,
+# with no signal ignored or blocked and no descriptor open but stdin, stdout
+# and stderr, whatever this suite inherited (Python's own ignored SIGPIPE and
+# SIGXFSZ included). A caller that ignores SIGINT (a background job of a
+# script does, and passes it on) would leave the budget's SIGINT to a stand-in
+# that cannot trap it; a descriptor inherited from a plain flock holds its lock
+# while any process of the case is alive.
+as_ci='
+import os, signal, sys
+for s in signal.valid_signals() - {signal.SIGKILL, signal.SIGSTOP}:
+    if signal.getsignal(s) == signal.SIG_IGN:
+        signal.signal(s, signal.SIG_DFL)
+signal.pthread_sigmask(signal.SIG_SETMASK, ())
+os.closerange(3, os.sysconf("SC_OPEN_MAX"))
+os.execvp(sys.argv[1], sys.argv[1:])
+'
+# python3 -I -c "$caller" <command>: run the command as the caller of
+# 2026-11-14 below: SIGINT ignored (a background job of a script ignores it)
+# and SIGTERM blocked, Python's own ignored SIGPIPE and SIGXFSZ back to their
+# defaults. The check of as_ci and the run of this suite by itself use it.
+caller='
+import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+for s in signal.SIGPIPE, signal.SIGXFSZ:
+    signal.signal(s, signal.SIG_DFL)
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+os.execvp(sys.argv[1], sys.argv[1:])
+'
 n=0
 fails=0
 # case_ <name> <expected exit> <shard> <budget> <expected output lines, one
 # per line> [VAR=value ... for the stand-ins]. An outer timeout(1) stops a case
 # whose budget is not enforced. The case's repository root gets a copy of
-# this repository's .cargo/mutants.toml, when there is one.
+# this repository's .cargo/mutants.toml, when there is one. Its processes
+# carry LICKETYSYNC_TEST_MUTANTS_CASE=<its directory>; those still running
+# when it ends are killed and fail it. It runs in the background so that a
+# signal to the suite interrupts the wait at once, and the cleanup ends it.
 case_() {
   n=$((n + 1))
-  local name=$1 want=$2 shard=$3 budget=$4 lines=$5 dir="$tmp/$n" rc=0 line
+  local name=$1 want=$2 shard=$3 budget=$4 lines=$5 dir="$tmp/$n" rc=0 line left
   shift 5
   mkdir "$dir"
   if [ -f "$config" ]; then
     mkdir "$dir/.cargo"
     cp "$config" "$dir/.cargo/mutants.toml"
   fi
-  (cd "$dir" && env GITHUB_STEP_SUMMARY="$dir/summary" LICKETYSYNC_SCCACHE=0 "$@" \
-    "$tmo" 60 "$script" "$shard" "$budget" "$dir") > "$dir/out" 2>&1 || rc=$?
+  running="LICKETYSYNC_TEST_MUTANTS_CASE=$dir"
+  (cd "$dir" && exec env GITHUB_STEP_SUMMARY="$dir/summary" LICKETYSYNC_SCCACHE=0 "$@" \
+    LICKETYSYNC_TEST_MUTANTS_CASE="$dir" python3 -I -c "$as_ci" \
+    "$tmo" 60 "$script" "$shard" "$budget" "$dir") > "$dir/out" 2>&1 &
+  wait "$!" || rc=$?
+  left=$(survivors "$running")
+  running=
   local ok=1
   [ "$rc" = "$want" ] || ok=0
   while IFS= read -r line; do
     [ -z "$line" ] || grep -qxF -- "$line" "$dir/out" || { ok=0; echo "  missing line: $line"; }
   done <<< "$lines"
+  if [ -n "$left" ]; then
+    ok=0
+    printf '  still running after ci/mutants.sh ended (now killed):\n%s\n' "$left"
+  fi
   if [ "$ok" = 1 ]; then
     echo "ok   $name"
   else
@@ -292,6 +395,14 @@ case_() {
     fails=$((fails + 1))
   fi
 }
+# LICKETYSYNC_TEST_MUTANTS_STOP=<fifo>: run one case only, whose stand-in
+# blocks (its budget 30 m, the outer timeout 60 s) after naming its directory
+# on the fifo; the stop tests below then stop this suite by a signal.
+if [ -n "${LICKETYSYNC_TEST_MUTANTS_STOP:-}" ]; then
+  case_ "a case that blocks until the suite is stopped" 1 2/16 30m "" \
+    FAKE_HANG=1 FAKE_READY="$LICKETYSYNC_TEST_MUTANTS_STOP"
+  exit 1
+fi
 m1='crates/keys/src/chunk.rs:42:12: replace < with <= in padme'
 m2='crates/keys/src/phrase.rs:104:18: replace > with >= in Phrase::parse'
 t1='crates/keys/src/records/groups.rs:198:36: replace + with - in WalkLevels::add'
@@ -574,6 +685,26 @@ else
   echo "FAIL the budget did not stop cargo-mutants with SIGINT"
   fails=$((fails + 1))
 fi
+# The stand-in ends its child and waits for it before it stops, as
+# cargo-mutants does; one that did not would leave its child running.
+if [ "$(cat "$tmp/8/child" 2> /dev/null)" = 143 ]; then
+  echo "ok   the stand-in cargo-mutants ends its child (SIGTERM, status 143) before it stops"
+else
+  echo "FAIL the stand-in cargo-mutants did not wait for its child: $(cat "$tmp/8/child" 2> /dev/null)"
+  fails=$((fails + 1))
+fi
+# Each case starts as a CI step does (as_ci), whatever this suite inherited:
+# no signal ignored or blocked, and no descriptor open but 0 to 2 (3 is ls's).
+# The run of the suite with SIGINT ignored, SIGTERM blocked and a lock's
+# descriptor inherited (below) checks this under all three.
+inherited=$'SigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\n0\n1\n2\n3'
+if [ "$(cat "$tmp/8/inherited" 2> /dev/null)" = "$inherited" ]; then
+  echo "ok   the stand-in cargo-mutants inherits no signal ignored or blocked, and no descriptor but 0 to 2"
+else
+  echo "FAIL the stand-in cargo-mutants inherited signals ignored or blocked (masks in hex) or descriptors:"
+  sed 's/^/  | /' "$tmp/8/inherited" 2> /dev/null || true
+  fails=$((fails + 1))
+fi
 for c in 9 10 11; do
   if [ -e "$tmp/$c/args" ]; then
     echo "FAIL case $c ran cargo-mutants despite a bad argument"
@@ -590,6 +721,137 @@ else
   echo "FAIL the rustc wrapper cargo-mutants got, with sccache and then with LICKETYSYNC_SCCACHE=0:"
   cat "$tmp/$sccache_case/wrapper" "$tmp/$((sccache_case + 1))/wrapper" | sed 's/^/  | /'
   fails=$((fails + 1))
+fi
+
+# as_ci itself, under the caller with descriptor 7 open as well: what grep
+# and ls see without it (SIGINT ignored, SIGTERM blocked, 7 open) and through
+# it (nothing; 3 is ls's own). uutils' timeout clears the blocked signals of
+# its child, GNU's does not, so the stand-in's check above sees a mask that
+# as_ci left only where timeout(1) is GNU's, as in CI.
+sees() { # sees <launcher...>: the masks and descriptors a command sees through it
+  (exec 7< /dev/null && python3 -I -c "$caller" "$@" grep -E '^Sig(Blk|Ign):' /proc/self/status)
+  (exec 7< /dev/null && python3 -I -c "$caller" "$@" ls /proc/self/fd)
+}
+bare=$(sees env)
+clean=$(sees python3 -I -c "$as_ci")
+blocked=$(sed -n 's/^SigBlk:\t//p' <<< "$bare")
+ignored=$(sed -n 's/^SigIgn:\t//p' <<< "$bare")
+if ! (((0x${blocked:-0} & 0x4000) && (0x${ignored:-0} & 0x2))) || ! grep -qx 7 <<< "$bare"; then
+  echo "FAIL the caller did not ignore SIGINT, block SIGTERM and pass descriptor 7 on:"
+  sed 's/^/  | /' <<< "$bare"
+  fails=$((fails + 1))
+elif [ "$clean" != "$inherited" ]; then
+  echo "FAIL as_ci left signals ignored or blocked (masks in hex) or descriptors:"
+  sed 's/^/  | /' <<< "$clean"
+  fails=$((fails + 1))
+else
+  echo "ok   as_ci starts its command with no signal ignored or blocked and no descriptor but 0 to 2," \
+    "under a caller that ignores SIGINT, blocks SIGTERM and passes a descriptor on"
+fi
+
+# survivors ends a marked tree that keeps forking: a bash that starts up to
+# 1000 children as fast as it can, each blocked reading a fifo that no one
+# writes, and has started the first when survivors begins. One scan misses the
+# children started while it reads /proc; the passes, each stopping what it
+# finds before it kills, leave none.
+mark="LICKETYSYNC_TEST_MUTANTS_FORKS=$tmp"
+mkfifo "$tmp/forking" "$tmp/blocked"
+exec {forking}<> "$tmp/forking"
+running=$mark
+env "$mark" bash -c 'for ((i = 0; i < 1000; i++)); do
+    cat <> "$2" &
+    [ "$i" != 0 ] || echo started > "$1"
+  done
+  wait' _ "$tmp/forking" "$tmp/blocked" > /dev/null 2>&1 &
+# Not a job of this shell, which would report its SIGKILL.
+disown "$!"
+started=
+read -r -t 30 -u "$forking" started || true
+exec {forking}<&-
+survivors "$mark" > /dev/null
+left=$(grep -lxzF -- "$mark" /proc/[0-9]*/environ 2> /dev/null || true)
+survivors "$mark" > /dev/null
+running=
+if [ "$started" != started ]; then
+  echo "FAIL the tree that keeps forking did not start within 30 s"
+  fails=$((fails + 1))
+elif [ -n "$left" ]; then
+  echo "FAIL the kill of a case's processes left $(grep -c . <<< "$left") of a tree that keeps forking"
+  fails=$((fails + 1))
+else
+  echo "ok   the kill of a case's processes ends a tree that keeps forking"
+fi
+
+if [ -n "${LICKETYSYNC_TEST_MUTANTS_NESTED:-}" ]; then
+  echo "skipped: the runs of this suite by itself (LICKETYSYNC_TEST_MUTANTS_NESTED is set: this is one)"
+else
+  # The stand-ins left running on 2026-11-14: a run of this suite whose caller
+  # ignored SIGINT left, in each case that waits for the budget's SIGINT,
+  # timeout(1), the stand-in cargo-mutants and its child blocked for good, and
+  # their inherited descriptor of the cargo lock kept it held for about 15
+  # minutes. So the suite runs itself again as gate.sh runs it (a
+  # non-interactive bash under `flock -o` on a lock), with SIGINT ignored and
+  # SIGTERM blocked, inside a plain flock on a second lock whose descriptor its
+  # processes inherit, as the cargo lock's was. It must pass, leave no process
+  # running (its processes all carry LICKETYSYNC_TEST_MUTANTS_NESTED) and leave
+  # both locks free. It runs in the background, so that the cleanup ends it
+  # when this suite is stopped.
+  running="LICKETYSYNC_TEST_MUTANTS_NESTED=$tmp"
+  env "$running" python3 -I -c "$caller" \
+    flock "$tmp/inherited.lock" flock -o "$tmp/gate.lock" "$self" > "$tmp/nested" 2>&1 &
+  nested=0
+  wait "$!" || nested=$?
+  held=
+  for lock in gate inherited; do
+    flock -n "$tmp/$lock.lock" true || held="$held $lock.lock"
+  done
+  left=$(survivors "$running")
+  running=
+  bug="the stand-ins left running on 2026-11-14"
+  if [ "$nested" = 0 ] && [ -z "$held" ] && [ -z "$left" ]; then
+    echo "ok   run with SIGINT ignored, SIGTERM blocked and under two locks, the suite passes, leaves no" \
+      "process running and frees both locks ($bug)"
+  else
+    echo "FAIL the suite run with SIGINT ignored, SIGTERM blocked and under two locks ($bug):" \
+      "exit $nested${held:+; still held:$held}"
+    [ -z "$left" ] || printf '  still running after it ended (now killed):\n%s\n' "$left"
+    sed 's/^/  | /' "$tmp/nested"
+    fails=$((fails + 1))
+  fi
+
+  # Stopped by SIGHUP, SIGINT or SIGTERM while a case blocks, the suite kills
+  # that case's processes, removes its directory and ends by the signal (its
+  # status 128 + the signal's number). Each run (in the stop mode above)
+  # starts as a CI step does, so that no signal is ignored.
+  for sig in HUP INT TERM; do
+    mkfifo "$tmp/ready-$sig"
+    exec {ready}<> "$tmp/ready-$sig"
+    running="LICKETYSYNC_TEST_MUTANTS_NESTED=$tmp/stop-$sig"
+    env "$running" LICKETYSYNC_TEST_MUTANTS_STOP="$tmp/ready-$sig" python3 -I -c "$as_ci" "$self" \
+      > "$tmp/stop-$sig" 2>&1 &
+    pid=$!
+    dir=
+    read -r -t 30 -u "$ready" dir || true
+    exec {ready}<&-
+    kill "-$sig" "$pid" 2> /dev/null || true
+    rc=0
+    # (bash reports on stderr a job that a signal ended)
+    wait "$pid" 2> /dev/null || rc=$?
+    left=$(survivors "$running")
+    running=
+    want=$((128 + $(kill -l "$sig")))
+    if [ -n "$dir" ] && [ "$rc" = "$want" ] && [ -z "$left" ] && [ ! -e "$dir" ]; then
+      echo "ok   stopped by SIG$sig while a case blocks, the suite ends that case's processes, removes its" \
+        "files and ends by SIG$sig"
+    else
+      echo "FAIL stopped by SIG$sig while a case blocks (${dir:-none blocked within 30 s}): exit $rc," \
+        "expected $want"
+      [ -z "$left" ] || printf '  still running after it ended (now killed):\n%s\n' "$left"
+      [ -z "$dir" ] || [ ! -e "$dir" ] || echo "  its case's directory is still there"
+      sed 's/^/  | /' "$tmp/stop-$sig"
+      fails=$((fails + 1))
+    fi
+  done
 fi
 
 if [ "$fails" -gt 0 ]; then

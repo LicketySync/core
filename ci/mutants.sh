@@ -63,8 +63,10 @@ cd "${3:-$(dirname "$0")/..}"
 # timeout(1) by its path where it is there: a `timeout` earlier on PATH can be
 # another program (the dev machine has one without options). It sends SIGINT,
 # which cargo-mutants handles by stopping its build or test and writing what it
-# has. No --kill-after: uutils' timeout (the dev machine's /usr/bin/timeout)
-# sends the SIGKILL at once with it; the job's timeout-minutes is the backstop.
+# has, even when its caller ignored SIGINT (ctrlc's set_handler, which it
+# calls, replaces an ignored disposition). No --kill-after: uutils' timeout
+# (the dev machine's /usr/bin/timeout) sends the SIGKILL at once with it; the
+# job's timeout-minutes is the backstop.
 tmo=/usr/bin/timeout
 [ -x "$tmo" ] || tmo=timeout
 

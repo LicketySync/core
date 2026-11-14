@@ -186,6 +186,47 @@ changed and why.
   - Not changed: one target directory per worktree (one shared between trees let cargo take another
     tree's test binaries as fresh), and cargo-mutants' copy mode.
 
+- CI: `ci/test-mutants.sh` leaves no process running, whatever its caller passes on. On 2026-11-14 a
+  run whose caller ignored SIGINT (a background job of a script does, and passes it on) left six
+  running for good: in each of the two cases that wait for the budget's SIGINT, `timeout`, the
+  stand-in cargo-mutants and its `tail`. A bash that starts with SIGINT ignored cannot trap it, so
+  the stand-in never stopped; the case's outer `timeout` then stopped `ci/mutants.sh` alone, since
+  `timeout` moves to a process group of its own; and the six held the descriptor of the cargo lock
+  that the run's plain `flock` had passed down, so every other cargo command waited about 15
+  minutes, until they were killed by hand. Both cases also failed, after 60 s each.
+  - Each case starts `ci/mutants.sh` as a CI step does: no signal ignored or blocked, and no
+    descriptor open but stdin, stdout and stderr. A few lines of Python do it; bash cannot reset an
+    ignored signal.
+  - Each case's processes carry a variable of their own. Any still running when the case ends are
+    killed and fail it, and the EXIT trap kills those of the case or test running when the suite
+    stops; bash 5.2 and 5.3 run that trap on SIGHUP, SIGINT and SIGTERM as well, then end by the
+    signal. Each kill scans `/proc` again until a pass finds none (at most 50 passes), and stops
+    (SIGSTOP) every process a pass finds before it kills them (SIGKILL), so that none forks out of
+    reach between the scan and the kill. The stand-in ends its child and waits for it before it
+    exits.
+  - Regression test, "the stand-ins left running on 2026-11-14": the suite runs itself again in the
+    background, with SIGINT ignored and SIGTERM blocked, under `flock -o` on one lock inside a
+    plain `flock` on another, and must pass, leave no process running and free both locks. Added
+    to the old suite, it fails: the nested run fails both cases and the SIGINT check, leaves the
+    six processes (the test kills them) and holds the plain lock.
+  - Tests of each piece, each failing without it: the stand-in records the signals it inherited
+    ignored and blocked and its open descriptors, read by grep and ls (without the descriptors
+    closed, it sees the plain lock's); the launcher alone, under a caller that ignores SIGINT,
+    blocks SIGTERM and passes a descriptor on (without the mask cleared, SIGTERM stays blocked:
+    uutils' `timeout` clears its child's mask and GNU's does not, so only this check sees it on
+    the development machine); the stand-in records its child's status (without its wait, none);
+    three runs of the suite, stopped by SIGHUP, SIGINT or SIGTERM while a case blocks, must end by
+    that signal, with no process left and their files removed (without the kill in the EXIT trap,
+    each leaves five); and a tree that keeps forking, up to 1000 children, must be gone after one
+    kill (with a single pass and no SIGSTOP, hundreds are left). The suite takes about 6 to 10 s
+    more on the development machine, and `ci.yml` says the ci-scripts job's steps take about 30 s.
+  - `ci/mutants.sh` changes only in a comment: cargo-mutants 27.1.0 handles SIGINT whatever it
+    inherited (ctrlc's `set_handler` replaces an ignored SIGINT), so the budget always stops it.
+    Started with SIGINT ignored on a toy crate whose test sleeps 120 s, it stopped at a 30 s
+    budget's SIGINT within the second ("interrupted", in the unmutated tree's tests) and left no
+    process. `--kill-after` stays out: uutils' `timeout` 0.10.0, the development machine's, still
+    sends its SIGKILL along with the first signal. `CONTRIBUTING.md` adds flock to what the suite
+    needs.
 - Engine: a chunk request whose patience runs out is offered to the other connections even when
   another handler runs first at that instant (severity Medium). A handler other than the patience
   timer's that ran at or after the deadline before the timer fired (a peer's frame, such as the
