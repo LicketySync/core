@@ -40,7 +40,7 @@
 # The expected exit code or file is the assertion.
 #
 # The server and the downloads of the third group start as a CI step does,
-# whatever this suite inherited (as_ci, below): no signal ignored or blocked
+# whatever this suite inherited (ci/as_ci.py): no signal ignored or blocked
 # and no descriptor open but stdin, stdout and stderr, so that none can hold a
 # caller's lock; and each gets SIGTERM when the suite ends, however it ends,
 # SIGKILL included. They carry a variable of their own: the group fails if any
@@ -60,10 +60,11 @@ download="$here/download.sh"
 check="$here/check-downloads.sh"
 # survivors <NAME=value>: kill every process of this user whose environment
 # holds that variable, and print each once, as "  <pid> <command line>"; as
-# ci/test-mutants.sh's. Each pass stops (SIGSTOP) every process it finds, so
-# that none forks again, then kills them (SIGKILL); a child forked before its
-# parent stopped is found by the next pass. Passes repeat until one finds
-# none, at most 50; past that, a last line says so.
+# ci/test-mutants.sh's. Each pass prints what it finds, then stops (SIGSTOP)
+# every process it found, so that none forks again, and at once kills them
+# (SIGKILL); a child forked before its parent stopped is found by the next
+# pass. Passes repeat until one finds none, at most 50; past that, a last
+# line says so.
 survivors() {
   local file pid pass
   local -a found
@@ -75,11 +76,11 @@ survivors() {
       found+=("${pid%/environ}")
     done < <(grep -lxzF -- "$1" /proc/[0-9]*/environ 2> /dev/null || true)
     [ "${#found[@]}" -gt 0 ] || return 0
-    kill -STOP "${found[@]}" 2> /dev/null || true
     for pid in "${found[@]}"; do
       [ -n "${seen[$pid]:-}" ] || echo "  $pid $(tr '\0' ' ' 2> /dev/null < "/proc/$pid/cmdline")"
       seen[$pid]=1
     done
+    kill -STOP "${found[@]}" 2> /dev/null || true
     kill -KILL "${found[@]}" 2> /dev/null || true
   done
   echo "  (still finding processes after 50 passes)"
@@ -189,43 +190,15 @@ fi
 mkdir "$tmp/home" "$tmp/f"
 awk 'BEGIN { for (i = 1; i <= 400; i++) print "the pretend tarball, line " i }' > "$tmp/body"
 port=''
-# python3 -I -c "$as_ci" <this suite's PID> <command...>: run the command as a
-# CI step starts one, as ci/test-mutants.sh's as_ci does: no signal ignored or
-# blocked and no descriptor open but stdin, stdout and stderr, whatever this
-# suite inherited (Python's own ignored SIGPIPE and SIGXFSZ included), so that
-# it holds no lock the suite's caller took. And the kernel sends the command
-# SIGTERM when its parent, which must be this suite, ends, however it ends
-# (Linux's parent-death signal, which exec keeps): the server ends at it, and
-# timeout(1), GNU's and uutils' alike, passes it on to the process group of
-# its command, download.sh and curl. The parent is checked once the signal is
-# set, so that a suite that ended first is seen too. When it does not run the
-# command, its status is 125 (the signal not set, or the suite not its parent),
-# 126 (the command could not be run) or 127 (not found), as timeout(1)'s.
-as_ci='
-import ctypes, os, signal, sys
-for s in signal.valid_signals() - {signal.SIGKILL, signal.SIGSTOP}:
-    if signal.getsignal(s) == signal.SIG_IGN:
-        signal.signal(s, signal.SIG_DFL)
-signal.pthread_sigmask(signal.SIG_SETMASK, ())
-os.closerange(3, os.sysconf("SC_OPEN_MAX"))
-if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM, 0, 0, 0) != 0:  # PR_SET_PDEATHSIG
-    sys.stderr.write("as_ci: PR_SET_PDEATHSIG: %s\n" % os.strerror(ctypes.get_errno()))
-    sys.exit(125)
-if os.getppid() != int(sys.argv[1]):
-    sys.stderr.write("as_ci: its parent is not the suite, PID %s\n" % sys.argv[1])
-    sys.exit(125)
-try:
-    os.execvp(sys.argv[2], sys.argv[2:])
-except FileNotFoundError as e:
-    sys.stderr.write("as_ci: %s\n" % e)
-    sys.exit(127)
-except OSError as e:
-    sys.stderr.write("as_ci: %s\n" % e)
-    sys.exit(126)
-'
+# ci/as_ci.py starts the server and each download as a CI step starts a
+# command (no signal ignored or blocked, no descriptor but 0 to 2), and has the
+# kernel send it SIGTERM when this suite ends, however it ends: the server ends
+# at it, and timeout(1) passes it on to download.sh and curl. It refuses
+# (status 125) a command whose parent is not this suite.
+as_ci="$here/as_ci.py"
 serve() { # serve <plan>: starts the server (a coprocess, through as_ci and with the mark) and sets port
   : > "$tmp/requests"
-  coproc SERVER { exec env "$mark" python3 -I -c "$as_ci" "$$" \
+  coproc SERVER { exec env "$mark" python3 -I "$as_ci" "$$" \
     python3 -I "$tmp/server.py" "$tmp/cert.pem" "$tmp/key.pem" "$tmp/body" "$1" "$tmp/requests"; }
   if ! read -r -u "${SERVER[0]}" port; then
     echo "FAIL: the test server did not start"
@@ -262,7 +235,7 @@ fetch_seconds=60
 job() {
   local path=$1
   shift
-  "${clean_env[@]}" "$mark" python3 -I -c "$as_ci" "$$" "$tmo" "$fetch_seconds" "$@" > "$tmp/f/$path.out" 2>&1 &
+  "${clean_env[@]}" "$mark" python3 -I "$as_ci" "$$" "$tmo" "$fetch_seconds" "$@" > "$tmp/f/$path.out" 2>&1 &
   pids+=("$!")
   paths+=("$path")
 }
@@ -672,7 +645,7 @@ sees() { # sees <launcher...>: what a command sees through it, printed
 }
 # (in files, not $(...): as_ci's parent must be this suite, not a subshell)
 sees env > "$tmp/bare" || true
-sees python3 -I -c "$as_ci" "$$" > "$tmp/clean" 2>&1 || true
+sees python3 -I "$as_ci" "$$" > "$tmp/clean" 2>&1 || true
 blocked=$(sed -n 's/^SigBlk:\t//p' "$tmp/bare")
 ignored=$(sed -n 's/^SigIgn:\t//p' "$tmp/bare")
 caller_as_meant() { (((0x${blocked:-0} & 0x4000) && (0x${ignored:-0} & 0x2))) && grep -qx 7 "$tmp/bare"; }
@@ -686,7 +659,7 @@ check_ "as_ci starts its command with no signal ignored or blocked, no descripto
 # A subshell is not this suite: as_ci refuses, and runs nothing.
 (
   rc=0
-  python3 -I -c "$as_ci" "$$" touch "$tmp/ran" 2> "$tmp/refused" || rc=$?
+  python3 -I "$as_ci" "$$" touch "$tmp/ran" 2> "$tmp/refused" || rc=$?
   echo "$rc" > "$tmp/refused.rc"
 )
 refused() { [ "$(cat "$tmp/refused.rc")" = 125 ] && [ ! -e "$tmp/ran" ] && grep -q 'its parent is not the suite' "$tmp/refused"; }
@@ -702,6 +675,64 @@ reaper_refused() {
     grep -q "its parent is not the suite" "$tmp/reaper-refused"
 }
 check_ "ci/reaper.py refuses a command whose parent is not the suite (status 125), and runs nothing" reaper_refused
+# Under a caller that ignores SIGHUP, SIGINT, SIGQUIT, SIGALRM and SIGTERM and
+# blocks SIGTERM, ci/reaper.py starts its command with every signal the caller
+# ignored still ignored but four, back at their defaults: Python's own SIGPIPE
+# and SIGXFSZ, and SIGALRM and SIGTERM, which the reaper handles itself; and no
+# signal blocked (masks in hex). What the caller ignores is read through it
+# alone (Python's SIGPIPE and SIGXFSZ included).
+ignoring='
+import os, signal, sys
+for s in signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGALRM, signal.SIGTERM:
+    signal.signal(s, signal.SIG_IGN)
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+os.execvp(sys.argv[1], sys.argv[1:])
+'
+python3 -I -c "$ignoring" grep -E '^SigIgn:' /proc/self/status > "$tmp/ignoring" 2>&1 || true
+python3 -I -c "$ignoring" python3 -I "$reaper" "$$" 30 grep -E '^Sig(Blk|Ign):' /proc/self/status \
+  > "$tmp/reaped-signals" 2>&1 || true
+caller_ignores=$(sed -n 's/^SigIgn:\t//p' "$tmp/ignoring")
+# SIGHUP, SIGINT and SIGQUIT are bits 0 to 2 (0x7), SIGALRM bit 13 (0x2000)
+# and SIGTERM bit 14 (0x4000).
+ignoring_as_meant() { (((0x${caller_ignores:-0} & 0x6007) == 0x6007)); }
+check_ "the caller of the next check ignores SIGHUP, SIGINT, SIGQUIT, SIGALRM and SIGTERM" ignoring_as_meant
+reaper_signals() { # the four it resets: SIGPIPE 0x1000, SIGALRM 0x2000, SIGTERM 0x4000, SIGXFSZ 0x1000000
+  local want
+  want=$(printf '%016x' $((0x${caller_ignores:-0} & ~0x1007000)))
+  [ "$(cat "$tmp/reaped-signals")" = "$(printf 'SigBlk:\t%016x\nSigIgn:\t%s' 0 "$want")" ] ||
+    { echo "  expected SigIgn $want:" && sed 's/^/  | /' "$tmp/reaped-signals" && false; }
+}
+check_ "ci/reaper.py passes on its caller's ignored signals but SIGPIPE, SIGXFSZ, SIGALRM and SIGTERM; blocks none" \
+  reaper_signals
+# At its time limit (SIGALRM, sent here rather than waited for) ci/reaper.py
+# stops and kills every process of its run, as at SIGTERM, and ends with
+# status 142: here a bash and the child it forked, which never end by
+# themselves. It first writes a line for each to its standard error.
+nested="LICKETYSYNC_TEST_DOWNLOAD_ALARM=$tmp"
+mkfifo "$tmp/alarm-ready" "$tmp/alarm-blocked"
+exec {ready}<> "$tmp/alarm-ready"
+env "$nested" python3 -I "$reaper" "$$" 300 bash -c 'cat <> "$1" & echo started > "$2"; wait' _ \
+  "$tmp/alarm-blocked" "$tmp/alarm-ready" > "$tmp/alarm-out" 2>&1 &
+pid=$!
+started=''
+read -r -t 30 -u "$ready" started || true
+exec {ready}<&-
+kill -ALRM "$pid" 2> /dev/null || true
+rc=0
+wait "$pid" 2> /dev/null || rc=$?
+left=$(survivors "$nested")
+nested=
+alarm_ends_the_run() {
+  [ "$started" = started ] && [ "$rc" = 142 ] &&
+    { [ -z "$left" ] || { printf '  still running after it ended (now killed):\n%s\n' "$left" && false; }; }
+}
+check_ "at its time limit ci/reaper.py kills every process of its run, and ends with status 142" alarm_ends_the_run
+alarm_names_them() { # a line for the bash, and one for its child
+  [ "$(grep -c '^reaper: still running 300 s after it started, now killed: [0-9]* .' "$tmp/alarm-out")" = 2 ] &&
+    grep -q '^reaper: still running 300 s after it started, now killed: [0-9]* bash -c ' "$tmp/alarm-out" ||
+    { sed 's/^/  | /' "$tmp/alarm-out" && false; }
+}
+check_ "at its time limit ci/reaper.py names each process it kills, by PID and command line" alarm_names_them
 
 before=$fails
 serve "err504=504,200 err404=404,200 cut=cut,200 hangup=empty,200 late=503/100000 part=cut"
@@ -957,7 +988,7 @@ mkfifo "$tmp/ready-INT" "$tmp/release-INT"
 exec {ready}<> "$tmp/ready-INT" {release}<> "$tmp/release-INT"
 nested="LICKETYSYNC_TEST_DOWNLOAD_STOPPED=$tmp/INT"
 env "$nested" LICKETYSYNC_TEST_DOWNLOAD_STOP="$tmp/ready-INT" LICKETYSYNC_TEST_DOWNLOAD_RELEASE="$tmp/release-INT" \
-  TMPDIR="$tmp/t" python3 -I -c "$as_ci" "$$" "$self" > "$tmp/INT/out" 2>&1 &
+  TMPDIR="$tmp/t" python3 -I "$as_ci" "$$" "$self" > "$tmp/INT/out" 2>&1 &
 pid=$!
 suite='' dir=''
 read -r -t 30 -u "$ready" suite dir || true

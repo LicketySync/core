@@ -278,10 +278,9 @@ changed and why.
     So does the suite on SIGINT, through an INT trap that restores bash's own handling and sends
     the signal again: untrapped, a SIGINT that comes while a foreground command runs is held until
     the command ends, then dropped as the command's own. Each kill scans `/proc` again until a pass
-    finds none (at most 50 passes), and stops
-    (SIGSTOP) every process a pass finds before it kills them (SIGKILL), so that none forks out of
-    reach between the scan and the kill. The stand-in ends its child and waits for it before it
-    exits.
+    finds none (at most 50 passes), and stops (SIGSTOP) every process a pass finds before it kills
+    them (SIGKILL), so that none forks out of reach between the scan and the kill. The stand-in
+    ends its child and waits for it before it exits.
   - Regression test, "the stand-ins left running on 2026-11-14": the suite runs itself again in the
     background, with SIGINT ignored and SIGTERM blocked, under `flock -o` on one lock inside a
     plain `flock` on another, and with its TMPDIR inside the suite's own directory, so that the
@@ -369,6 +368,25 @@ changed and why.
     do); and the group fails if its server is still running at its end. The suite takes about
     1.5 s more on the development machine (3.6 s against 2.1, the quickest of six runs each).
     `CONTRIBUTING.md` adds flock to what it needs.
+- CI: the suites' runs of themselves, and `ci/test-mutants.sh`'s tree that keeps forking, leave less
+  behind. `ci/reaper.py` also kills every process of its run at its time limit (status 142), where
+  before SIGALRM ended it alone and left the run; it first writes a line for each, its PID and
+  command line, to its standard error, so that a failing test still shows what was left. It passes
+  on the signals its caller ignored (a gate run under `nohup` ignores SIGHUP) and resets only four:
+  Python's own SIGPIPE and SIGXFSZ, and SIGTERM and SIGALRM, which it handles itself. Starting a
+  command with none ignored is `ci/as_ci.py`'s job. Its docstring says that a SIGKILL of the reaper
+  itself leaves the run to the suite's cleanup. `ci/test-mutants.sh`'s launcher of its cases and
+  stop runs now has the parent-death signal and the parent check that `ci/test-download.sh`'s had: a
+  SIGKILL of the suite left a stop run going for up to its case's minute. The two suites share it as
+  `ci/as_ci.py`. The tree that keeps forking starts through the reaper too: its children do not get
+  the launcher's signal, so a SIGKILL of the suite left them blocked for good. Both suites' kill by
+  variable now prints what it finds before it stops and kills, so that nothing runs between the two
+  kills. Tests, each failing without its change: sent SIGALRM, the reaper must leave nothing of its
+  run (before, a bash and its child stayed) and name both; under a caller that ignores SIGHUP,
+  SIGINT, SIGQUIT, SIGALRM and SIGTERM, its command must see the first three ignored and SIGPIPE,
+  SIGXFSZ, SIGALRM and SIGTERM not; and `ci/test-mutants.sh`, killed (SIGKILL) while a stop run's
+  case blocks or while the tree forks, must leave nothing (before, the stop run, or the tree's
+  children, were still there 30 s later).
 - Engine: a chunk request whose patience runs out is offered to the other connections even when
   another handler runs first at that instant (severity Medium). A handler other than the patience
   timer's that ran at or after the deadline before the timer fired (a peer's frame, such as the
