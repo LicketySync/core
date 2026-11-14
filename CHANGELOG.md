@@ -216,13 +216,19 @@ changed and why.
     `CARGO_BUILD_INCREMENTAL=1` with or without sccache); without flock; when the directories are
     not the user's alone, a chmod to 700 included, or the socket path is too long for a socket; or
     when the server cannot be reached, started or checked. sccache keys a Rust compilation on its
-    arguments other than `--out-dir`, `-L` and `--extern`, on its sources and the crates it links,
-    on every `CARGO_*` variable and on the working directory, so two trees, or two target
-    directories that `CARGO_TARGET_DIR` sets, share only the C and assembly that build scripts
-    compile through the wrapper too (cc-rs); Rust hits come within one tree and target directory.
-    Measured with an empty cache: a cold test build took 290 s filling the cache and 259 s in a
-    second target directory, against 266 s without; the second hit every C and assembly compilation
-    (415) and no Rust one (0 of 213). The coverage loop with its target emptied took all 65 of its
+    arguments but `--out-dir`, `-L`, `--extern`, `--check-cfg` and `--diagnostic-width`, on its
+    sources and the crates it links, on every `CARGO_*` variable but `CARGO_MAKEFLAGS`,
+    `CARGO_REGISTRIES_*`, `CARGO_BUILD_JOBS` and `CARGO_ENCODED_RUSTFLAGS`, on each variable the
+    crate reads as it compiles and on the working directory. So worktrees, each with its own target
+    directory, share the registry and git dependencies (a second worktree took 864 of its 969 Rust
+    compilations from the cache), but not the four crates that read `OUT_DIR` or those that link
+    them, build scripts' probes of the compiler, or the workspace's own crates; `CARGO_TARGET_DIR`,
+    when set, is in every key (a `--target-dir` is not), so cargo-geiger's builds, for which
+    `ci/geiger.sh` exports it, share only within one tree; the C and assembly that build scripts
+    compile through the wrapper too (cc-rs) are shared either way. Measured with an empty cache: a
+    cold test build took 290 s filling the cache and 259 s in a second target directory set by
+    `CARGO_TARGET_DIR`, against 266 s without; the second hit every C and assembly compilation (415)
+    and no Rust one (0 of 213). The coverage loop with its target emptied took all 65 of its
     cacheable compilations from the cache; a cold gate's cargo-geiger scan took 242 s instead of 314
     (221 hits), and in a warm gate about 184 s instead of 324 to 359. A cold gate in a new worktree
     took 951 s with sccache (1638 s on main, without these changes). With sccache, cargo-geiger
@@ -241,6 +247,19 @@ changed and why.
     sccache`) without touching any other sccache server or the user's own `SCCACHE_DIR`.
   - Not changed: one target directory per worktree (one shared between trees let cargo take another
     tree's test binaries as fresh), and cargo-mutants' copy mode.
+- Docs: `ci/rustc-wrapper.sh`'s header and the Gate entry above said compiled Rust is shared only
+  within one tree and target directory; they now say what worktrees share and what they do not.
+  `CONTRIBUTING.md` states sccache 0.19.0's one known limit: it hashes a compile-time variable that
+  is unset the same as one set to the empty string, so a crate that reads it with `option_env!` can
+  be given the other case's output. Nothing LicketySync builds depends on that today (of its
+  dependencies' `option_env!` reads, only `wasm-bindgen-shared`'s `WBG_VERSION` would differ, and
+  nothing sets it to the empty string), and CI builds without sccache. To rebuild past it: stop the
+  server, clear the cache and `cargo clean` each workspace that built the crate (or `cargo clean -p`
+  with that build's `--manifest-path`, `--target-dir`, `--target` and `--profile`), since cargo does
+  not rebuild a crate when only the cache or the wrapper changes; and while such a variable is
+  empty, run the gate with `LICKETYSYNC_SCCACHE=0`, since clearing the cache alone only changes
+  which case is given the other's output. Each step was checked on a private server and cache.
+  Comments and docs only.
 
 - CI: `ci/test-mutants.sh` leaves no process running, whatever its caller passes on. On 2026-11-14 a
   run whose caller ignored SIGINT (a background job of a script does, and passes it on) left six

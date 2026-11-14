@@ -1,15 +1,25 @@
 # shellcheck shell=bash
 # Sourced by gate.sh and ci/mutants.sh, never run: sccache as cargo's rustc
 # wrapper when it is installed, on one server of its own that only this user can
-# reach. sccache 0.19.0 keys a Rust compilation on its arguments other than
-# paths (--out-dir, -L and --extern are left out), the contents of its sources
-# and of the crates it links, every CARGO_* variable, and the working directory.
-# Two trees, or two target directories set by CARGO_TARGET_DIR, so share only
-# what does not hash those: the C and assembly that build scripts compile
-# through the wrapper too (cc-rs), such as aws-lc-sys's; Rust only within one
-# tree and target directory (cargo-geiger's rebuilds, a coverage target
-# emptied). It caches no incremental compilation (the workspace's own crates in
-# dev and test builds), binary or proc-macro.
+# reach. sccache 0.19.0 keys a Rust compilation on its arguments but --out-dir,
+# -L, --extern, --check-cfg and --diagnostic-width; the contents of its sources
+# and of the crates it links; every CARGO_* variable but CARGO_MAKEFLAGS,
+# CARGO_REGISTRIES_*, CARGO_BUILD_JOBS and CARGO_ENCODED_RUSTFLAGS; each
+# variable the crate reads as it compiles (env!, option_env!); and the working
+# directory. So worktrees, each with its own target directory, share the
+# registry and git dependencies, which compile in cargo's one copy of their
+# sources (a second worktree took 864 of its 969 Rust compilations from the
+# cache), but not the crates that read OUT_DIR, a path in the target directory
+# (today serde_core, serde, thiserror 2 and oid-registry), or those that link
+# them; build scripts' probes of the compiler; or the workspace's own crates,
+# which compile in the worktree (and in dev and test builds incrementally, which
+# sccache does not cache). CARGO_TARGET_DIR, when set, is in every key (a
+# --target-dir is not), so cargo-geiger's builds, for which ci/geiger.sh exports
+# it, share only within one tree. The C and assembly that build scripts compile
+# through the wrapper too (cc-rs), such as aws-lc-sys's, are shared across
+# worktrees and target directories alike. It caches no binary or proc-macro.
+# CONTRIBUTING.md gives sccache 0.19.0's one known limit (an unset compile-time
+# variable hashes the same as an empty one) and how to rebuild past it.
 #
 # Kept as they are, with no sccache exported: a wrapper already chosen by
 # RUSTC_WRAPPER or CARGO_BUILD_RUSTC_WRAPPER (set empty, none), or one a cargo

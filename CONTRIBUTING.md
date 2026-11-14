@@ -166,6 +166,21 @@ pgrep -a sccache
 
 `LICKETYSYNC_SCCACHE=0` turns it off. CI uses none.
 
+What worktrees share through this cache is in `ci/rustc-wrapper.sh`'s header.
+One known limit: sccache 0.19.0 hashes a variable a crate reads as it compiles
+the same whether it is unset or set to the empty string, so a crate that reads
+one with `option_env!` can be given the other case's output. Nothing LicketySync
+builds depends on that today, and CI builds without sccache. To rebuild past it:
+stop the server and clear the cache as above, then run a plain `cargo clean` in
+each workspace that built the crate (in this one it also empties
+`target/llvm-cov-target` and `target/geiger`; `browser-tests/webtransport` is a
+workspace of its own), or `cargo clean -p <crate>` with that build's
+`--manifest-path`, `--target-dir`, `--target` and `--profile`, since cargo does
+not rebuild a crate when only the cache or the wrapper changes. While such a
+variable is set to the empty string, run `gate.sh` and `ci/mutants.sh` with
+`LICKETYSYNC_SCCACHE=0`, so that the cache holds only the unset case: clearing
+the cache alone only changes which case is given the other's output.
+
 When `cargo vet --locked` fails after a dependency change: run `cargo vet` (it
 refreshes `supply-chain/imports.lock` from the Mozilla and Google audits), then
 `cargo vet suggest`, and either `cargo vet certify` after actually reading the
