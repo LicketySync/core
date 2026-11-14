@@ -80,13 +80,13 @@
     },
     {
       "error": "Key(UnimplementedSuite(2))",
-      "message": "this key needs a newer release of Lickety-Sync",
+      "message": "this key needs a newer release of LicketySync",
       "name": "suite 2, not implemented",
       "string": "lsw1qqppqygjzv2p29shrqv35xcur50p7gppyg3jgffxyu5zj23t9skjutc5k50nr"
     },
     {
       "error": "Key(UnimplementedSuite(2))",
-      "message": "this key needs a newer release of Lickety-Sync",
+      "message": "this key needs a newer release of LicketySync",
       "name": "suite 2, not implemented, with a length other than suite 1's",
       "string": "lsw1qqpv4nu5ym7tam7dy8uspqje0j9837udyrvsehtwgrmrxsjgk2dpykqqnh8zp3s3yk2sqmm6ccvxdca7hm8sfahm3g4g34r93rrvarep2cpf0mfn"
     },

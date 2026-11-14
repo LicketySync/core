@@ -53,7 +53,7 @@ pub fn peer_id(identity: &Libp2pIdentity) -> Result<PeerId, DecodingError> {
 #[non_exhaustive]
 pub enum PeerKeyError {
     /// The peer ID is not an inline Ed25519 key: a hashed (long) key, or
-    /// another key type. A Lickety-Sync device's identity is always Ed25519.
+    /// another key type. A LicketySync device's identity is always Ed25519.
     NotEd25519,
     /// The Ed25519 key is not the canonical encoding of a point, or the point
     /// is of small order (`keys.md` 0.3).

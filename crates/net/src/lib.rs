@@ -7,7 +7,7 @@
 //! limits, and the one byte stream of `/licketysync/sync/1`.
 //!
 //! Status: phase 0's transport spike (spike A of the phase 0 spikes). The
-//! plan ("Lickety-Sync: Project Plan") is the specification; `spec/suites.md`
+//! plan ("LicketySync: Project Plan") is the specification; `spec/suites.md`
 //! section 2.6 fixes the transport suite and section 3.1 the crates, and
 //! `spec/threat-model.md` the rules this crate enforces (TM-1, TM-2, TM-6,
 //! TM-22, TM-23, TM-31, TM-32). What is here:

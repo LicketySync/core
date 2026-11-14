@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Key material for Lickety-Sync's shared folder keys: each folder has three
+//! Key material for LicketySync's shared folder keys: each folder has three
 //! shared secret keys, as in Resilio Sync, and holding a key is the access.
 //!
 //! - [`folder`]: the 32-byte write secret and everything it derives (the

@@ -1,4 +1,4 @@
-# Lickety-Sync cryptographic suites
+# LicketySync cryptographic suites
 
 Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model), amended
 2026-11-10 for the security protocol of a relay's circuit (transport, "Circuits", and the approved
@@ -400,14 +400,14 @@ unless every crate that depends on rustls disables default features; the change 
   gate's packet capture confirms the group in the ClientHello. Cipher suites: `libp2p-tls`'s list is
   `TLS13_CHACHA20_POLY1305_SHA256`, `TLS13_AES_256_GCM_SHA384` and `TLS13_AES_128_GCM_SHA256`, in that
   order of preference, and suite 1 accepts that list as it ships **(decision, deviation from the
-  plan's "256-bit symmetric everywhere")**: two Lickety-Sync peers share the list, so the suite chosen
+  plan's "256-bit symmetric everywhere")**: two LicketySync peers share the list, so the suite chosen
   between them is the first one, and AES-128 is negotiated only with a foreign libp2p peer that offers
   nothing else; transport session keys are ephemeral and the record layer is 256-bit throughout, so
   dropping the 128-bit suite would buy little, and removing it means `net` building its own crypto
   provider, which is deferred until some other need forces it. Certificates follow the libp2p TLS
   specification: each side's certificate is self-signed by its own freshly generated P-256 key and
   carries the libp2p extension, in which the libp2p identity key signs the certificate's public key.
-  The certificate key is not a Lickety-Sync key: `rcgen` generates it on `ring` for each of the TLS
+  The certificate key is not a LicketySync key: `rcgen` generates it on `ring` for each of the TLS
   configurations a node builds, two per transport: four on QUIC and TCP, and from phase 2 two more
   for circuits ("Circuits", below), six in all; it is neither derived from the seed nor
   stored, and it reaches rustls as PKCS#8 bytes that `ring` writes and `aws-lc-rs` reads (and signs

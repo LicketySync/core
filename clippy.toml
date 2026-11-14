@@ -1,3 +1,5 @@
 # Keep functions reviewable by a fresh-context reviewer.
 too-many-lines-threshold = 120
 cognitive-complexity-threshold = 20
+# The product's name is a word in prose, not code; ".." keeps clippy's own list.
+doc-valid-idents = ["LicketySync", ".."]

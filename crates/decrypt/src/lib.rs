@@ -4,7 +4,7 @@
 
 //! Offline tool: turn a sealed copy and a key into plain files, and verify a sealed copy.
 //!
-//! Status: skeleton. The plan ("Lickety-Sync: Project Plan") is the specification
+//! Status: skeleton. The plan ("LicketySync: Project Plan") is the specification
 //! this crate implements; `spec/` in this repository carries the protocol and the
 //! threat model as they are written down.
 

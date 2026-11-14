@@ -26,12 +26,27 @@ fn vector_chunks() {
     let key = folder(0x10);
     let v = *key.verifier();
     let f = v.folder_id();
-    // The keys crate's chunk vector: the bytes "chunk" sealed under the folder.
+    // The keys crate's chunk vector (keys.md 9 item 6): its 300 raw bytes,
+    // byte i being 7i mod 256, sealed under the same fixed folder. Its stored
+    // bytes and hashes equal the keys crate's committed ones.
     let keys = key.chunk_keys();
-    let raw = b"lickety-sync chunk vector";
-    let sealed = seal_chunk(&keys, raw).unwrap();
+    let raw: Vec<u8> = (0..300u32)
+        .map(|i| u8::try_from(i * 7 % 256).unwrap())
+        .collect();
+    let sealed = seal_chunk(&keys, &raw).unwrap();
     let plain = sealed.plain_hash;
-    assert!(bool::from(plain.ct_eq(&keys.plain_hash(raw))));
+    assert!(bool::from(plain.ct_eq(&keys.plain_hash(&raw))));
+    let keys_vector: Value =
+        serde_json::from_str(include_str!("../../../keys/tests/vectors/chunk.json")).unwrap();
+    for (field, ours) in [
+        ("folder_id", &f.0[..]),
+        ("raw", &raw[..]),
+        ("plain_hash", &plain.0[..]),
+        ("stored", &sealed.stored[..]),
+        ("cipher_hash", &sealed.cipher_hash.0[..]),
+    ] {
+        assert_eq!(keys_vector[field], h(ours), "keys.md 9 item 6: {field}");
+    }
     let req = ChunkRequest {
         folder_id: f.0.to_vec(),
         cipher_hash: sealed.cipher_hash.0.to_vec(),
@@ -112,7 +127,7 @@ fn vector_chunks() {
         "a writer fault of the second record only"
     );
     let opened = licketysync_keys::chunk::open_chunk(&keys, &sealed.stored, &plain).unwrap();
-    assert_eq!(opened.as_slice(), raw);
+    assert_eq!(opened.as_slice(), &raw[..]);
 
     // Served end to end, and the statuses.
     let mut p = Pair::open();
@@ -208,7 +223,7 @@ fn vector_chunks() {
     assert!(s3.a.saw(|e| matches!(e, Event::ChunkRequested { .. })));
 
     let value: Value = json!({
-        "description": "protocol.md 8 item 9: a chunk of the fixed folder (raw bytes 'lickety-sync chunk vector'), its request and the three replies, a record whose stored_len fits it and one whose does not (a writer fault of that record only), the chunk served end to end, the replies that close, CHUNK_BUSY at exactly half of MAX_SEND_QUEUE and a queued request a byte below, and a request from a peer reporting the sealed tier, served. The backoff sequence (1, 2, 4 ... 64 s, back to 1 s) and the passes are the connection tests chunks::*.",
+        "description": "protocol.md 8 item 9: the keys.md 9 item 6 chunk of the fixed folder (300 raw bytes, byte i being 7i mod 256), its request and the three replies, a record whose stored_len fits it and one whose does not (a writer fault of that record only), the chunk served end to end, the replies that close, CHUNK_BUSY at exactly half of MAX_SEND_QUEUE and a queued request a byte below, and a request from a peer reporting the sealed tier, served. The backoff sequence (1, 2, 4 ... 64 s, back to 1 s) and the passes are the connection tests chunks::*.",
         "stored": h(&sealed.stored),
         "cipher_hash": h(&sealed.cipher_hash.0),
         "plain_hash": h(&plain.0),

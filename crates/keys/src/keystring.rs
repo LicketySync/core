@@ -59,7 +59,7 @@ fn hrp_of(tier: Tier) -> &'static Hrp {
 
 /// Why a Bech32m string was refused (`keys.md` 6.1). All are malformed but
 /// [`KeyError::UnimplementedSuite`] inside [`KeyStringError::Key`], which says
-/// the key needs a newer release of Lickety-Sync.
+/// the key needs a newer release of LicketySync.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyStringError {
     /// Longer than any key string.
@@ -519,7 +519,7 @@ mod tests {
             assert_eq!(e, KeyStringError::Key(KeyError::UnimplementedSuite(2)));
             assert_eq!(
                 e.to_string(),
-                "this key needs a newer release of Lickety-Sync"
+                "this key needs a newer release of LicketySync"
             );
         }
         // A verification key of small order.

@@ -1,4 +1,4 @@
-# Lickety-Sync sync protocol, major version 1
+# LicketySync sync protocol, major version 1
 
 Status: draft for phase 0, rewritten 2026-10-22 for the shared-key model (`keys.md`) and the
 coordinator's rulings R-K1 to R-K6 and S-1 to S-4 of that day, its index (4.4, 4.5) rewritten
@@ -3851,10 +3851,9 @@ interval in section 5's constants is a vector.
 
 ## 9. The index in plain words
 
-This section is for the owner, who does not read Rust; it explains 4.4 and 4.5 with examples, and
-relays and hole punching (`threat-model.md` TM-25), and decides nothing. Counters are shown as small
-numbers; real ones are clock readings in microseconds, or just above the greatest counter the device
-has seen.
+This section explains 4.4 and 4.5 with examples, and relays and hole punching (`threat-model.md`
+TM-25), and decides nothing. Counters are shown as small numbers; real ones are clock readings in
+microseconds, or just above the greatest counter the device has seen.
 
 **What a device keeps.** For each file, only its latest version, as one signed record. Each record
 has a **fingerprint**, a 32-byte hash of the whole record that identifies it; in this section the
@@ -4083,7 +4082,7 @@ keeps one entry; or let each machine write its own log file, which also avoids t
 that two machines appending at once make, at the cost of one live file per machine, 175 200 over
 five years, which the person or a cleanup job must delete.
 
-**A version this device cannot read.** A newer release of Lickety-Sync may write a kind of entry
+**A version this device cannot read.** A newer release of LicketySync may write a kind of entry
 this release does not know, and a device with the write key may write a broken one. When such a
 version replaces every version of a file this device has (the file shown, any identical copies of it
 and any conflict copies), this device can neither show it nor tell whether it is newer, but it knows
@@ -4260,12 +4259,12 @@ The recommended settings never make a device a relay for others, a server in the
 for strangers.
 
 What they show (`threat-model.md` §5, "What the recommended set shows"): anyone on the same network
-sees that the device runs Lickety-Sync, its port, how many folders it announces and how far its
+sees that the device runs LicketySync, its port, how many folders it announces and how far its
 clock is off, by which its announcements can often be told apart from another device's; someone who
 already knows a folder's ID can confirm that it is announced there, someone the device has
 connected to before can recognise it, and someone who replays an announcement can see which
 devices hold that folder without knowing which folder it is; while the port is open, anyone on the
-internet can reach it and learn that it runs Lickety-Sync, which device it is and roughly how many
+internet can reach it and learn that it runs LicketySync, which device it is and roughly how many
 folders it holds, and every router it asks for a port, a café's included, sees the request; anyone
 who knows a folder's ID can see which addresses announce it in the DHT, and the DHT computers a
 device asks see its address and what it looks up; a public relay sees which two devices it carries,

@@ -1,4 +1,4 @@
-# Hosts the Lickety-Sync binaries may contact: one bare hostname or IPv4 address
+# Hosts the LicketySync binaries may contact: one bare hostname or IPv4 address
 # per line, lowercase, nothing else on the line.
 # ci/no-hostnames.sh (run by gate.sh and CI) fails when a hostname inside a string
 # literal under crates/ is not listed here. Add a host only in the change that adds

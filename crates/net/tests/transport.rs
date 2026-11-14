@@ -412,7 +412,7 @@ fn libp2p_tls_configurations_negotiate_x25519mlkem768() {
         assert_eq!(
             side.negotiated_cipher_suite().map(|s| s.suite()),
             Some(CipherSuite::TLS13_CHACHA20_POLY1305_SHA256),
-            "two Lickety-Sync peers take the first suite of libp2p-tls's list (suites.md 2.6)"
+            "two LicketySync peers take the first suite of libp2p-tls's list (suites.md 2.6)"
         );
     }
     // Each side offers X25519MLKEM768 first.

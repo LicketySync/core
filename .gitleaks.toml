@@ -9,7 +9,7 @@
 # "key" or "secret" precedes them. Each allowlist below drops a finding only
 # when all three hold: the rule is generic-api-key, the file is a JSON file
 # directly under a crate's tests/vectors/, and the matched value has that
-# allowlist's one form and nothing else: lowercase hex, or a Lickety-Sync read
+# allowlist's one form and nothing else: lowercase hex, or a LicketySync read
 # key string (`lsr1`, then only lowercase Bech32 characters; link.json names
 # one). A token, private key or cloud key with a rule of its own is still
 # reported in those files, as is any generic secret there of another form
@@ -18,7 +18,7 @@
 # string allowlist takes another tier only when a vector needs it.
 #
 # Still missed: a real secret of one of those two forms inside a vectors file;
-# and anything no default rule knows. No rule knows Lickety-Sync's key strings,
+# and anything no default rule knows. No rule knows LicketySync's key strings,
 # link codes, links or the write key's 24 words by their form: generic-api-key
 # reports one only where one of its keywords (key, secret, token, auth and a
 # few more), a few more name characters and an operator such as `=`, `:` or
@@ -37,7 +37,7 @@
 # rule and line, so it skips that one finding in that one commit and nothing
 # in any other commit or in the working tree; adding a line to it is a
 # reviewed change like this file.
-title = "Lickety-Sync"
+title = "LicketySync"
 
 [extend]
 useDefault = true

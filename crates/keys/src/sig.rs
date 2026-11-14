@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Ed25519 over labelled messages (`keys.md` 0.2, `suites.md` 2.2): every
-//! signature in Lickety-Sync is pure Ed25519 (RFC 8032, no prehash, no
+//! signature in LicketySync is pure Ed25519 (RFC 8032, no prehash, no
 //! context) over `M = label || 0x00 || body`, verified with `verify_strict`,
 //! which rejects small-order and non-canonical components. Signing is
 //! deterministic, so the same key and body always give the same signature and

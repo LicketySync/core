@@ -278,7 +278,7 @@ fn vector_key_string() {
     {
         assert_eq!(
             newer["message"],
-            "this key needs a newer release of Lickety-Sync"
+            "this key needs a newer release of LicketySync"
         );
     }
     check(

@@ -1,4 +1,4 @@
-# Lickety-Sync threat model
+# LicketySync threat model
 
 Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model), revised the same day
 for the coordinator's rulings R-K6 and S-1 to S-4 and the owner's second set of answers, and on
@@ -28,7 +28,7 @@ fragment (TM-18), what a browser invite is (TM-37), and what LAN beacons, DHT lo
 (sections 3.1, 3.9 and 5). This file is normative for
 every crate in this workspace, for the apps in `app/` and for the browser client in `web/`. Its
 companions are `suites.md` (algorithms and approved crates), `keys.md` (folder keys, derivations,
-records, key strings) and `protocol.md` (wire protocol). The plan, "Lickety-Sync: Project Plan", is
+records, key strings) and `protocol.md` (wire protocol). The plan, "LicketySync: Project Plan", is
 the source these files are written from; where this file is silent the plan decides, and where they
 disagree the disagreement is raised, never quietly resolved.
 
@@ -127,7 +127,7 @@ Someone who sees packets on the LAN, at an internet exchange, at a proxy on a lo
 or by crawling the DHT. They have no key.
 
 Can: see which addresses talk, when, and how much, and the sizes and number of encrypted frames,
-which approximate padded chunk sizes and counts; see that a device runs Lickety-Sync and its port;
+which approximate padded chunk sizes and counts; see that a device runs LicketySync and its port;
 see the LAN beacons, each carrying, under a salt fresh to that beacon, one hash per announced folder
 and one hash of the announcer's libp2p identity key, and confirm a folder is announced on this LAN
 if they already know its ID, or that a device they have met before is announcing if they already
@@ -1709,7 +1709,7 @@ external entities; each of these parsers is fuzzed (TM-3). With the setting on, 
 router of every network it joins, a café's or an office's among them, and that router, and anyone
 on that network who watches SSDP, sees it ask. While the port is mapped, anyone on the internet can
 reach it and learn what any connection to the device shows before a folder opens (section 5, "To a
-network observer"): that it runs Lickety-Sync, its libp2p peer ID, its device ID, the protocols it
+network observer"): that it runs LicketySync, its libp2p peer ID, its device ID, the protocols it
 offers, its Hello and, from how long a refused folder proof takes, a coarse count of its folders;
 never a folder or a file without a key. Stops mappings injected or abused on home routers
 (UPnProxy 2022; CallStranger 2020), a router's answers steering the device to another host or
@@ -2087,7 +2087,7 @@ that a device that cannot read a folder can still hold and serve it, which means
 data are visible to it. The list is honest because the plan's hardening review found that the systems
 it studied failed more often by promising too much than by leaking too much.
 
-**To anyone on the LAN** (while LAN discovery is on, TM-25). That a device runs Lickety-Sync and
+**To anyone on the LAN** (while LAN discovery is on, TM-25). That a device runs LicketySync and
 which port it listens on; the device's address; in each beacon, under a salt fresh to that beacon,
 one hash per announced folder and one hash of the announcer's libp2p identity key (its peer tag), so
 that an observer who already knows the folder ID can confirm it is announced here, an observer who

@@ -19,7 +19,7 @@
 //! decision of 2026-10-14). The local API comes in phase 3; selective sync,
 //! versioning and the archive come in phase 5; and the roadmap does not yet
 //! place compression, the change journals or the deletion brake. The plan
-//! ("Lickety-Sync: Project Plan") is the specification; `spec/` carries the
+//! ("LicketySync: Project Plan") is the specification; `spec/` carries the
 //! protocol, the keys and the threat model as they are written down.
 //!
 //! # Shape

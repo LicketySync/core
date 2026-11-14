@@ -1,6 +1,6 @@
 # Security policy
 
-Lickety-Sync is a serverless, end-to-end encrypted file synchronisation tool.
+LicketySync is a serverless, end-to-end encrypted file synchronisation tool.
 Security outranks features and schedule; a confirmed vulnerability stops other
 work until it is fixed.
 

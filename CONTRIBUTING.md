@@ -1,6 +1,6 @@
 # Contributing
 
-Lickety-Sync is built by one owner and a set of agents under the rules in the
+LicketySync is built by one owner and a set of agents under the rules in the
 plan's "Engineering practice" section. The short version:
 
 - There are no pull requests for our own changes. Every change is written by one

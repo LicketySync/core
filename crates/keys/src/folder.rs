@@ -56,7 +56,7 @@ pub enum KeyError {
     /// The suite is 0.
     Suite(SuiteError),
     /// A suite this release does not implement: "this key needs a newer
-    /// release of Lickety-Sync" (`keys.md` 0.1, 6.1).
+    /// release of LicketySync" (`keys.md` 0.1, 6.1).
     UnimplementedSuite(u16),
     /// The verification key is not the canonical encoding of an Ed25519
     /// point, or the point is of small order (`keys.md` 0.3).
@@ -82,7 +82,7 @@ impl fmt::Display for KeyError {
             }
             Self::Suite(e) => write!(f, "{e}"),
             Self::UnimplementedSuite(_) => {
-                f.write_str("this key needs a newer release of Lickety-Sync")
+                f.write_str("this key needs a newer release of LicketySync")
             }
             Self::VerifyingKey => f.write_str(
                 "the folder's verification key is not a canonical Ed25519 point of large order",
@@ -797,7 +797,7 @@ pub(crate) mod tests {
                 assert_eq!(e, KeyError::UnimplementedSuite(2), "{tier:?} {len}");
                 assert_eq!(
                     e.to_string(),
-                    "this key needs a newer release of Lickety-Sync"
+                    "this key needs a newer release of LicketySync"
                 );
             }
         }

@@ -1,11 +1,25 @@
 # Changelog
 
-All notable changes to Lickety-Sync are recorded here. Each entry says what
-changed and names the agents that reviewed it; anything touching keys, protocol,
-paths or the API also names the security-reviewer pass.
+All notable changes to LicketySync are recorded here. Each entry says what
+changed and why.
 
 ## Unreleased
 
+- Docs: spell the product's name "LicketySync", one word, as its domains and the slug
+  `licketysync` do, throughout core, including the message that refuses a key of a newer suite:
+  "this key needs a newer release of LicketySync" (`keys.md` §0.1 and §6.1). The `key_string` test
+  vector changes in that message only. `protocol.md` §9 no longer says whom it is written for.
+  `clippy.toml` adds the name to `doc-valid-idents`, so doc comments write it as a word, not as
+  code. No behaviour changes beyond that message.
+- Protocol: the chunk vector of `protocol.md` §8 item 9 now follows the spec. It carries the
+  `keys.md` §9 item 6 chunk vector: the same 300 raw bytes sealed under the same fixed folder.
+  Before, it sealed a string of its own, which its comment misnamed as "chunk". Its test checks
+  the folder ID, raw bytes, stored bytes and both hashes against the keys crate's committed
+  vector, so an implementer can follow one chunk from the keys vector into the protocol's frames.
+  Every value derived from the chunk changes with it: the stored chunk, its two hashes, the
+  request, the three replies, the two records that name it, the frames that carry them, and the
+  four `message_parse` chunk fuzz seeds; the vector's description now names the keys chunk.
+  Nothing else in the vector changes.
 - Gate: four measured speed-ups, and sccache on one server of its own when it is installed. On the
   development machine (8 cores), timed step by step, a warm `gate.sh` took 901 s; with the four
   changes and sccache it takes 237 s when cargo-geiger's inputs are unchanged and 421 s when they
@@ -2611,7 +2625,7 @@ paths or the API also names the security-reviewer pass.
   "Status: phase 0."; the simulator's doc and its `Cargo.toml` description say that its gate
   scenarios check that simulated peers converge, in place of "Phase 0's gate"; and the command
   line's planned commands (`crates/cli/src/main.rs`) no longer list `owner`, since there has been no
-  owner key since 2026-10-18. The documentation site's new page, "Risks of using Lickety-Sync", is
+  owner key since 2026-10-18. The documentation site's new page, "Risks of using LicketySync", is
   in the site repository's own commit. Comments and docs only; no code changes.
   - Reviewed 2026-11-02 by a053ca395ad2a83f3 (accuracy) and a759a3e97142a0717 (clarity and the
     docs rule), with the site's risks page, over three rounds; every finding fixed, and both clean

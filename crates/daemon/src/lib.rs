@@ -4,7 +4,7 @@
 
 //! The service: folders, the local API over a Unix socket or named pipe and localhost HTTP, settings with Apply and Discard, issues and peer status.
 //!
-//! Status: skeleton. The plan ("Lickety-Sync: Project Plan") is the specification
+//! Status: skeleton. The plan ("LicketySync: Project Plan") is the specification
 //! this crate implements; `spec/` in this repository carries the protocol and the
 //! threat model as they are written down.
 

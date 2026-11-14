@@ -1,4 +1,4 @@
-# Lickety-Sync keys
+# LicketySync keys
 
 Status: draft for phase 0, rewritten 2026-10-22 for the shared-key model the owner chose on
 2026-10-18 (plan, Decisions: "Key model simplified"), the owner's answers of 2026-10-22 and the
@@ -10,7 +10,7 @@ watermark that replaces the clock rule and the folder's own time (§0, §3.4, §
 `protocol.md` §4.4), and on 2026-11-13 for consistency with the threat model: what a sealed holder
 can test (§1.3), what a LAN beacon links (§2.2), how closely Padmé shows a size (§3.2 to §3.4), and
 what a browser invite is (§6.3). This file is what `licketysync-keys` implements and what reviewers
-check it against. The plan ("Lickety-Sync: Project Plan") is the design; where this file and the
+check it against. The plan ("LicketySync: Project Plan") is the design; where this file and the
 plan disagree, raise it. `suites.md` fixes the algorithms and their crates; `threat-model.md` names
 the adversaries; `protocol.md` puts these keys and records on the wire. **Issues** is the list of
 problems a device shows its person (the plan's Issues panel): every failure this file and
@@ -95,14 +95,14 @@ Sizes the keys crate checks on every parse:
 | Write key as words (§6.2) | 24 words |
 
 A key string that names a suite this release does not implement is refused with "this key needs a
-newer release of Lickety-Sync" (§6.1); the suite is judged before the payload's length, since a later
+newer release of LicketySync" (§6.1); the suite is judged before the payload's length, since a later
 suite's payloads may have other lengths, so the sizes above apply to suite 1 only. A record whose
 `suite` is not its folder's suite is
 malformed (`protocol.md` §5), since the folder's key exists under one suite only.
 
 ### 0.2 Signatures
 
-Every signature in Lickety-Sync is pure Ed25519 (RFC 8032: no prehash, no context string) over the
+Every signature in LicketySync is pure Ed25519 (RFC 8032: no prehash, no context string) over the
 body prefixed with a label, so a signature made for one purpose can never be presented for another
 (`suites.md` §2.2):
 
@@ -257,7 +257,7 @@ and drops the connection before sending Hello otherwise, so a beacon replayed fr
 cannot steer the dial to a different device. The beacon carries no identity in the clear: an
 observer without the folder ID or the announcer's identity key cannot link two beacons, even seconds
 apart, to one folder or one device by their hashes (libp2p's own mDNS would put the peer ID in every
-announcement, which is why Lickety-Sync uses its own beacon). What a beacon does carry in the clear
+announcement, which is why LicketySync uses its own beacon). What a beacon does carry in the clear
 links a device's beacons all the same, as their source address does (`threat-model.md` §5): its
 port and its number of folder hashes, which change only when the device's port or its announced
 folders do, and its minute, which shows how far the device's clock is off, to the minute and more
@@ -646,7 +646,7 @@ key_string     = Bech32m(hrp, to_5bit(payload))        # BIP-350; hrp "lsw" writ
   the three, a bad checksum, a Bech32 (non-m) checksum, mixed case or a non-zero padding bit is
   malformed; (2) a payload shorter than 2 bytes is malformed; (3) the suite, `be16` of the first two
   bytes: suite 0 is malformed, and a suite this release does not implement is refused with "this
-  key needs a newer release of Lickety-Sync", whatever the payload's length; (4) the length, under
+  key needs a newer release of LicketySync", whatever the payload's length; (4) the length, under
   that suite: for suite 1, 34 bytes for `lsw` and 66 for `lsr` and `lss`, and any other is
   malformed; (5) for a read or sealed key, a `folder_vk` that is not canonical or is of small order
   (§0.3) is malformed.

@@ -1,10 +1,10 @@
-# Lickety-Sync — core
+# LicketySync — core
 
 The sync core: keys, protocol, index, engine, networking, service, command line,
 simulator and the offline decrypt tool, as a Cargo workspace. Rust only;
 compiles for Windows, macOS, Linux (x86 and ARM), Android, iOS and WebAssembly.
 
-Lickety-Sync syncs folders between your own devices and the people you share
+LicketySync syncs folders between your own devices and the people you share
 with, and contacts no server you did not turn on: there are no accounts and no
 tracker; no relay is used, and your devices relay for no one, unless you turn
 that on (a relay passes encrypted traffic, which it cannot read, between
@@ -13,7 +13,7 @@ devices that hold one of a folder's keys can join it, and anyone who holds a
 key can pass it on.
 Licensed under the Mozilla Public License 2.0.
 
-- Plan and design: "Lickety-Sync: Project Plan" (the living document).
+- Plan and design: "LicketySync: Project Plan" (the living document).
 - Specification: [`spec/threat-model.md`](spec/threat-model.md) (adversaries and
   the numbered requirements TM-1 to TM-43 every change is reviewed against, of
   which TM-16, TM-19, TM-34, TM-36 and TM-38 are retired),
