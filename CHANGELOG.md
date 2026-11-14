@@ -274,16 +274,26 @@ changed and why.
     ignored signal.
   - Each case's processes carry a variable of their own. Any still running when the case ends are
     killed and fail it, and the EXIT trap kills those of the case or test running when the suite
-    stops; bash 5.2 and 5.3 run that trap on SIGHUP, SIGINT and SIGTERM as well, then end by the
-    signal. Each kill scans `/proc` again until a pass finds none (at most 50 passes), and stops
+    stops; bash 5.2 and 5.3 run that trap on SIGHUP and SIGTERM as well, then end by the signal.
+    So does the suite on SIGINT, through an INT trap that restores bash's own handling and sends
+    the signal again: untrapped, a SIGINT that comes while a foreground command runs is held until
+    the command ends, then dropped as the command's own. Each kill scans `/proc` again until a pass
+    finds none (at most 50 passes), and stops
     (SIGSTOP) every process a pass finds before it kills them (SIGKILL), so that none forks out of
     reach between the scan and the kill. The stand-in ends its child and waits for it before it
     exits.
   - Regression test, "the stand-ins left running on 2026-11-14": the suite runs itself again in the
     background, with SIGINT ignored and SIGTERM blocked, under `flock -o` on one lock inside a
-    plain `flock` on another, and must pass, leave no process running and free both locks. Added
-    to the old suite, it fails: the nested run fails both cases and the SIGINT check, leaves the
-    six processes (the test kills them) and holds the plain lock.
+    plain `flock` on another, and with its TMPDIR inside the suite's own directory, so that the
+    cleanup removes whatever it leaves (a short name: the sccache case's socket path must stay
+    under the 108 bytes of a Unix socket's). It must pass, leave no process running and free both
+    locks. Added to the old suite, it fails: the nested run fails both cases and the SIGINT check,
+    leaves the six processes (the test kills them) and holds the plain lock.
+  - That run goes through `ci/reaper.py`, shared with `ci/test-download.sh`, which kills every
+    process of the run when the suite ends, however it ends, SIGKILL included. Test: killed
+    (SIGKILL) while a run of itself blocks in a case, the suite must leave nothing of that run and
+    both locks free (without the reaper, the run is still there 30 s later and holds the plain
+    lock).
   - Tests of each piece, each failing without it: the stand-in records the signals it inherited
     ignored and blocked and its open descriptors, read by grep and ls (without the descriptors
     closed, it sees the plain lock's); the launcher alone, under a caller that ignores SIGINT,
@@ -291,9 +301,13 @@ changed and why.
     uutils' `timeout` clears its child's mask and GNU's does not, so only this check sees it on
     the development machine); the stand-in records its child's status (without its wait, none);
     three runs of the suite, stopped by SIGHUP, SIGINT or SIGTERM while a case blocks, must end by
-    that signal, with no process left and their files removed (without the kill in the EXIT trap,
-    each leaves five); and a tree that keeps forking, up to 1000 children, must be gone after one
-    kill (with a single pass and no SIGSTOP, hundreds are left). The suite takes about 6 to 10 s
+    that signal, with no process left and their files removed, under their TMPDIR (without the kill
+    in the EXIT trap, each leaves five); a fourth, sent SIGINT while a foreground command runs, must
+    end by SIGINT once the command ends (without the INT trap, it ends with status 1); and a tree
+    that keeps forking, up to 1000 children, started as a case is, must be gone after one kill
+    (with a single pass and no SIGSTOP, hundreds are left) and must start with no descriptor but 0
+    to 2 (without the launcher, it has the suite's fifo too, and in the run of the suite by itself
+    the plain lock's, which a child the kill missed would hold). The suite takes about 6 to 10 s
     more on the development machine, and `ci.yml` says the ci-scripts job's steps take about 30 s.
   - `ci/mutants.sh` changes only in a comment: cargo-mutants 27.1.0 handles SIGINT whatever it
     inherited (ctrlc's `set_handler` replaces an ignored SIGINT), so the budget always stops it.
@@ -302,6 +316,59 @@ changed and why.
     process. `--kill-after` stays out: uutils' `timeout` 0.10.0, the development machine's, still
     sends its SIGKILL along with the first signal. `CONTRIBUTING.md` adds flock to what the suite
     needs.
+- CI: `ci/test-download.sh` leaves no process running either, however it is stopped. Stopped by
+  SIGKILL while it downloaded, it left its HTTPS server on 127.0.0.1 running for good; stopped by
+  SIGTERM, its downloads (`timeout`, `ci/download.sh` and curl) for up to a minute, their timeout.
+  Each held every descriptor the suite had inherited, so a caller's plain `flock` on the cargo lock
+  would have stayed held as long. No run was seen to do it.
+  - The server and each download start as `ci/test-mutants.sh`'s cases do: no signal ignored or
+    blocked, and no descriptor open but stdin, stdout and stderr. The same few lines of Python also
+    set Linux's parent-death signal, SIGTERM, which the kernel sends when the suite ends, by
+    SIGKILL too: the server ends at it, and `timeout`, GNU's and uutils' alike, passes it on to the
+    download's process group. They refuse (status 125) a command whose parent is not the suite,
+    which also catches a suite that ended first; so each download is a simple command of the
+    suite, not a subshell, and `wait` collects its status.
+  - They carry a variable of their own: the group fails if any is still running at its end, and
+    the EXIT trap kills them with `ci/test-mutants.sh`'s scan (SIGSTOP, then SIGKILL, until a pass
+    finds none) before it removes the suite's directory, so that nothing of the suite runs once it
+    has ended. An INT trap, as in `ci/test-mutants.sh`, ends the suite by a SIGINT that comes
+    during a foreground command.
+  - Not done: the server ending at the end of its stdin, or a time limit on it. The parent-death
+    signal ends it, and the downloads, which neither would.
+  - The suite runs itself (the tests below) through `ci/reaper.py`, which `ci/test-mutants.sh` uses
+    too: SIGINT ignored, as a background job of a script has it; a child subreaper, which waits, at
+    most 30 s here, for every process the run leaves; and the same parent-death signal, at which
+    it kills every process under it (SIGSTOP, then SIGKILL, until a pass finds none), so that a
+    run of the suite by itself does not outlive the suite either. Every process under it, not its
+    child's process group alone: `timeout` moves each download to a group of its own. It refuses
+    (status 125) a parent that is not the suite. The server's code now comes before the other
+    groups, so that a run in a stop mode skips their cases and holds its requests in about half a
+    second, however loaded the machine.
+  - Regression test, "the server and the downloads left running by a stopped suite": the suite runs
+    itself under `flock -o` on one lock inside a plain `flock` on another, with SIGINT ignored and
+    its TMPDIR inside the suite's own directory. Once the server holds a download and a plain curl
+    (a new step, `hold`), it is stopped by SIGTERM, then by SIGKILL, and must end by that signal,
+    leave no process running, free both locks and have run none of the other groups' cases. Added
+    to the old suite, it fails both ways: stopped by SIGTERM, the download (its subshell,
+    `timeout`, `ci/download.sh` and curl) still runs 30 s later and holds the plain lock; stopped
+    by SIGKILL, the server and both downloads do.
+  - Regression test, "a run of this suite by itself left running when the suite was killed": the
+    suite runs itself in a mode where it starts such a run, and is killed (SIGKILL) once that run's
+    server holds its requests; nothing may be left, and both locks must be free. Without the
+    reaper's parent-death signal, or without its kill, the inner run is still there 30 s later and
+    holds the plain lock.
+  - Tests of each piece, each failing without it: under a caller that ignores SIGINT, blocks SIGTERM
+    and passes a descriptor on, a command started as the downloads are must see no signal ignored
+    or blocked, no descriptor but 0 to 2, and SIGTERM as its parent-death signal; a subshell's
+    command must be refused; without the parent-death signal, the SIGKILL run leaves the server and
+    both downloads running; before the SIGTERM the test stops (SIGSTOP) the server and the
+    downloads, so that without the EXIT trap's kill the SIGTERM run leaves the stopped server (a
+    stopped process ends at SIGKILL only); a run sent SIGINT during a foreground command, in a new
+    form of the stop mode, must end by SIGINT (without the INT trap, it ends with status 1); the
+    stopped runs must run none of the other groups' cases (with the server's code after them, they
+    do); and the group fails if its server is still running at its end. The suite takes about
+    1.5 s more on the development machine (3.6 s against 2.1, the quickest of six runs each).
+    `CONTRIBUTING.md` adds flock to what it needs.
 - Engine: a chunk request whose patience runs out is offered to the other connections even when
   another handler runs first at that instant (severity Medium). A handler other than the patience
   timer's that ran at or after the deadline before the timer fired (a peer's frame, such as the

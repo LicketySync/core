@@ -24,8 +24,11 @@
 # is still running is killed and fails the case; the EXIT trap kills those of
 # the case running when the suite stops. Last, the suite runs itself: once
 # with SIGINT ignored, SIGTERM blocked and under two locks, to check that it
-# still passes, leaves no process running and frees both locks; and three
-# times stopped by a signal while a case blocks.
+# still passes, leaves no process running and frees both locks; three times
+# stopped by a signal while a case blocks, and once sent SIGINT during a
+# foreground command; and once killed (SIGKILL) during a run of itself, of
+# which nothing may be left either. A run under two locks goes through
+# ci/reaper.py, which kills that run when the suite ends, however it ends.
 # Needs python3 (3.11 or later, for tomllib), prlimit and flock (util-linux),
 # and Linux's /proc. Run by gate.sh, ci.yml and mutants.yml. Exit 1 if any
 # case fails.
@@ -82,8 +85,13 @@ cleanup() {
 }
 # Stopped by SIGHUP, SIGINT or SIGTERM, bash (5.2 and 5.3, measured) runs this
 # EXIT trap too, then ends by that signal, so that its caller sees why; a
-# signal ignored on entry stays ignored. The stop tests below check it.
+# signal ignored on entry stays ignored. A SIGINT that comes while a
+# foreground command runs, bash holds until the command ends, then drops,
+# taking it for the command's own; trapped, it runs the trap then instead,
+# which restores bash's own handling and sends the signal again. The stop
+# tests below check both.
 trap cleanup EXIT
+trap 'trap - INT; kill -INT $$' INT
 mkdir "$tmp/bin"
 # The runner variables come only from ci/mutants.sh, and so does the rustc
 # wrapper (ci/rustc-wrapper.sh, which it sources): each case runs with
@@ -353,6 +361,23 @@ for s in signal.SIGPIPE, signal.SIGXFSZ:
 signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
 os.execvp(sys.argv[1], sys.argv[1:])
 '
+# ci/reaper.py runs this suite's runs of itself under two locks, as it does
+# ci/test-download.sh's: it waits for every process a run leaves, and kills
+# them all when this suite ends, however it ends.
+reaper="$(cd "$(dirname "$0")" && pwd)/reaper.py"
+# again <dir> <seconds> <VAR=value>...: run this suite again in the background
+# ($!), as gate.sh runs it (a non-interactive bash under `flock -o` on
+# <dir>/gate.lock), inside a plain flock on <dir>/inherited.lock whose
+# descriptor its processes inherit, as the caller above starts it, through the
+# reaper (for at most the seconds given), with the variables given and its
+# TMPDIR $tmp/t; its output in <dir>/out.
+again() {
+  local dir=$1 seconds=$2
+  shift 2
+  mkdir -p "$dir" "$tmp/t"
+  env "$@" TMPDIR="$tmp/t" python3 -I "$reaper" "$$" "$seconds" python3 -I -c "$caller" \
+    flock "$dir/inherited.lock" flock -o "$dir/gate.lock" "$self" > "$dir/out" 2>&1 &
+}
 n=0
 fails=0
 # case_ <name> <expected exit> <shard> <budget> <expected output lines, one
@@ -397,10 +422,34 @@ case_() {
 }
 # LICKETYSYNC_TEST_MUTANTS_STOP=<fifo>: run one case only, whose stand-in
 # blocks (its budget 30 m, the outer timeout 60 s) after naming its directory
-# on the fifo; the stop tests below then stop this suite by a signal.
+# on the fifo; the stop tests below then stop this suite by a signal. With
+# LICKETYSYNC_TEST_MUTANTS_RELEASE=<fifo> as well, run instead a foreground
+# command that names this suite's directory on the first fifo and ends when a
+# line comes on the second.
 if [ -n "${LICKETYSYNC_TEST_MUTANTS_STOP:-}" ]; then
+  if [ -n "${LICKETYSYNC_TEST_MUTANTS_RELEASE:-}" ]; then
+    bash -c '{ echo "$1" > "$2" && read -r _; } < "$3"' _ "$tmp" "$LICKETYSYNC_TEST_MUTANTS_STOP" \
+      "$LICKETYSYNC_TEST_MUTANTS_RELEASE"
+    exit 1
+  fi
   case_ "a case that blocks until the suite is stopped" 1 2/16 30m "" \
     FAKE_HANG=1 FAKE_READY="$LICKETYSYNC_TEST_MUTANTS_STOP"
+  exit 1
+fi
+# LICKETYSYNC_TEST_MUTANTS_NEST=<fifo>: start a run of this suite by itself in
+# the stop mode (again), and once that run's case blocks, name this suite's PID
+# on the fifo and wait for the run; the last test below then kills this suite.
+if [ -n "${LICKETYSYNC_TEST_MUTANTS_NEST:-}" ]; then
+  mkfifo "$tmp/ready"
+  exec {ready}<> "$tmp/ready"
+  running="LICKETYSYNC_TEST_MUTANTS_NESTED=$tmp/run"
+  again "$tmp/run" 30 "$running" LICKETYSYNC_TEST_MUTANTS_STOP="$tmp/ready"
+  if ! read -r -t 30 -u "$ready" _; then
+    echo "FAIL: the run of this suite by itself did not block within 30 s"
+    exit 1
+  fi
+  echo "$$" > "$LICKETYSYNC_TEST_MUTANTS_NEST"
+  wait "$!"
   exit 1
 fi
 m1='crates/keys/src/chunk.rs:42:12: replace < with <= in padme'
@@ -753,16 +802,19 @@ fi
 # 1000 children as fast as it can, each blocked reading a fifo that no one
 # writes, and has started the first when survivors begins. One scan misses the
 # children started while it reads /proc; the passes, each stopping what it
-# finds before it kills, leave none.
+# finds before it kills, leave none. The tree starts as a case does (as_ci),
+# so that a kill that misses some leaves none holding a caller's lock: its
+# bash lists its descriptors first, before it opens any.
 mark="LICKETYSYNC_TEST_MUTANTS_FORKS=$tmp"
 mkfifo "$tmp/forking" "$tmp/blocked"
 exec {forking}<> "$tmp/forking"
 running=$mark
-env "$mark" bash -c 'for ((i = 0; i < 1000; i++)); do
+env "$mark" python3 -I -c "$as_ci" bash -c 'ls "/proc/$$/fd" > "$3"
+  for ((i = 0; i < 1000; i++)); do
     cat <> "$2" &
     [ "$i" != 0 ] || echo started > "$1"
   done
-  wait' _ "$tmp/forking" "$tmp/blocked" > /dev/null 2>&1 &
+  wait' _ "$tmp/forking" "$tmp/blocked" "$tmp/forks-fds" > /dev/null 2>&1 &
 # Not a job of this shell, which would report its SIGKILL.
 disown "$!"
 started=
@@ -781,6 +833,13 @@ elif [ -n "$left" ]; then
 else
   echo "ok   the kill of a case's processes ends a tree that keeps forking"
 fi
+if [ "$(cat "$tmp/forks-fds" 2> /dev/null)" = $'0\n1\n2' ]; then
+  echo "ok   the tree that keeps forking starts with no descriptor but 0 to 2"
+else
+  echo "FAIL the tree that keeps forking started with descriptors other than 0 to 2:"
+  sed 's/^/  | /' "$tmp/forks-fds" 2> /dev/null || true
+  fails=$((fails + 1))
+fi
 
 if [ -n "${LICKETYSYNC_TEST_MUTANTS_NESTED:-}" ]; then
   echo "skipped: the runs of this suite by itself (LICKETYSYNC_TEST_MUTANTS_NESTED is set: this is one)"
@@ -794,16 +853,18 @@ else
   # SIGTERM blocked, inside a plain flock on a second lock whose descriptor its
   # processes inherit, as the cargo lock's was. It must pass, leave no process
   # running (its processes all carry LICKETYSYNC_TEST_MUTANTS_NESTED) and leave
-  # both locks free. It runs in the background, so that the cleanup ends it
-  # when this suite is stopped.
+  # both locks free. It runs in the background (again, above, which gives it
+  # five minutes), so that the cleanup ends it when this suite is stopped. This
+  # run and the stop runs below make their directories under $tmp/t (TMPDIR),
+  # which the cleanup removes whatever they leave; a short name, so that the
+  # sccache case's socket path stays under the 108 bytes of a Unix socket's.
   running="LICKETYSYNC_TEST_MUTANTS_NESTED=$tmp"
-  env "$running" python3 -I -c "$caller" \
-    flock "$tmp/inherited.lock" flock -o "$tmp/gate.lock" "$self" > "$tmp/nested" 2>&1 &
+  again "$tmp/nested" 300 "$running"
   nested=0
   wait "$!" || nested=$?
   held=
   for lock in gate inherited; do
-    flock -n "$tmp/$lock.lock" true || held="$held $lock.lock"
+    flock -n "$tmp/nested/$lock.lock" true || held="$held $lock.lock"
   done
   left=$(survivors "$running")
   running=
@@ -815,19 +876,20 @@ else
     echo "FAIL the suite run with SIGINT ignored, SIGTERM blocked and under two locks ($bug):" \
       "exit $nested${held:+; still held:$held}"
     [ -z "$left" ] || printf '  still running after it ended (now killed):\n%s\n' "$left"
-    sed 's/^/  | /' "$tmp/nested"
+    sed 's/^/  | /' "$tmp/nested/out"
     fails=$((fails + 1))
   fi
 
   # Stopped by SIGHUP, SIGINT or SIGTERM while a case blocks, the suite kills
   # that case's processes, removes its directory and ends by the signal (its
   # status 128 + the signal's number). Each run (in the stop mode above)
-  # starts as a CI step does, so that no signal is ignored.
+  # starts as a CI step does, so that no signal is ignored, and makes its
+  # directories under $tmp/t, its TMPDIR, where its case's must be.
   for sig in HUP INT TERM; do
     mkfifo "$tmp/ready-$sig"
     exec {ready}<> "$tmp/ready-$sig"
     running="LICKETYSYNC_TEST_MUTANTS_NESTED=$tmp/stop-$sig"
-    env "$running" LICKETYSYNC_TEST_MUTANTS_STOP="$tmp/ready-$sig" python3 -I -c "$as_ci" "$self" \
+    env "$running" LICKETYSYNC_TEST_MUTANTS_STOP="$tmp/ready-$sig" TMPDIR="$tmp/t" python3 -I -c "$as_ci" "$self" \
       > "$tmp/stop-$sig" 2>&1 &
     pid=$!
     dir=
@@ -840,7 +902,7 @@ else
     left=$(survivors "$running")
     running=
     want=$((128 + $(kill -l "$sig")))
-    if [ -n "$dir" ] && [ "$rc" = "$want" ] && [ -z "$left" ] && [ ! -e "$dir" ]; then
+    if [[ $dir == "$tmp/t/"* ]] && [ "$rc" = "$want" ] && [ -z "$left" ] && [ ! -e "$dir" ]; then
       echo "ok   stopped by SIG$sig while a case blocks, the suite ends that case's processes, removes its" \
         "files and ends by SIG$sig"
     else
@@ -848,10 +910,84 @@ else
         "expected $want"
       [ -z "$left" ] || printf '  still running after it ended (now killed):\n%s\n' "$left"
       [ -z "$dir" ] || [ ! -e "$dir" ] || echo "  its case's directory is still there"
+      [ -z "$dir" ] || [[ $dir == "$tmp/t/"* ]] || echo "  its case's directory is not under its TMPDIR, $tmp/t"
       sed 's/^/  | /' "$tmp/stop-$sig"
       fails=$((fails + 1))
     fi
   done
+
+  # SIGINT while a foreground command runs (the stop mode's other form): bash
+  # holds it until the command ends, which this test brings about after the
+  # signal, and then the INT trap ends the suite by SIGINT, with its directory
+  # (under its TMPDIR, $tmp/t) removed; without the trap, bash would drop the
+  # signal and go on.
+  mkfifo "$tmp/ready-fg" "$tmp/release-fg"
+  exec {ready}<> "$tmp/ready-fg" {release}<> "$tmp/release-fg"
+  running="LICKETYSYNC_TEST_MUTANTS_NESTED=$tmp/stop-fg"
+  env "$running" LICKETYSYNC_TEST_MUTANTS_STOP="$tmp/ready-fg" LICKETYSYNC_TEST_MUTANTS_RELEASE="$tmp/release-fg" \
+    TMPDIR="$tmp/t" python3 -I -c "$as_ci" "$self" > "$tmp/stop-fg" 2>&1 &
+  pid=$!
+  dir=
+  read -r -t 30 -u "$ready" dir || true
+  if [ -n "$dir" ]; then
+    kill -INT "$pid" 2> /dev/null || true
+  else
+    kill -KILL "$pid" 2> /dev/null || true
+  fi
+  echo >&"$release"
+  exec {ready}<&- {release}>&-
+  rc=0
+  wait "$pid" 2> /dev/null || rc=$?
+  left=$(survivors "$running")
+  running=
+  if [[ $dir == "$tmp/t/"* ]] && [ "$rc" = 130 ] && [ -z "$left" ] && [ ! -e "$dir" ]; then
+    echo "ok   sent SIGINT while a foreground command runs, the suite ends by SIGINT once the command has" \
+      "ended, its files removed"
+  else
+    echo "FAIL sent SIGINT while a foreground command runs (${dir:-none started within 30 s}): exit $rc," \
+      "expected 130"
+    [ -z "$left" ] || printf '  still running after it ended (now killed):\n%s\n' "$left"
+    [ -z "$dir" ] || [ ! -e "$dir" ] || echo "  its directory is still there"
+    [ -z "$dir" ] || [[ $dir == "$tmp/t/"* ]] || echo "  its directory is not under its TMPDIR, $tmp/t"
+    sed 's/^/  | /' "$tmp/stop-fg"
+    fails=$((fails + 1))
+  fi
+
+  # A run of this suite by itself, left running when the suite was killed
+  # during it: the run went on, holding the descriptors the suite had, its
+  # caller's lock among them. So the suite runs itself (again) in a mode where
+  # it starts such a run in the stop mode, and once that run's case blocks, it
+  # is killed (SIGKILL). The inner run's reaper gets SIGTERM when the suite
+  # ends and kills every process under it, so that nothing may be left and
+  # both locks of the outer run must be free.
+  bug="a run of this suite by itself left running when the suite was killed"
+  mkfifo "$tmp/ready-nest"
+  exec {ready}<> "$tmp/ready-nest"
+  running="LICKETYSYNC_TEST_MUTANTS_OUTER=$tmp/nest"
+  again "$tmp/nest" 30 "$running" LICKETYSYNC_TEST_MUTANTS_NEST="$tmp/ready-nest"
+  pid=$!
+  outer=
+  read -r -t 30 -u "$ready" outer || true
+  exec {ready}<&-
+  [ -z "$outer" ] || kill -KILL "$outer" 2> /dev/null || true
+  rc=0
+  wait "$pid" 2> /dev/null || rc=$?
+  held=
+  for lock in gate inherited; do
+    flock -n "$tmp/nest/$lock.lock" true || held="$held $lock.lock"
+  done
+  left=$(survivors "$running")
+  running=
+  if [ -n "$outer" ] && [ "$rc" = 137 ] && [ -z "$held" ] && [ -z "$left" ]; then
+    echo "ok   killed while it runs itself, the suite leaves no process of that run running and frees both" \
+      "locks ($bug)"
+  else
+    echo "FAIL killed while it runs itself ($bug; ${outer:-its run did not block within 30 s}): exit $rc," \
+      "expected 137${held:+; still held:$held}"
+    [ -z "$left" ] || printf '  still running after it ended (now killed):\n%s\n' "$left"
+    sed 's/^/  | /' "$tmp/nest/out"
+    fails=$((fails + 1))
+  fi
 fi
 
 if [ "$fails" -gt 0 ]; then

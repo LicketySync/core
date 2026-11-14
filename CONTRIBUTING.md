@@ -220,7 +220,7 @@ size). Every cargo-mutants run in this tree, by hand too, caps rustc's lints
 (`.cargo/mutants.toml` says why), so that a mutant that only leaves something
 unused is tested, not counted unviable. `ci/test-mutants.sh` also needs
 python3 (3.11 or later), prlimit and flock (util-linux), and
-`ci/test-download.sh` python3 and openssl.
+`ci/test-download.sh` python3, openssl and flock.
 gitleaks is optional (`ci/gitleaks-install.sh ~/.local/bin` installs the
 release CI pins). Every download in the CI scripts (gitleaks, and Chrome for
 Testing in `nightly.yml`) goes through `ci/download.sh`, which retries any
