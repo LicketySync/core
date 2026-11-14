@@ -5,6 +5,46 @@ changed and why.
 
 ## Unreleased
 
+- CI: Semgrep rules ban, by spelling, the unsafe code that `forbid(unsafe_code)` misses when a macro
+  defined in another crate expands it into a crate, and that cargo-geiger misses in a macro's body
+  (TM-7); each allow-list is empty, and file names count in any case, as macOS and Windows read
+  them.
+  - In every file a build reads (under `crates/`, `.rs` files, manifests, the root's `clippy.toml`,
+    the fuzz seeds; one definition in `ci/scope.py`): the words `unsafe`, `no_mangle`,
+    `export_name`, `link_section` and `global_asm`, comments and strings included; and the keyword
+    `extern`, since an extern block links native code that can run before `main` with no `unsafe` in
+    edition 2021, and a macro can build one from the keyword wherever it is written (the vendored
+    wasm-bindgen `bindings.rs` of `browser-tests` is left out, and no workspace crate may read its
+    tree).
+  - `ci/check-dep-info.sh`, after the gate's builds and each CI build that ships or tests (clippy
+    and a release check on Linux, nextest on Linux, Windows and macOS, net for Android and iOS,
+    `release.yml`'s release build), reads every rustc dep-info file under the target directory
+    (other tools' depfiles are told apart and skipped), a workspace crate's line by line strictly,
+    and fails when a workspace crate read, resolved as rustc resolved it, any file but one in that
+    scope, an untracked compiled artifact under the target directory or a compiled crate outside the
+    repository (each by its name and signature together, and by not being UTF-8), or names a file
+    that is gone (in CI any; locally in its newest .d); git may list no file under the target
+    directory, in any case. It is the backstop for a path attribute that a macro assembles from
+    tokens passed one at a time, which no text rule sees. The gate's release check, with CI's `-D
+    warnings`, costs 0 to 4 s warm (58 s cold).
+  - Under `crates/` and in `.rs` files: `include!` and `include_<name>!` (but `include_str!` and
+    `include_bytes!`), the path attribute, and the parts a macro could build one from; the protocol
+    crate's two `include!`s of its handshake harness pass by their text, and the keys crate's two
+    macros take doc comments as `#[doc = $doc:expr]`. In manifests: proc-macro crates, build scripts
+    (`build` but `false`, `links`, any `build.rs`), backslashes, and paths to anything but a crate
+    directory or a Rust file.
+  - `ci/semgrep-scan.sh`, shared by `gate.sh` and CI, runs these rules with `nosemgrep` ignored, and
+    fails when their scan skips a file in their scope; on a name with a control character, a
+    symbolic link or a `.cargo/config.toml` anywhere; on a second `.semgrepignore`; and on a
+    manifest path that resolves to no `.rs` file or crate git lists. The root's `.semgrepignore`
+    turns off Semgrep's default skips (`tests/`, `vendor/`, `build/`), and flags let it scan large
+    and binary-looking files and those on which rules time out.
+  - `ci/test-semgrep-scan.sh` (about 35 s, its scans run at once) and `ci/test-check-dep-info.sh`
+    probe each rule, flag and check on made-up trees and toy crates.
+  - The community rules now reach integration tests, `tests/` modules and the vendored WebTransport
+    crate, and find nothing there; `no-expect-on-remote-data` leaves out `protocol`'s and `net`'s
+    integration tests.
+
 - Engine: a version of this device's on its disk is never taken for one off it because the version
   shown is not (severity Low). The refusal of the change below judged a version of this device's
   that is no conflict copy by the version shown alone, even when its own version was the path's
@@ -256,6 +296,7 @@ changed and why.
   request, the three replies, the two records that name it, the frames that carry them, and the
   four `message_parse` chunk fuzz seeds; the vector's description now names the keys chunk.
   Nothing else in the vector changes.
+
 - Gate: four measured speed-ups, and sccache on one server of its own when it is installed. On the
   development machine (8 cores), timed step by step, a warm `gate.sh` took 901 s; with the four
   changes and sccache it takes 237 s when cargo-geiger's inputs are unchanged and 421 s when they

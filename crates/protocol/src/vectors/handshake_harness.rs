@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // The odd mode of the fuzz target `handshake`, one copy for two users, each
-// of which brings it in with `include!`: the target itself
+// of which compiles this file in: the target itself
 // (`fuzz/fuzz_targets/handshake.rs`) and this crate's test
 // `vector_exchange_fuzz_seeds`, which writes the target's seeds that start
 // inside the exchange and checks what they reach through it. The includer

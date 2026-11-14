@@ -26,8 +26,20 @@ plan's "Engineering practice" section. The short version:
   touches, and cryptography is checked against `spec/suites.md`.
 - Every review ends with a plain-language summary for the owner: what the
   change does, what it risks, how to try it by hand.
-- No `unwrap`, `expect` or `panic` outside tests; no `unsafe` outside the
-  platform-FFI crates; no `TODO` without an issue link.
+- No `unwrap`, `expect` or `panic` outside tests; no `TODO` without an issue
+  link.
+- Outside the platform-FFI crates, no `unsafe`, `no_mangle`, `export_name`,
+  `link_section` or `global_asm`, not even as a word in a comment or a string,
+  in any file under `crates/`, any Rust file, any `Cargo.toml`, the root's
+  `clippy.toml` or the fuzz seeds; no `extern` keyword at all; no `include!` or
+  `include_<name>!` (but `include_str!` and `include_bytes!`) and no path
+  attribute, nor a macro that builds one from parts; no proc-macro crate, no
+  build script, no manifest path but to a crate directory or a Rust file, and no
+  backslash in a manifest; no symbolic link, no name with a control character,
+  and no `.cargo/config.toml`; and no workspace crate reads the vendored tree of
+  `browser-tests`. The Semgrep rules in `.semgrep/` and `ci/semgrep-scan.sh`
+  enforce this, `nosemgrep` does not silence them, and `ci/check-dep-info.sh`
+  checks what each build read (`spec/threat-model.md` TM-7 says why).
 - Dead code is removed in the same change that orphans it.
 - Every bug fix lands with a regression test named after the bug.
 - Every change updates `CHANGELOG.md` and names its reviewers there and in the
@@ -86,9 +98,10 @@ group. The groups:
    wasm-bindgen-cli's).
 5. **Unused dependencies and the fuzz lockfile**: `cargo udeps` on the pinned
    nightly; `fuzz/Cargo.lock` current (`cargo fetch --locked`).
-6. **Scans**: typos; Semgrep, first the project rules' own cases, then the scan;
-   gitleaks over the working tree (`ci/gitleaks.sh tree`), only when gitleaks
-   is installed.
+6. **Scans**: typos; Semgrep (`ci/semgrep-scan.sh`, tested first by
+   `ci/test-semgrep-scan.sh`): the project rules' own cases, then their scan
+   and the community rules'; gitleaks over the working tree
+   (`ci/gitleaks.sh tree`), only when gitleaks is installed.
 7. **The CI scripts**, each check with the test that runs it on made-up
    inputs: cargo-geiger's counts against the baseline (`ci/test-geiger.sh`,
    `ci/geiger.sh`); no hostname beyond `spec/allowed-hosts.txt`
@@ -104,11 +117,17 @@ group. The groups:
    (`ci/test-check-wasm-bindgen.sh`, `ci/test-check-vendored.sh`); and the
    download helper with the check that nothing downloads without it
    (`ci/test-download.sh`, `ci/check-downloads.sh`); the helper that picks
-   sccache (`ci/test-rustc-wrapper.sh`).
-8. **Coverage**, last: at least 90% of lines in each of the keys, protocol,
+   sccache (`ci/test-rustc-wrapper.sh`); and the dep-info check on toy crates
+   (`ci/test-check-dep-info.sh`).
+8. **Coverage**: at least 90% of lines in each of the keys, protocol,
    index and engine crates, measured per crate, after
    `cargo llvm-cov clean --workspace`. These are the gate's only runs of those
    crates' tests; CI runs them under nextest too.
+9. **What the builds read**, last: a release `cargo check`, then every file
+   rustc read for a workspace crate is one the Semgrep rules scan
+   (`ci/check-dep-info.sh`). Locally a file named only by an older .d of a
+   crate, from an earlier build, is skipped; if the newest names one that is
+   gone, rebuild, or remove the stale files with `cargo clean -p <crate>`.
 
 The coverage threshold is per crate: only that crate's own files count, so a
 well-tested neighbour cannot mask an under-tested one (`gate.sh` has the exact

@@ -2,10 +2,11 @@
 # per class of bug the review named; keep them few and precise. The cases each
 # rule must and must not flag are in .semgrep/tests/project.rs (`// ruleid:` on
 # the line before a line that must match, `// ok:` before one that must not);
-# CI runs them with `semgrep --test` before the scan, and the scan excludes
-# .semgrep/ so that those cases are not reported as findings. `semgrep --test`
-# fails when a rule the file names has no finding in it, so every rule needs at
-# least one `ruleid` case there.
+# ci/semgrep-scan.sh (gate.sh and CI) runs them with `semgrep --test` before
+# the scan, and the scan excludes that file so that its cases are not reported
+# as findings. `semgrep --test` fails when a rule the file names has no finding
+# in it, so every rule needs at least one `ruleid` case there; it ignores
+# `paths`, so ci/test-semgrep-scan.sh tests those on a made-up tree.
 rules:
   # A tripwire, not the control: deny.toml lets only licketysync-keys depend on
   # blake3 (suites.md, hashing). Inside it, only the labels module calls it; that
@@ -87,6 +88,124 @@ rules:
     message: No `expect` on anything decoded from a peer (rust-libp2p 2026 QUIC panic).
     pattern: $DECODED.expect(...)
     # `.semgrep/tests/**` as in the blake3 rules: the cases apply whether or not
-    # `semgrep --test` honours `paths` (1.181 does not).
+    # `semgrep --test` honours `paths` (1.181 does not). The crates' integration
+    # tests may expect, as all tests may.
     paths:
       include: ["crates/protocol/**", "crates/net/**", ".semgrep/tests/**"]
+      exclude: ["/crates/protocol/tests/**", "/crates/net/tests/**"]
+  # TM-7: forbid(unsafe_code) does not see what a macro defined in another
+  # crate expands into a forbidding crate (rustc reports no lint inside such an
+  # expansion), and cargo-geiger counts no macro body. So the words of the
+  # constructs the lint forbids are banned as text: unsafe, and no_mangle,
+  # export_name, link_section and global_asm, which need no unsafe in edition
+  # 2021. In code, macro_rules! bodies, comments and strings alike, which fails
+  # closed (prose must say it otherwise; unsafe_code, not_unsafe and other
+  # longer words pass). In every file under crates/, whatever its name; in
+  # every Rust file elsewhere (.rs in any case, as macOS and Windows read
+  # it), since a workspace crate can depend on one by path; and in every other
+  # file a build reads: each Cargo.toml, the root's clippy.toml, and the fuzz
+  # seeds that tests read with include_bytes!; ci/scope.py spells out the same
+  # scope for the scripts, and ci/check-dep-info.sh fails when a build reads
+  # any file outside it. ci/semgrep-scan.sh
+  # runs the project rules with nosemgrep off and fails when the scan skips a
+  # file in their scope. Neither the rule's id nor any comment among its cases
+  # holds a banned word whole.
+  - id: unsafe_code-only-in-ffi-crates
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      The words unsafe, no_mangle, export_name, link_section and global_asm are
+      written only in the platform-FFI crates this rule's exclude list names
+      (threat-model.md TM-7). forbid(unsafe_code) misses what another crate's
+      macro expands into a crate, and cargo-geiger counts no macro body, so the
+      words are banned everywhere else, comments and strings included: reword
+      the text, or put the code in a platform-FFI crate by a reviewed change to
+      that list.
+    paths:
+      include:
+        - "/crates/**"
+        - "*.[Rr][Ss]"
+        - "[Cc][Aa][Rr][Gg][Oo].[Tt][Oo][Mm][Ll]"
+        - "/[Cc][Ll][Ii][Pp][Pp][Yy].[Tt][Oo][Mm][Ll]"
+        - "/.[Cc][Ll][Ii][Pp][Pp][Yy].[Tt][Oo][Mm][Ll]"
+        - "/fuzz/seeds/**"
+        - "/.semgrep/tests/**"
+      # The platform-FFI crates, each "/crates/<name>/**", added by a reviewed
+      # change. Miri covers them nightly, and none exports a macro. None yet.
+      exclude: []
+    pattern-regex: '\b(?:unsafe|no_mangle|export_name|link_section|global_asm)\b'
+  # TM-7: an extern block links native code: #[link(name = ..., modifiers =
+  # "+verbatim")] extern "C" {} runs a library's code before main, from a file
+  # in this repository, and edition 2021 writes it without unsafe. A macro can
+  # take the keyword as a token where it passes (m!(extern fn)) and emit a
+  # block with it, so the keyword extern itself is banned in the word rule's
+  # scope, extern crate and extern "C" fn included; no workspace crate uses
+  # either. A keyword cannot be assembled from tokens, so the ban by spelling
+  # is whole. Left out: the one file of the vendored wasm-bindgen crate of
+  # browser-tests that holds extern blocks, which no build that ships compiles
+  # (ci/check-dep-info.sh fails a workspace crate that reads anything in that
+  # tree), and the platform-FFI crates of the word rule's list.
+  - id: extern_keyword-only-in-ffi-crates
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      The keyword extern is written only in the platform-FFI crates
+      (threat-model.md TM-7): an extern block links native code that can run
+      before main, edition 2021 writes it without unsafe, and a macro can
+      emit one from the keyword wherever it is written.
+    paths:
+      include:
+        - "/crates/**"
+        - "*.[Rr][Ss]"
+        - "[Cc][Aa][Rr][Gg][Oo].[Tt][Oo][Mm][Ll]"
+        - "/[Cc][Ll][Ii][Pp][Pp][Yy].[Tt][Oo][Mm][Ll]"
+        - "/.[Cc][Ll][Ii][Pp][Pp][Yy].[Tt][Oo][Mm][Ll]"
+        - "/fuzz/seeds/**"
+        - "/.semgrep/tests/**"
+      # The vendored crate's one file with extern blocks (ci/scope.py keeps
+      # every crate from reading its tree), and the platform-FFI crates as in
+      # the word rule's list (none yet), each "/crates/<name>/**".
+      exclude: ["/browser-tests/webtransport/vendor/libp2p-webtransport-websys-0.6.0/src/bindings.rs"]
+    pattern-regex: '\bextern\b'
+  # TM-7: include! and the path attribute compile in another file, of any name
+  # and from anywhere, beyond the reach of the rule above. So both are banned
+  # in every file under crates/ but the manifests and in every Rust file, as
+  # text that fails closed (a gap below is whitespace, characters beyond ASCII
+  # or comments):
+  # - the word include, whole or as include_<name> (include!, include_proto!,
+  #   an alias in a use item, the name passed to a macro, prose too); only
+  #   include_str! and include_bytes!, which read data, pass;
+  # - path, a gap, then = but not == (#[path], #![path], a path in cfg_attr),
+  #   but after a dot (a field) or after `let ` or `let mut ` (a binding);
+  # - an attribute that starts with a metavariable (#[$) or is named path
+  #   (#[path ...], #[r#path ...]), path followed by a metavariable, a $ inside
+  #   cfg_attr(...) at any depth of parentheses, and a meta fragment
+  #   ($x:meta) anywhere: each lets a macro build a path attribute from parts
+  #   its callers pass.
+  # A macro can still build one from tokens passed one at a time
+  # (m!(#, path, =, "...")); ci/check-dep-info.sh catches the file it reads.
+  # Allowed by their exact text: the two include!s of the protocol crate's
+  # handshake harness, one copy for its test and for the fuzz target
+  # handshake; the file they name is Rust, which the rule above scans.
+  - id: other_files-only-as-data
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      No include! and no path attribute, nor anything that could spell them
+      (threat-model.md TM-7): either compiles in a file the rule
+      unsafe_code-only-in-ffi-crates may not scan. Read data with include_str!
+      or include_bytes!, and declare modules where they are.
+    paths:
+      include: ["/crates/**", "*.[Rr][Ss]", "/.semgrep/tests/**"]
+      exclude: ["[Cc][Aa][Rr][Gg][Oo].[Tt][Oo][Mm][Ll]"]
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\binclude(?!_(?:str|bytes)\b)(?:_\w+)?\b'
+          - pattern-regex: '(?<![.\w])(?<!\blet )(?<!\bmut )path(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*=(?!=)'
+          - pattern-regex: '#(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*!?(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*\[(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*\$'
+          - pattern-regex: '#(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*!?(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*\[(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*(?:r#)?path\b'
+          - pattern-regex: '\bpath(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*\$'
+          - pattern-regex: 'cfg_attr(?:\s|[^\x00-\x7f]|/\*[\s\S]*?\*/|//[^\n]*\n)*\((?:[^()]|(?<paren>\((?:[^()]|(?&paren))*\)))*\$'
+          - pattern-regex: '(?<!#\[)\$\w+\s*:\s*meta\b'
+      - pattern-not-regex: '\binclude!\("handshake_harness\.rs"\)'
+      - pattern-not-regex: '\binclude!\("\.\./\.\./crates/protocol/src/vectors/handshake_harness\.rs"\)'

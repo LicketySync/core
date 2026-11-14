@@ -92,6 +92,9 @@ jobs:
           tool: cargo-auditable@0.7.7,cargo-cyclonedx@0.5.9
           fallback: none
       - run: cargo auditable build --release --locked --target "$TARGET" --package licketysync-cli
+      # What rustc read for each workspace crate in the build that ships: only
+      # files the project rules scan (ci/check-dep-info.sh; threat-model.md TM-7).
+      - run: ci/check-dep-info.sh
       - run: cargo cyclonedx --format json --all
       # The artifact holds the binary, named after its target, and the SBOMs
       # (one beside each workspace crate's Cargo.toml) under sbom-<target>/, so

@@ -36,8 +36,8 @@ use crate::rng::RandomFill;
 use crate::suite::sizes;
 
 macro_rules! secret32 {
-    ($(#[$doc:meta])* $vis:vis $name:ident) => {
-        $(#[$doc])*
+    ($(#[doc = $doc:expr])* $vis:vis $name:ident) => {
+        $(#[doc = $doc])*
         #[derive(Zeroize, ZeroizeOnDrop)]
         $vis struct $name([u8; sizes::KEY]);
 

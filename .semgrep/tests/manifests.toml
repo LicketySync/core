@@ -1,0 +1,103 @@
+# Cases for the rules in .semgrep/manifests.yml, run by ci/semgrep-scan.sh with
+#   semgrep --test --metrics=off --config .semgrep/manifests.yml .semgrep/tests/manifests.toml
+# in the form .semgrep/tests/project.rs describes: a comment naming a rule on
+# the line before each case. Not a manifest: keys repeat, and only the lines
+# matter. Its comments never spell a banned form; that would be a finding on
+# a line no case names.
+
+# proc_macros-only-by-allow-list: every way a manifest can make its library
+# one, and the words around it.
+[lib]
+# ruleid: proc_macros-only-by-allow-list
+proc-macro = true
+# ruleid: proc_macros-only-by-allow-list
+proc_macro = true
+# ruleid: proc_macros-only-by-allow-list
+"proc-macro" = true
+# ruleid: proc_macros-only-by-allow-list
+'proc-macro' = true
+# ruleid: proc_macros-only-by-allow-list
+crate-type = ["proc-macro"]
+# ruleid: proc_macros-only-by-allow-list
+lib.proc-macro = true
+# ruleid: proc_macros-only-by-allow-list
+lib = { name = "x", proc-macro = true }
+# A TOML escape spells it without the word.
+# ruleid: proc_macros-only-by-allow-list
+"proc\u002Dmacro" = true
+# ruleid: proc_macros-only-by-allow-list
+crate-type = ["proc\x2dmacro"]
+# The word in a comment fails closed.
+# ruleid: proc_macros-only-by-allow-list
+# A proc-macro would be simpler here.
+
+# Libraries of other kinds, and dependencies with longer names, pass.
+# ok: proc_macros-only-by-allow-list
+crate-type = ["rlib"]
+# ok: proc_macros-only-by-allow-list
+proc-macro2 = "1"
+# ok: proc_macros-only-by-allow-list
+proc-macro-error2 = "2"
+# A name that ends in it after a dash fails closed; after a letter it is
+# another word.
+# ruleid: proc_macros-only-by-allow-list
+my-proc-macro = "1"
+# ok: proc_macros-only-by-allow-list
+xproc-macro = "1"
+# ok: proc_macros-only-by-allow-list
+name = "licketysync-proc_macros"
+
+# build_scripts-only-by-allow-list: a build script named in any way, and the
+# key that needs one.
+[package]
+# ruleid: build_scripts-only-by-allow-list
+build = "build.rs"
+# ruleid: build_scripts-only-by-allow-list
+build = true
+# ruleid: build_scripts-only-by-allow-list
+"build"="gen/main.rs"
+# ruleid: build_scripts-only-by-allow-list
+package.build = "gen.rs"
+# ruleid: build_scripts-only-by-allow-list
+package = { name = "x", build = "gen.rs" }
+# A string that reads false is a file of that name.
+# ruleid: build_scripts-only-by-allow-list
+build = 'false'
+# ruleid: build_scripts-only-by-allow-list
+links = "z"
+# ok: build_scripts-only-by-allow-list
+build = false
+# ok: build_scripts-only-by-allow-list
+[profile.dev.build-override]
+# ok: build_scripts-only-by-allow-list
+rebuild = "x"
+
+# manifest_paths-name-crates-or-rust_files: a crate root or a dependency
+# anywhere else.
+# ruleid: manifest_paths-name-crates-or-rust_files
+path = "src/lib.txt"
+# ruleid: manifest_paths-name-crates-or-rust_files
+lib = { path = "src/lib" }
+# ruleid: manifest_paths-name-crates-or-rust_files
+path = "../../docs/notes.rs"
+# ruleid: manifest_paths-name-crates-or-rust_files
+path = "src/../../notes.rs"
+# ruleid: manifest_paths-name-crates-or-rust_files
+tools = { path = "../../tools" }
+# ruleid: manifest_paths-name-crates-or-rust_files
+"path" = 'src/lib.rs'
+# ruleid: manifest_paths-name-crates-or-rust_files
+lib.path = "vendor/x-1.0.0/../lib.txt"
+# The forms the repository uses, and a longer key.
+# ok: manifest_paths-name-crates-or-rust_files
+licketysync-keys = { path = "../keys" }
+# ok: manifest_paths-name-crates-or-rust_files
+licketysync-index = { path = "../crates/index" }
+# ok: manifest_paths-name-crates-or-rust_files
+path = "src/main.rs"
+# ok: manifest_paths-name-crates-or-rust_files
+path = "fuzz_targets/frame_decode.rs"
+# ok: manifest_paths-name-crates-or-rust_files
+libp2p-webtransport-websys = { path = "vendor/libp2p-webtransport-websys-0.6.0" }
+# ok: manifest_paths-name-crates-or-rust_files
+xpath = "x"

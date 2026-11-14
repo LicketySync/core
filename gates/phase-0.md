@@ -272,7 +272,10 @@ and 55ddfb4, both since deleted.
   - My scratch probe flags `p.canonicalize()`, `buf.canonicalize()`, `Path::canonicalize(p)` and
     `p.read_link()`, and leaves `symlink_metadata` alone.
   - New cost: `$P.canonicalize()` matches a method of that name on any type. That is acceptable
-    for a tripwire; a false hit takes a `nosemgrep` with a reason.
+    for a tripwire; a false hit takes a `nosemgrep` with a reason. (Note: the project rules now
+    run with `nosemgrep` ignored, `ci/semgrep-scan.sh` and `spec/threat-model.md` TM-7; a false
+    hit takes a reworded line or a narrower rule. `nosemgrep` still silences the community
+    rules.)
 - **Nothing new in code.** One new NIT, N12: the changelog entry of 8494dc3 calls protocol
   96.92% and index 96.95% "line coverage". Those figures are llvm-cov's **region** column. On this
   machine, with `gate.sh`'s command, the coverage is:

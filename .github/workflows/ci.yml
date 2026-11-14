@@ -81,8 +81,19 @@ jobs:
           components: clippy
           # browser-tests/webtransport (spike B) builds for wasm32 only.
           targets: wasm32-unknown-unknown
+      # No workspace crate's build in the cache, so that every .d file
+      # ci/check-dep-info.sh reads is this run's (also the default).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-workspace-crates: false
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The release build with default features, whose cfg clippy's does not
+      # have (debug_assertions off), checked only.
+      - run: cargo check --workspace --all-targets --release
+      # What rustc read for every workspace crate in those builds: only files the
+      # project rules scan (ci/check-dep-info.sh says why; gate.sh runs it too).
+      - run: ci/test-check-dep-info.sh
+      - run: ci/check-dep-info.sh
       - run: cargo clippy --manifest-path browser-tests/webtransport/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings -W clippy::pedantic
 
   test:
@@ -99,7 +110,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: 1.99.1
+      # As in the clippy job: no workspace crate's build in the cache.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-workspace-crates: false
       # cargo-nextest, and in the jobs below cargo-llvm-cov and cargo-udeps, at
       # their ci/pins.env versions, with no fallback (see the note in the deps
       # job).
@@ -109,6 +123,10 @@ jobs:
           fallback: none
       - run: cargo nextest run --workspace --all-features --no-fail-fast
       - run: cargo test --workspace --doc
+      # What rustc read for every workspace crate in this system's build
+      # (ci/check-dep-info.sh): a .d file reflects its build's cfg.
+      - run: ci/check-dep-info.sh
+        shell: bash
 
   coverage:
     name: coverage (cargo-llvm-cov, 90% on keys/protocol/index/engine)
@@ -238,9 +256,11 @@ jobs:
         with:
           toolchain: 1.99.1
           targets: ${{ matrix.target }}
+      # As in the clippy job: no workspace crate's build in the cache.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
+          cache-workspace-crates: false
       - name: Use the pinned NDK
         if: matrix.target == 'aarch64-linux-android'
         run: |
@@ -270,6 +290,9 @@ jobs:
           sudo xcode-select --switch "$app"
           xcodebuild -version
       - run: cargo build --locked -p licketysync-net --target ${{ matrix.target }}
+      # What rustc read for net and the workspace crates it builds, for this
+      # target (ci/check-dep-info.sh).
+      - run: ci/check-dep-info.sh
 
   docs:
     name: rustdoc (-D warnings)
@@ -382,16 +405,16 @@ jobs:
       image: semgrep/semgrep:1.182.0@sha256:4a34048c04fef049f71665047f074cffb00cc3d89482f965a5cd151d589237af
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The project rules' own cases first (.semgrep/tests/), so that a rule that
-      # stopped matching fails here rather than passing the scan silently. gate.sh
-      # runs both commands as they are here.
-      - run: semgrep --test --metrics=off --config .semgrep/project.yml .semgrep/tests/project.rs
-      # The cases are not findings, so the scan leaves .semgrep/ out. --timeout is
-      # per rule and file (default 5 s), and --error does not fail on a timeout,
-      # which skips that rule on that file: a review run saw the community
-      # unsafe-usage rule time out at 5 s on two keys test modules (each scans in
-      # under a second on the dev machine), so 60 s leaves a slow runner room.
-      - run: semgrep scan --metrics=off --timeout 60 --config p/rust --config .semgrep --exclude .semgrep --error
+      # The checkout's safe.directory is temporary, and the runner's user, not
+      # the image's root, owns the workspace, so git would refuse to list it.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # ci/semgrep-scan.sh, which gate.sh runs too, says what it checks: the
+      # project rules' own cases (.semgrep/tests/), so that a rule that stopped
+      # matching fails here rather than passing the scan silently; the project
+      # rules' scan, with nosemgrep off and every file in their scope scanned;
+      # and the community Rust rules'. ci/test-semgrep-scan.sh tests it first.
+      - run: ci/test-semgrep-scan.sh
+      - run: ci/semgrep-scan.sh
 
   # typos at TYPOS (ci/pins.env), the version gate.sh runs, installed by
   # install-action, which checks the archive's SHA-256 against its manifest,

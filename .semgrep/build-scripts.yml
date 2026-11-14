@@ -1,0 +1,22 @@
+# A project Semgrep rule on file names, apart from .semgrep/manifests.yml's
+# because it flags any file: `semgrep --test` ignores `paths` and would flag
+# the first line of every cases file, which no case can name. Its cases are in
+# ci/test-semgrep-scan.sh, on a made-up tree where `paths` apply.
+rules:
+  # TM-7, with build_scripts-only-by-allow-list in .semgrep/manifests.yml:
+  # cargo runs a package's build.rs as its build script, so every file of that
+  # name is flagged, wherever it is and in any case (on macOS and Windows
+  # cargo opens Build.rs for build.rs), but those listed under `exclude`.
+  - id: build_rs-only-by-allow-list
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      The workspace has no build script but those this rule's exclude list
+      names (threat-model.md TM-7): one can write unsafe code, joined from
+      strings, into a file its crate compiles in. Add one by a reviewed change
+      to this list and to build_scripts-only-by-allow-list's.
+    paths:
+      include: ["[Bb][Uu][Ii][Ll][Dd].[Rr][Ss]"]
+      # The allowed build scripts, each "/crates/<name>/build.rs". None yet.
+      exclude: []
+    pattern-regex: '\A[\s\S]'

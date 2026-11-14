@@ -357,7 +357,7 @@ fn a_drop_cuts_the_stream_cleanly_and_the_next_connection_starts_afresh() {
             "every byte was handed over once or dropped once"
         );
     }
-    assert!(any_lost, "seeds 0 to 7 at 10% include at least one drop");
+    assert!(any_lost, "seeds 0 to 7 at 10% have at least one drop");
 }
 
 #[test]

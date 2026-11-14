@@ -1,0 +1,71 @@
+# Project Semgrep rules on the Cargo manifests, as .semgrep/project.yml's are
+# on the code; their cases are in .semgrep/tests/manifests.toml, run by
+# `semgrep --test` in ci/semgrep-scan.sh as project.yml's are (one rules file
+# per cases file). Each rule's allow-list is its `exclude`, one manifest
+# ("/crates/<name>/Cargo.toml") per line, added by a reviewed change. Each
+# rule reads Cargo.toml in any case, as cargo does on macOS and Windows.
+rules:
+  # TM-7: a proc-macro crate's output can hold unsafe code that no source file
+  # spells (it can join the word from strings), and the crate it expands into
+  # does not see it, as with any macro of another crate. So the workspace has
+  # no proc-macro crate but those listed under `exclude`. A manifest may not
+  # name one, in `proc-macro = true`, its `proc_macro` spelling or crate-type,
+  # or anywhere else, comments included, which fails closed; nor hold a
+  # backslash, by which a TOML escape could spell it. A name that goes on
+  # after it with a letter, digit or dash (proc-macro2) passes; one that ends
+  # in it fails closed. Every Cargo.toml in the repository is checked, since a
+  # workspace crate can depend on any by path. A dependency's proc-macro is a
+  # supply-chain matter (TM-8).
+  - id: proc_macros-only-by-allow-list
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      The workspace has no proc-macro crate but those this rule's exclude list
+      names (threat-model.md TM-7): one can expand into unsafe code that no
+      source file spells and that the crate it expands into does not lint. A
+      manifest may not name proc-macro in any spelling, comments included,
+      nor hold a backslash. Add a proc-macro crate to that list by a reviewed
+      change.
+    paths:
+      include: ["[Cc][Aa][Rr][Gg][Oo].[Tt][Oo][Mm][Ll]", "/.semgrep/tests/**"]
+      # The allowed proc-macro crates. None yet.
+      exclude: []
+    pattern-regex: '\bproc[-_]macro(?![\w-])|\\'
+  # TM-7: a build script can write the same, joined from strings, into a file
+  # its crate compiles in, so the workspace has none but those listed under
+  # `exclude`: no manifest sets `build` (to anything but false) or `links`
+  # (which needs a build script), and .semgrep/build-scripts.yml flags every
+  # file named build.rs. Fails closed on a comment that reads like the key.
+  - id: build_scripts-only-by-allow-list
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      The workspace has no build script but those this rule's exclude list
+      names (threat-model.md TM-7): one can write unsafe code, joined from
+      strings, into a file its crate compiles in. A manifest may set build
+      only to false, and may not set links. Add a build script by a reviewed
+      change to the list here and in .semgrep/build-scripts.yml.
+    paths:
+      include: ["[Cc][Aa][Rr][Gg][Oo].[Tt][Oo][Mm][Ll]", "/.semgrep/tests/**"]
+      # The allowed build scripts. None yet.
+      exclude: []
+    pattern-either:
+      - pattern-regex: '(?<![\w-])["'']?build["'']?\s*=(?!\s*false\b)'
+      - pattern-regex: '(?<![\w-])["'']?links["'']?\s*='
+  # TM-7: a manifest's path can name a crate's root file, of any name and from
+  # anywhere. So a path value must be a crate directory one step up ("../keys",
+  # or "../crates/keys" from a package beside crates/), a Rust file inside the
+  # package ("src/main.rs"), or a vendored copy ("vendor/<name>-<x.y.z>");
+  # every other value fails, as does one that is not a double-quoted string.
+  - id: manifest_paths-name-crates-or-rust_files
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      A manifest's path names a crate directory one step up ("../keys" or
+      "../crates/keys"), a Rust file inside the package ("src/main.rs") or a
+      vendored copy ("vendor/<name>-<x.y.z>"), nothing else
+      (threat-model.md TM-7): another value can compile in a file the rule
+      unsafe_code-only-in-ffi-crates does not scan.
+    paths:
+      include: ["[Cc][Aa][Rr][Gg][Oo].[Tt][Oo][Mm][Ll]", "/.semgrep/tests/**"]
+    pattern-regex: '(?<![\w-])["'']?path["'']?\s*=(?!\s*"(?:\.\./(?:crates/)?[a-z0-9_-]+|(?:[a-z0-9_-]+/)*[a-z0-9_-]+\.rs|vendor/[a-z0-9_-]+-[0-9]+\.[0-9]+\.[0-9]+)")'

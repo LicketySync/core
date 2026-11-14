@@ -694,15 +694,53 @@ and rustls types that are not wiped on drop (`suites.md` 4.1); its rustls config
 rustls's default key log, which writes nothing.
 
 **TM-7. No `unsafe` outside the platform-FFI crates.** The workspace lint `unsafe_code = "forbid"`
-applies everywhere; a platform-FFI crate opts out explicitly and is covered by Miri nightly;
-cargo-geiger's count is a report that CI publishes and reviewers read, and `ci/geiger.sh` (CI and
-`gate.sh`) fails when any of a crate's five used unsafe counts (functions, expressions, impls,
+applies everywhere; a platform-FFI crate opts out explicitly, is covered by Miri nightly and exports
+no macro. The lint sees a crate's own code and macros, but not what a macro defined in another crate
+expands into it, and cargo-geiger counts no macro body. So Semgrep rules in `.semgrep/` ban by
+spelling, each but for the crates its allow-list names, which only a reviewed change extends: in
+every file rustc reads for a workspace crate (under `crates/`, every `.rs` file, every `Cargo.toml`,
+the root's `clippy.toml`, the fuzz seeds; `ci/scope.py`), the words of the constructs the lint
+forbids (`unsafe`, `no_mangle`, `export_name`, `link_section`, `global_asm`) as text, and the
+keyword `extern`, since an extern block links native code that can run before `main`, edition 2021
+writes it without `unsafe`, and a macro can build one from the keyword wherever it is written
+(`unsafe_code-only-in-ffi-crates`, `extern_keyword-only-in-ffi-crates`; the extern ban leaves out
+the vendored wasm-bindgen `bindings.rs` of `browser-tests`, in a tree no workspace crate may read);
+under `crates/` and in every `.rs` file, `include!` and its kin and the path attribute, with the
+parts a macro could build one from (`other_files-only-as-data`); in manifests, proc-macro crates,
+build scripts and paths to anything but a crate directory or a Rust file
+(`proc_macros-only-by-allow-list`, `build_scripts-only-by-allow-list`,
+`build_rs-only-by-allow-list`, `manifest_paths-name-crates-or-rust_files`). File names count in any
+case, as macOS and Windows read them. `ci/semgrep-scan.sh` (CI and `gate.sh`) runs the rules with
+`nosemgrep` ignored and fails when the scan skips a file in their scope; on a name with a control
+character, a symbolic link or a cargo configuration file (which could add rustflags, environment or
+a linker) anywhere; on a second `.semgrepignore`; and on a manifest path that does not resolve to a
+`.rs` file or a crate git lists. Text cannot see a path attribute that a macro assembles from tokens
+passed one at a time, so `ci/check-dep-info.sh` reads every dep-info file under the target
+directory, strictly, and fails when a workspace crate read, resolved as rustc resolved it, any file
+but one the rules scan outside the vendored tree, an untracked compiled artifact under the target
+directory, or a compiled crate outside the repository (each known by its name and signature
+together, and by not being UTF-8, which rustc reads every source as), when a file it names is
+missing, and when git lists a file under the target directory in any case. Each .d holds only its
+build's cfg; the check runs after the gate's builds (dev with all features, and a release check with
+default features and `-D warnings`), CI's (the same on Linux, tests with all features on Linux,
+Windows and macOS, and net with default features for Android and iOS) and `release.yml`'s release
+build. cargo-geiger's count is a report that CI publishes and reviewers read, and `ci/geiger.sh` (CI
+and `gate.sh`) fails when any of a crate's five used unsafe counts (functions, expressions, impls,
 traits, methods) differs from `ci/geiger-baseline.txt`, until a reviewed change to that file accepts
 the new counts. CI scans in full on pushes to main and on pull requests; `gate.sh` skips the scan
 when the inputs `ci/geiger.sh` lists are those of a scan that passed. The gate catches a change in
 the unsafe code the build uses when its listing covers the change; otherwise CI catches it on main,
-where it is fixed forward. Stops memory-safety bugs reachable from untrusted input. Enforced by
-`core/Cargo.toml` (the lint), `ci/geiger.sh` (the counts) and review (each change to them).
+where it is fixed forward. Left to review, with TM-8 (cargo-vet): a dependency's macro that wraps
+its caller's tokens in unsafe code, joins identifiers (`paste` is in `Cargo.lock`) or emits an
+extern block or `#[link]`, a dependency's proc-macro, and a dependency's build script. Also left to
+review: cargo configuration outside the repository; the build environment the workflows set
+(`RUSTFLAGS`, `CARGO_TARGET_*_LINKER`, link arguments); code compiled only for a target or feature
+set no checked build has (the workspace crates other than net and its dependencies on Android and
+iOS, other targets, and release builds with other features); and the builds that leave no checked .d
+file, all test-only: doc-tests, the fuzz builds (`cfg(fuzzing)`) and the coverage build
+(`cfg(coverage)`). Stops memory-safety bugs reachable from untrusted input. Enforced by
+`core/Cargo.toml` (the lint), the rules, `ci/semgrep-scan.sh` and `ci/check-dep-info.sh`,
+`ci/geiger.sh` (the counts) and review (each change to them).
 
 **TM-8. A dependency enters only by a reviewed change with a written reason.** A new dependency needs
 the reason in the changelog and the report, an active upstream, a clean `cargo deny check`,

@@ -3,9 +3,9 @@
 # practice). It runs every CI check that can fail and fits on one machine,
 # with the tools and Rust toolchains at the versions ci/pins.env pins for CI
 # (required; bootstrap.sh installs them): the cargo checks, typos, the Semgrep
-# rule cases and scan, the cargo-geiger counts, which must equal
-# ci/geiger-baseline.txt, and the checks that every action in the workflows is
-# pinned by commit and every toolchain they name is pinned
+# rule cases and scans (ci/semgrep-scan.sh), the cargo-geiger counts, which
+# must equal ci/geiger-baseline.txt, and the checks that every action in the
+# workflows is pinned by commit and every toolchain they name is pinned
 # (ci/pinned-actions.sh, ci/toolchains.sh). gitleaks runs over the working tree
 # when it is installed (the plan's local check; CI scans the full history). CI
 # adds the other operating systems, CodeQL, and ClusterFuzzLite once it is
@@ -253,10 +253,11 @@ step cargo "+$RUST_NIGHTLY" udeps --workspace --all-targets
 # a workspace of its own).
 step cargo fetch --locked --manifest-path fuzz/Cargo.toml
 step typos
-# Semgrep as CI runs it. The scan covers the files git tracks, so `git add` (or
-# `git add -N`) a new file first.
-step semgrep --test --metrics=off --config .semgrep/project.yml .semgrep/tests/project.rs
-step semgrep scan --metrics=off --timeout 60 --config p/rust --config .semgrep --exclude .semgrep --error
+# Semgrep as CI runs it: the project rules' cases, then the scans (the script
+# says what it checks), first tested on made-up trees. The scans cover the
+# files git tracks and the untracked ones it does not ignore.
+step ci/test-semgrep-scan.sh
+step ci/semgrep-scan.sh
 # gitleaks, the gate's one optional step: bootstrap.sh does not install it.
 if command -v gitleaks > /dev/null; then
   step ci/gitleaks.sh tree
@@ -296,6 +297,8 @@ step ci/test-download.sh
 step ci/check-downloads.sh
 # The helper above that picks sccache, on a stand-in.
 step ci/test-rustc-wrapper.sh
+# ci/check-dep-info.sh, which runs after the builds below, on toy crates.
+step ci/test-check-dep-info.sh
 # 90% line coverage on each of the crates the plan names, and on the index
 # crate, which TM-17, TM-40 and TM-41 name as their enforcer (review ruling of
 # 2026-10-22), measured per crate: only that crate's own files count, so a
@@ -321,4 +324,11 @@ for c in "${covered[@]}"; do
   step cargo llvm-cov nextest --all-features --fail-under-lines 90 \
     -p "licketysync-$c" --ignore-filename-regex "crates/($others)/"
 done
+# The release build with default features, whose cfg the builds above do not
+# have (debug_assertions off), checked only, with CI's -D warnings (its own
+# profile, so the builds above keep their caches; 58 s cold, 0 to 4 s warm,
+# 239 MB); then what rustc read for each workspace crate in every build above:
+# only files the project rules scan (ci/check-dep-info.sh says why).
+step env RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --release
+step ci/check-dep-info.sh
 echo "== gate passed"

@@ -1,0 +1,6 @@
+# Semgrep reads this file in place of its default list, which skips every
+# directory named tests, test, vendor, build, dist or node_modules, among
+# others. A module in such a directory compiles like any other, so the scan
+# skips nothing here (threat-model.md TM-7). ci/semgrep-scan.sh leaves out the
+# two cases files by --exclude, and fails when git lists another
+# .semgrepignore.

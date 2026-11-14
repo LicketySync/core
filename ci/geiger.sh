@@ -68,9 +68,11 @@
 # crate's macro compiles in (sqlx::migrate!, say); the content of a file
 # outside crates/ that a crate compiles in (a trigger lists the crate's own
 # files, not that one), or one compiled in by means no trigger names; and unsafe
-# code that another crate's macro expands into a crate that forbids it (a
-# Semgrep rule's to cover). Deliberate obfuscation beyond the triggers is left
-# to CI's full scan and to review.
+# code that another crate's macro expands into a crate that forbids it
+# (the Semgrep rules in .semgrep/ ban its words in the workspace's own code,
+# macros included; TM-7 says what is left).
+# Deliberate obfuscation beyond the triggers is left to CI's full scan and to
+# review.
 # A crate may not use unsafe code when its [lints] holds only
 # `workspace = true` and Cargo.toml's [workspace.lints.rust] has the line
 # `unsafe_code = "forbid"`, unless an exported *RUSTFLAGS or a configuration

@@ -27,8 +27,8 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 macro_rules! id32 {
-    ($(#[$doc:meta])* $name:ident) => {
-        $(#[$doc])*
+    ($(#[doc = $doc:expr])* $name:ident) => {
+        $(#[doc = $doc])*
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(pub [u8; sizes::ID]);
 
