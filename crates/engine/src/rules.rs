@@ -51,7 +51,7 @@ fn pending(net: &Net, i: usize, hash: &CipherHash) -> bool {
     v.pending_free.contains(hash)
 }
 
-fn file(net: &Net, i: usize, path: &str) -> Option<FileView> {
+pub(crate) fn file(net: &Net, i: usize, path: &str) -> Option<FileView> {
     net.nodes[i]
         .engine
         .files(&folder())
@@ -150,7 +150,7 @@ fn an_open_finishes_the_pending_free_list_before_the_folder_syncs() {
 /// A pair in conflict at `f.txt`: node 0 wrote V1, then V2, whose chunk node
 /// 1 had not yet when it wrote its own edit over V1, its base. Returns V2 and
 /// the edit, once both are on both disks.
-fn conflict() -> (Net, RecordHash, RecordHash) {
+pub(crate) fn conflict() -> (Net, RecordHash, RecordHash) {
     let mut net = pair();
     let v1 = write(&mut net, 0, "f.txt", &[1u8; 2000]).unwrap();
     net.advance(Duration::from_secs(3));

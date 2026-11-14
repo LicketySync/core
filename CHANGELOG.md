@@ -209,6 +209,28 @@ changed and why.
   fire, and a handler with nothing to do and the silent peer's cheap frame, each at the deadline
   and 1 ms after it.
 
+- Engine: a rename that would write one path twice is refused as the caller's mistake,
+  `WriteFailure::RenameOntoItself` (new), and no longer returns `WriteFailure::Internal` and counts
+  an engine bug (severity Low). A rename is a version at the new path and a tombstone at the old
+  one, in one commit, and it first writes each conflict copy on the disk beside either path as a
+  version at the copy's name (protocol.md 4.4, "What becomes of a conflict copy"). So a rename onto
+  itself, between a path and the name of one of its copies, or between two paths with a copy of one
+  name named one path twice in its batch, which the index refuses (`WriteError::DuplicatePath`): a
+  caller's mistake showed as an internal error and raised the counter that honest runs keep at 0.
+  Each is now refused up front, before anything is built and before `NoSuchPath`, since a copy is
+  no file of its own until a write over its path promotes it; `Internal` is left to engine bugs.
+  Two paths' copies share no name while a copy's name holds its whole path; the check stands for
+  any naming that shortens it. A rename onto itself is refused, not done as nothing as POSIX
+  `rename(2)` does: a write that returns `Ok` has signed a record and returns its hash, which the
+  simulator's ledger takes for a record this device wrote, and a rename that changes nothing has
+  none to return (after a conflict, not even one version); the engine's other mistakes of the
+  caller, a bad path or nothing at the path, are refusals too. Found by the engine mutants batch 1
+  reviews (the rename onto itself), by reading (a copy's name) and by the security review (a shared
+  copy name). Regression tests `a_rename_of_a_path_to_itself_counts_no_engine_bug`,
+  `a_rename_between_a_path_and_one_of_its_conflict_copies_counts_no_engine_bug` and
+  `a_rename_between_two_paths_whose_conflict_copies_share_a_name_counts_no_engine_bug` (a planted
+  copy slot).
+
 - Engine: tests that catch the 25 mutants of the engine crate's first batch that the Mutants run
   on 9349d4f found surviving, and two more in the same functions that the unit tests alone let
   through. Tests only, and one test helper, `plant_and_restart`, which plants records and restarts
@@ -251,13 +273,13 @@ changed and why.
     `Engine::failed_commit`, `ConnSync::clear` and `Engine::reply_failed`, with the tests as they
     are now, caught all 9 of their mutants by assertions, none timed out or stopped by a cap. Each
     of the 27 is caught by the test written for it. No mutant was found equivalent.
-  - Two defects found while testing, each left for a change of its own: a write, delete, rename
-    or mkdir at a path of 4 077 bytes or more that has a conflict copy is refused with
-    `WriteFailure::Path(TooLong)`, since phase 0's copy name (the path, ` (conflict ` and eight
-    hex digits) passes the 4 096 bytes of the path grammar, so that conflict cannot be resolved
-    by writing the path; and a rename of a path to itself returns `WriteFailure::Internal` and
-    counts an engine bug, since the index refuses a batch that names one path twice
-    (`DuplicatePath`).
+  - Two defects found while testing: a write, delete, rename or mkdir at a path of 4 077 bytes
+    or more that has a conflict copy is refused with `WriteFailure::Path(TooLong)`, since phase
+    0's copy name (the path, ` (conflict ` and eight hex digits) passes the 4 096 bytes of the
+    path grammar, so that conflict cannot be resolved by writing the path, left for a change of
+    its own; and a rename of a path to itself returns `WriteFailure::Internal` and counts an
+    engine bug, since the index refuses a batch that names one path twice (`DuplicatePath`),
+    fixed by the entry above, "a rename that would write one path twice".
 
 - Engine: tests that catch the engine crate's second batch of surviving and timed-out mutants
   (Mutants run 43341050834, on 59783b1: 26 in `engine.rs`, `transfer.rs`, `issues/`, `pacing.rs`,
@@ -3040,6 +3062,10 @@ changed and why.
     scenario; a future scenario that plants them must make (b′) skip each path with no heads and an
     opaque record. And the identical-heads fix's two (its entry, "For phase 1", 2026-11-08): modes
     between concurrent twins, and the cost of finding twins beside TM-22's bounds.
+    And three from the rename fix ("a rename that would write one path twice"):
+    - how a rename on the disk between a path and one of its conflict copies is recorded;
+    - a directory move: versions at every new path, then a tree delete; none into itself;
+    - normalising both paths before `refuse_up_front` compares them.
   - Dependencies: none new; the engine depends on the workspace's keys, protocol and index crates,
     dev-depends on the simulator and `proptest`; the simulator depends on the keys crate;
     `ci/geiger-baseline.txt`'s `engine` and `sim` lines now count the keys crate's dependencies.

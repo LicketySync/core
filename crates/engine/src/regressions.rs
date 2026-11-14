@@ -21,13 +21,16 @@ use licketysync_protocol::connection::Timing;
 use licketysync_protocol::frame::{Frame, MessageType};
 
 use crate::config::EngineConfig;
+use crate::inspect::Place;
 use crate::issues::{IssueClass, IssueKind, StoreFailureCause, Subject};
+use crate::rules::{conflict, file};
 use crate::runtime::{Instant, Peer, PeerId, Storage};
 use crate::store::{chunk_key, held_key};
+use crate::sync::disk::copy_name;
 use crate::testkit::{config, folder_key, Hold, Net};
 use crate::tests::{folder, pair, state, write};
 use crate::timers::Purpose;
-use crate::FolderState;
+use crate::{FolderState, WriteFailure};
 
 fn key_config(n: u8) -> EngineConfig {
     config(n, vec![folder_key(1, 1)])
@@ -778,4 +781,141 @@ fn a_chunk_whose_patience_runs_out_while_another_handler_runs_is_offered_elsewhe
         })
         .collect();
     assert!(fetched.iter().all(|(_, ok)| *ok), "{fetched:?}");
+}
+
+/// The bases on node `i`'s disk at `path`, and the records it holds.
+fn disk_and_records(
+    net: &Net,
+    i: usize,
+    path: &str,
+) -> (Vec<(Place, RecordHash)>, Vec<RecordHash>) {
+    let n = &net.nodes[i].engine;
+    let bases = file(net, i, path).map(|v| v.bases).unwrap_or_default();
+    let records = n
+        .folder(&folder())
+        .unwrap()
+        .records
+        .iter()
+        .map(|r| r.hash)
+        .collect();
+    (bases, records)
+}
+
+#[test]
+fn a_rename_of_a_path_to_itself_counts_no_engine_bug() {
+    // Engine mutants batch 1 reviews, the bug: a rename onto its own path
+    // built a version and a tombstone at that one path, which the index
+    // refuses as one path twice in a batch (`WriteError::DuplicatePath`), so
+    // the caller's mistake came back as `Internal` and counted an engine bug.
+    // It is refused up front, as the caller's, and writes nothing.
+    let mut net = Net::new(vec![key_config(0)]);
+    let f = folder();
+    let a = write(&mut net, 0, "a.txt", b"a").unwrap();
+    let before = disk_and_records(&net, 0, "a.txt");
+    assert_eq!(before.0, vec![(Place::Path, a)]);
+    assert_eq!(
+        net.with(0, |e, cx| e.rename(cx, f, "a.txt", "a.txt", 1)),
+        Err(WriteFailure::RenameOntoItself)
+    );
+    assert_eq!(net.nodes[0].engine.counters().internal_errors, 0);
+    assert_eq!(
+        disk_and_records(&net, 0, "a.txt"),
+        before,
+        "nothing written"
+    );
+}
+
+#[test]
+fn a_rename_between_a_path_and_one_of_its_conflict_copies_counts_no_engine_bug() {
+    // The same bug, found by reading. A rename writes each of its paths over
+    // the heads on the disk there, so it first writes each conflict copy
+    // beside either path as a version at the copy's name (4.4, "What becomes
+    // of a conflict copy"). Renamed onto one of its copies' names, the path's
+    // version and the copy's met at that name; a file written at a copy's
+    // name and renamed onto the copy's path met the copy's version with its
+    // tombstone. Each was `Internal`, an engine bug counted; each is refused
+    // up front, as the caller's, and writes nothing.
+    let (mut net, _, _) = conflict();
+    let f = folder();
+    let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
+    let name = copy_name("f.txt", &copy);
+    let before = disk_and_records(&net, 0, "f.txt");
+    assert!(
+        before.0.contains(&(Place::Copy(name.clone()), copy)),
+        "the copy is on node 0's disk"
+    );
+    assert_eq!(
+        net.with(0, |e, cx| e.rename(cx, f, "f.txt", &name, 9)),
+        Err(WriteFailure::RenameOntoItself),
+        "onto the copy's name"
+    );
+    assert_eq!(
+        disk_and_records(&net, 0, "f.txt"),
+        before,
+        "nothing written"
+    );
+    assert_eq!(
+        net.with(0, |e, cx| e.rename(cx, f, &name, "f.txt", 9)),
+        Err(WriteFailure::RenameOntoItself),
+        "from the copy's name onto its path, with nothing written at the name: checked before \
+         NoSuchPath, since the copy is no file of its own until a write over the path"
+    );
+    assert_eq!(
+        disk_and_records(&net, 0, "f.txt"),
+        before,
+        "nothing written"
+    );
+    write(&mut net, 0, &name, b"named as the copy").unwrap();
+    let before = disk_and_records(&net, 0, "f.txt");
+    assert_eq!(
+        net.with(0, |e, cx| e.rename(cx, f, &name, "f.txt", 9)),
+        Err(WriteFailure::RenameOntoItself),
+        "from the copy's name onto its path"
+    );
+    assert_eq!(
+        disk_and_records(&net, 0, "f.txt"),
+        before,
+        "nothing written"
+    );
+    assert_eq!(net.nodes[0].engine.counters().internal_errors, 0);
+}
+
+#[test]
+fn a_rename_between_two_paths_whose_conflict_copies_share_a_name_counts_no_engine_bug() {
+    // The security review of the rename fix: a rename first writes each
+    // conflict copy beside either of its paths as a version at the copy's
+    // name, so a copy beside each path under one name met at that name
+    // (`WriteError::DuplicatePath`): `Internal`, an engine bug counted.
+    // Phase 0's copy names hold the whole path, so no two paths' copies
+    // share one; a shortened name could. The slot beside `g.txt` is planted.
+    let (mut net, _, _) = conflict();
+    let f = folder();
+    let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
+    let name = copy_name("f.txt", &copy);
+    let g = write(&mut net, 0, "g.txt", b"g").unwrap();
+    let index = &mut net.nodes[0].engine.folders.get_mut(&f).unwrap().index;
+    let mut txn = index.begin();
+    txn.set_base("g.txt", Place::Copy(name.clone()), Some(g))
+        .unwrap();
+    let (_, pending) = txn.finish();
+    pending.commit();
+    let before = [
+        disk_and_records(&net, 0, "f.txt"),
+        disk_and_records(&net, 0, "g.txt"),
+    ];
+    assert!(before[0].0.contains(&(Place::Copy(name.clone()), copy)));
+    assert!(
+        before[1].0.contains(&(Place::Copy(name), g)),
+        "the planted slot"
+    );
+    assert_eq!(
+        net.with(0, |e, cx| e.rename(cx, f, "f.txt", "g.txt", 9)),
+        Err(WriteFailure::RenameOntoItself)
+    );
+    assert_eq!(net.nodes[0].engine.counters().internal_errors, 0);
+    let after = [
+        disk_and_records(&net, 0, "f.txt"),
+        disk_and_records(&net, 0, "g.txt"),
+    ];
+    assert_eq!(after, before, "nothing written");
 }

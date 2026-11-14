@@ -12,7 +12,8 @@
 //!
 //! 1. It refuses up front, recording nothing and sending nothing, for a read
 //!    or sealed key (`keys.md` 1.3: it cannot sign), a folder paused, kept
-//!    closed or not usable, or a path that `check_path` refuses. NFC is the
+//!    closed or not usable, a path that `check_path` refuses, or a rename
+//!    that would write one path twice in one commit (step 3). NFC is the
 //!    caller's duty in phase 0 (gap G8: no normaliser is in the dependency
 //!    set; the workloads use ASCII; phase 1's scanner adds one).
 //! 2. A file is cut into fixed-size chunks of `chunk_size` (decision:
@@ -48,7 +49,7 @@
 use core::fmt;
 use std::collections::BTreeSet;
 
-use licketysync_index::{Change, Place, Put, WriteError};
+use licketysync_index::{Change, Index, Place, Put, WriteError};
 use licketysync_keys::chunk::{seal_chunk, SealedChunk};
 use licketysync_keys::{CipherHash, FolderId, RecordHash};
 use licketysync_protocol::limits::MAX_CHUNKS;
@@ -81,6 +82,15 @@ pub enum WriteFailure {
     Path(PathError),
     /// A delete or a rename of a path with nothing on the disk.
     NoSuchPath,
+    /// A rename that would write one path twice in one commit: onto its own
+    /// path, between a path and the name of one of the conflict copies on
+    /// the disk beside it, or between two paths with a copy of one name. A
+    /// rename first writes each copy beside either path as a version at the
+    /// copy's name (4.4, "What becomes of a conflict copy"). Checked before
+    /// [`WriteFailure::NoSuchPath`], so a rename from a copy's name onto its
+    /// path is this refusal: a copy is no file of its own until a write over
+    /// its path promotes it.
+    RenameOntoItself,
     /// More chunks than a record may name (`MAX_CHUNKS`).
     TooLarge,
     /// The next counter would pass `MAX_COUNTER`: the folder must be shared
@@ -102,6 +112,7 @@ impl fmt::Display for WriteFailure {
             Self::NotUsable => f.write_str("the folder cannot be used"),
             Self::Path(e) => write!(f, "{e}"),
             Self::NoSuchPath => f.write_str("nothing is on the disk at that path"),
+            Self::RenameOntoItself => f.write_str("a rename that would write one path twice"),
             Self::TooLarge => f.write_str("the file needs more chunks than a record names"),
             Self::CounterExhausted => {
                 f.write_str("the folder's counter is exhausted: share it again")
@@ -143,6 +154,22 @@ impl Edit<'_> {
     }
 }
 
+/// The names of the conflict copies on the disk beside `path`: its
+/// `Place::Copy` bases. A write over `path` promotes those whose record is
+/// still a head (`Engine::promotions`); a slot whose record is no head is
+/// named here too, which only refuses more, and that copy is still on the
+/// disk.
+fn copy_names(index: &Index, path: &str) -> BTreeSet<String> {
+    index
+        .bases(path)
+        .into_iter()
+        .filter_map(|(place, _)| match place {
+            Place::Copy(name) => Some(name),
+            Place::Path => None,
+        })
+        .collect()
+}
+
 /// The plaintext pieces of `content`: fixed-size chunks of `chunk_size`
 /// bytes, the last one shorter; none for an empty file.
 pub(crate) fn cut(content: &[u8], chunk_size: usize) -> impl Iterator<Item = &[u8]> + '_ {
@@ -182,7 +209,9 @@ impl Engine {
     }
 
     /// Renames `from` to `to`: a version at `to` with the content of `from`'s
-    /// base, then a tombstone at `from`, in one commit (4.7 item 6).
+    /// base, then a tombstone at `from`, in one commit (4.7 item 6). A rename
+    /// that would write one path twice is refused
+    /// ([`WriteFailure::RenameOntoItself`]).
     ///
     /// # Errors
     /// [`WriteFailure`].
@@ -279,8 +308,16 @@ impl Engine {
             return Err(WriteFailure::Paused);
         }
         check_path(op.path()).map_err(WriteFailure::Path)?;
-        if let Edit::Rename { from, .. } = op {
+        if let Edit::Rename { from, to } = op {
             check_path(from).map_err(WriteFailure::Path)?;
+            let (beside_from, beside_to) = (copy_names(&f.index, from), copy_names(&f.index, to));
+            if from == to
+                || beside_from.contains(*to)
+                || beside_to.contains(*from)
+                || !beside_from.is_disjoint(&beside_to)
+            {
+                return Err(WriteFailure::RenameOntoItself);
+            }
         }
         Ok(())
     }
@@ -528,6 +565,7 @@ mod tests {
             WriteFailure::NotUsable,
             WriteFailure::Path(PathError::Empty),
             WriteFailure::NoSuchPath,
+            WriteFailure::RenameOntoItself,
             WriteFailure::TooLarge,
             WriteFailure::CounterExhausted,
             WriteFailure::Store(StoreFailureCause::Full),
