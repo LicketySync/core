@@ -103,7 +103,7 @@ jobs:
       # cargo-nextest, and in the jobs below cargo-llvm-cov and cargo-udeps, at
       # their ci/pins.env versions, with no fallback (see the note in the deps
       # job).
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: cargo-nextest@0.9.150
           fallback: none
@@ -120,7 +120,7 @@ jobs:
           toolchain: 1.99.1
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: cargo-llvm-cov@0.9.1,cargo-nextest@0.9.150
           fallback: none
@@ -300,7 +300,7 @@ jobs:
       # `fallback: none` makes a version missing from install-action's manifest
       # fail here instead of going to cargo-binstall, which can fetch an
       # unverified binary and is handed github.token.
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-machete@0.9.2
           fallback: none
@@ -344,7 +344,7 @@ jobs:
         with:
           toolchain: nightly-2026-10-27
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: cargo-udeps@0.1.61
           fallback: none
@@ -403,7 +403,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: typos@1.51.1
           fallback: none

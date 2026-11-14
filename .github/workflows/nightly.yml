@@ -32,7 +32,7 @@ jobs:
           toolchain: 1.99.1
       # The version ci.yml's deps job pins and gate.sh checks, with no fallback
       # (see the note there).
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: cargo-audit@0.22.2
           fallback: none
@@ -129,7 +129,7 @@ jobs:
           components: rust-src
       # The version gate.sh checks, with no fallback (see the note in ci.yml's
       # deps job).
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
         with:
           tool: cargo-careful@0.4.10
           fallback: none
