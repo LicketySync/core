@@ -368,7 +368,8 @@ jobs:
       # ci/geiger.sh prints the report, accepts cargo-geiger's exit 1 only for
       # warnings about files it cannot or need not scan, and fails when any of a
       # crate's five used unsafe counts differs from the baseline; gate.sh runs
-      # the same two scripts.
+      # the same two scripts. CI is set here, so it always scans, where a local
+      # run skips a scan whose inputs passed before.
       - run: ci/test-geiger.sh
       - run: ci/geiger.sh
 
@@ -474,7 +475,9 @@ jobs:
   # transient failure (the gitleaks job's HTTP 504 failed run 42568260092),
   # with its tests, on a stand-in curl and on a server on 127.0.0.1, and
   # ci/check-downloads.sh, which fails a script that calls curl or wget on
-  # its own. gate.sh runs the same.
+  # its own; and the tests of ci/rustc-wrapper.sh, which picks sccache for
+  # gate.sh and ci/mutants.sh when it is installed (here it is not). gate.sh
+  # runs the same.
   # timeout-minutes: the steps take about 10 seconds together, and
   # ci/test-download.sh ends a hung download test after 60 seconds, so 10
   # minutes is ample and a hung step cannot hold the runner for the default 6
@@ -496,3 +499,4 @@ jobs:
       - run: ci/test-check-pins.sh
       - run: ci/test-download.sh
       - run: ci/check-downloads.sh
+      - run: ci/test-rustc-wrapper.sh

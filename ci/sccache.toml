@@ -1,0 +1,4 @@
+# sccache's configuration for the builds of gate.sh and ci/mutants.sh
+# (ci/rustc-wrapper.sh names it in SCCACHE_CONF, in place of the user's own):
+# empty on purpose, so sccache keeps its cache on the local disk only, in
+# SCCACHE_DIR, with no remote cache and no distributed compilation.

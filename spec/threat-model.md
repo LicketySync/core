@@ -695,10 +695,12 @@ rustls's default key log, which writes nothing.
 applies everywhere; a platform-FFI crate opts out explicitly and is covered by Miri nightly;
 cargo-geiger's count is a report that CI publishes and reviewers read, and `ci/geiger.sh` (CI and
 `gate.sh`) fails when any of a crate's five used unsafe counts (functions, expressions, impls,
-traits, methods) differs from `ci/geiger-baseline.txt`, so every change in the unsafe code the build
-uses lands with a reviewed change to that file. Stops memory-safety bugs reachable from untrusted
-input. Enforced by `core/Cargo.toml` (the lint), `ci/geiger.sh` (the counts) and review (each change
-to them).
+traits, methods) differs from `ci/geiger-baseline.txt`, until a reviewed change to that file accepts
+the new counts. CI scans in full on pushes to main and on pull requests; `gate.sh` skips the scan
+when the inputs `ci/geiger.sh` lists are those of a scan that passed. The gate catches a change in
+the unsafe code the build uses when its listing covers the change; otherwise CI catches it on main,
+where it is fixed forward. Stops memory-safety bugs reachable from untrusted input. Enforced by
+`core/Cargo.toml` (the lint), `ci/geiger.sh` (the counts) and review (each change to them).
 
 **TM-8. A dependency enters only by a reviewed change with a written reason.** A new dependency needs
 the reason in the changelog and the report, an active upstream, a clean `cargo deny check`,

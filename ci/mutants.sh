@@ -12,7 +12,9 @@
 # .cargo/mutants.toml, which cargo-mutants reads from the repository root, here
 # and in any run by hand, and which says why (a mutant that only leaves
 # something unused is tested, not counted unviable). ci/test-mutants.sh checks
-# that the listing and the run both get it.
+# that the listing and the run both get it. They build through sccache when it
+# is installed (ci/rustc-wrapper.sh, sourced before the listing; CI installs
+# none).
 #
 # On Linux every test process runs under caps on its memory and on the files
 # it writes (below), so that a mutant whose tests grow without bound fails its
@@ -54,6 +56,8 @@ if ! [[ $budget =~ ^[1-9][0-9]*[smh]$ ]]; then
   echo "the budget must be a whole number of s, m or h, such as 180m; got: $budget" >&2
   exit 1
 fi
+# This script's directory, for ci/rustc-wrapper.sh below.
+ci_dir=$(cd "$(dirname "$0")" && pwd)
 cd "${3:-$(dirname "$0")/..}"
 
 # timeout(1) by its path where it is there: a `timeout` earlier on PATH can be
@@ -113,6 +117,10 @@ case $host in
     ;;
   *) echo "== the test processes run uncapped: prlimit is Linux only, and the host is $host" ;;
 esac
+
+# sccache as rustc's wrapper, when it is installed (the helper says why).
+# shellcheck source=ci/rustc-wrapper.sh
+. "$ci_dir/rustc-wrapper.sh"
 
 picked=(--package licketysync-keys --package licketysync-protocol --package licketysync-index
   --package licketysync-engine --no-shuffle --sharding round-robin --shard "$shard")

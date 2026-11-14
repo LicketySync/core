@@ -6,6 +6,172 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Gate: four measured speed-ups, and sccache on one server of its own when it is installed. On the
+  development machine (8 cores), timed step by step, a warm `gate.sh` took 901 s; with the four
+  changes and sccache it takes 237 s when cargo-geiger's inputs are unchanged and 421 s when they
+  changed. The time went to every test run twice at opt-level 0 (by nextest, then by the coverage
+  loop) and to a cargo-geiger scan that rebuilds and rescans every crate on every run. Each part
+  stays correct with builds running at once in several worktrees: every worktree keeps its own
+  target directory, and what is shared (the geiger stamps, sccache's cache) is keyed by content.
+  - **Test builds at opt-level 1** (`[profile.test]` in `Cargo.toml`): the workspace's own crates in
+    nextest, the coverage loop, doc-tests, cargo-mutants and cargo-careful. The dependencies stay at
+    3, debug assertions and overflow checks stay on, and dev builds stay at 0 (checked in cargo's
+    unit graph). nextest took 224 s and now 28 s; the coverage loop 283 s and now 141 s; every
+    per-file coverage row of the four crates is unchanged, in every configuration measured. One
+    cargo-mutants shard (one mutant of each crate) took 346 s and now 155 s: the unmutated tree
+    builds in 103 s instead of 53 and tests in 24 s instead of 235, and each mutant's build takes
+    about 4 s instead of 1. Its time limit is twice the baseline's test time and at least 300 s, so
+    it falls to the 300 s floor (it was 471 s here).
+  - **The gate tests each crate once**: its nextest step leaves out the keys, protocol, index and
+    engine crates, whose tests the coverage loop runs (28 s to 1.5 s); one variable in `gate.sh`
+    names the four for both. CI's nextest jobs, on Linux, Windows and macOS, still run every crate.
+    The coverage loop builds each crate with `-p`, so with the features it and its dependencies ask
+    for rather than the workspace's union, and under `cfg(coverage)`; `gate.sh`'s header says what
+    the gate leaves to CI.
+  - **`ci/geiger.sh` skips a scan whose inputs passed before** (324 to 359 s to under a second). A
+    passing run writes a stamp, named by the SHA-256 of a listing of its inputs that ends with a
+    fixed line, in `$XDG_CACHE_HOME/licketysync/geiger` (else `~/.cache/licketysync/geiger`), a
+    directory of mode 700, through a temporary file and `mv`, dated from the scan's start, and only
+    when the listing after the scan equals the one before. A run skips only on a stamp that holds
+    exactly its listing, when the stamp and its directory are the user's and no one else may write
+    them, and when no file in cargo's registry sources or git checkouts is newer than the stamp (an
+    edit during the scan included); a listing without its last line is an error. The inputs:
+    `Cargo.lock`, `Cargo.toml`, `crates/*/Cargo.toml` and every `build.rs` under `crates/`; the
+    script and the baseline; `rustc -vV` and `cargo geiger --version`; every exported `CARGO_*` (but
+    `CARGO_TARGET_DIR`), `RUSTC*`, `RUSTUP_*` and `*RUSTFLAGS` variable, one whose name says token,
+    credential, secret or password by name alone; the cargo configuration files in the repository's
+    directory, each above it and `CARGO_HOME` (`ci/cargo-configs.sh`); the files under `crates/` in
+    no crate; and the files of some crates. A crate's files are listed when it may use unsafe code,
+    and then every file under `crates/` is, since it can compile another crate's; and when one of
+    its files, matched whole as Perl patterns so that no comment or line break between tokens hides
+    them, names `unsafe` (cargo-geiger 0.14.0 counts unsafe code that `cfg` leaves out, which the
+    lint never sees), `no_mangle`, `export_name`, `link_section` or `debugger_visualizer` (whose
+    attribute compiles a file in); holds a word that begins with `include`, but `included`,
+    `includes` and `including` (an invocation, an alias, a name passed to a macro, a bare `include`,
+    the verb in prose); assigns to something named `path` (`path`, then only whitespace, bytes
+    beyond ASCII such as U+200E or U+2028, or comments, then `=` but not `==`: a path attribute,
+    alone or in `cfg_attr`, or any other assignment), but `let path =` and `let mut path =`; lets a
+    macro build an attribute (`#[$`, `#![$`, or a `$` inside `cfg_attr(` at any depth of
+    parentheses, so that `m!(path)` passes the name in) or a name (paste's `[<`, which can join
+    `include_str` from pieces); or holds a NUL byte, at which the whole-file match would split it;
+    or when it has a file other than Rust (an `include_str!` of one fails the scan). The triggers
+    fail closed: what only looks like one lists the crate, which costs a scan and nothing more.
+    Today they list index, keys, net, protocol and sim (a message in one of its tests says
+    "include"), so a change to their files scans; cli, daemon, decrypt and engine are left out. A
+    crate may use unsafe code unless its `[lints]` is only `workspace = true` under
+    `[workspace.lints.rust]` `unsafe_code = "forbid"`, no flag or configuration file names
+    `--cap-lints` (rustc 1.99.1 lets it lower a forbid, and no later `-A unsafe_code` does), and no
+    compiler or wrapper other than the sccache on `PATH` is named. Every run scans when the layout
+    is not the simple one the listing covers (a `Cargo.toml` under `crates/` other than
+    `crates/*/Cargo.toml`; a manifest with a backslash or a multi-line string; a dependency path
+    that is not a crate under `crates/`; a target or build path that is not a file in its own crate;
+    a configuration file with a backslash, a `[source]` or `[[include]]` table, or a key that names
+    a source, a registry, a compiler, a wrapper, a path or an `include` of another file), when `CI`
+    is set (no stamp read or written), and with `LICKETYSYNC_GEIGER_FULL=1`. Not inputs, and said so
+    in the header: registry and git sources, other variables (those build scripts read, such as
+    `CC`), the files another crate's macro compiles in (`sqlx::migrate!`, say), the content of a
+    file outside `crates/` that a crate compiles in (a trigger lists the crate's own files, not that
+    one) or of one compiled in by means no trigger names, and unsafe code that another crate's macro
+    expands into a crate that forbids it (a Semgrep rule comes next); deliberate obfuscation beyond
+    the triggers is left to CI's full scan and to review. TM-7 now says that the gate catches a
+    change when its listing covers it, and CI, which scans in full, catches it otherwise on main,
+    where it is fixed forward. `ci/test-geiger.sh` gains 419 cases (4 s to about 75 s), among them:
+    unsafe code `cfg` leaves out, `include_str!` and `include_bytes!` of another crate's file with
+    no new file in the crate, aliases, `include_proto!`, a comment between `include_str` and its
+    `!`, `include_str` and a bare `include` passed to a macro, a path attribute (inner too) and a
+    `cfg_attr` path split over lines or with a comment before `path` or `=`, U+200E, U+2028 and
+    U+0085 between `path` and `=`, a NUL byte in a comment, `#[$p = $f]` with `m!(path "…")` and
+    with `m!(let path = "…")`, `cfg_attr(all(), $a = "…")` with `m!(path)`, `cfg_attr(all(unix,
+    not(windows)), $a = $f)` with `at!(path, "…")`, paste's `[<inc lude_str>]!`,
+    `debugger_visualizer` with `gdb_script_file` and with `natvis_file`, and, skipped, prose saying
+    "included", "includes" and "including", `let path` and `let mut path`, a parameter named `path`
+    compared with `==`, and a name that ends in `path`; a nested crate, vendored sources of both
+    kinds, a wrapper a configuration file names, both forms of a configuration `include`, a crate
+    compiling another crate's file, an escaped TOML key, the variables, a registry edit before and
+    during a scan, a stamp or directory others may write, the listing's last line, and an input
+    changed during the scan with the cache emptied first. Each rule was broken in turn in a copy of
+    the script, and the tests failed for each but three, each of whose cases another rule catches as
+    well: a dependency path inside another crate's folder (the nested-manifest rule), every file
+    listed when a crate may use unsafe code (each crate's own files are listed then too), and the
+    `[[include]]` table (its `path` key). So was each part of the include and path triggers,
+    narrowed and widened (21 copies), and the tests caught each but two that change nothing: `ing`
+    in the include lookahead (no word that begins with "include" goes on with "ing") and the `\b`
+    after `path`; so was each later trigger taken out (bytes beyond ASCII in the gap, the NUL check,
+    `#[$`, the `$` in `cfg_attr`, `debugger_visualizer`, `[<`), and the tests caught each, as they
+    catch the nested `cfg_attr` with a one-level pattern or with a numbered `(?1)`, which would name
+    the include lookahead's group. Every case is bounded by timeout(1). Its earlier cases run with
+    `CI` set, as CI runs the script.
+  - **Dependencies' debug info as line tables only** (`[profile.dev.package."*"]`): backtraces keep
+    file and line. The cold test build took 274 s and now 266 s, and its target directory 6.2 GB and
+    now 5.3 GB. The override covers every package that is not a workspace member, the build scripts
+    and proc-macros of the dependencies and their own dependencies among them (it outranks
+    `[profile.dev.build-override]`), so those now carry line tables instead of none; the comment
+    said only "the dependencies".
+  - **sccache on one server only the user can reach**: `ci/rustc-wrapper.sh`, sourced by `gate.sh`
+    and `ci/mutants.sh`, exports the absolute path of the sccache on `PATH` as `RUSTC_WRAPPER`;
+    `SCCACHE_SERVER_UDS`, a Unix socket in `$XDG_CACHE_HOME/licketysync/sccache` (else
+    `~/.cache/licketysync/sccache`), that directory and `licketysync/` above it the user's with mode
+    700, so no other account and no TCP port reaches a server that runs whatever compiler a request
+    names; `SCCACHE_CONF`, `ci/sccache.toml`, which names no remote cache; `SCCACHE_DIR`, always
+    `cache/` there (a user's own value is ignored), since sccache's local cache takes one server at
+    a time (its `docs/Local.md`), and `~/.cache/sccache` may have another, such as one on the
+    default TCP port; and `SCCACHE_IDLE_TIMEOUT`, 3600 unless set: a server with nothing to do for
+    an hour, longer than any quiet stretch of a gate or a mutants run, exits. Then, holding
+    `start.lock` there (flock, waiting at most 60 s), it runs `sccache --dist-status`, which
+    connects to the server or starts it, so that one server starts however many builds begin at
+    once, in any worktree; and reads the server's statistics, which must name that `cache/` on local
+    disk and the version `sccache --version` prints; `--dist-status` must report distributed
+    compilation disabled. A server of another version (sccache upgraded since it started) is stopped
+    and a new one started, still under the lock (builds of another gate compiling at that moment may
+    then fail, never pass wrongly); a server with another cache or with distributed compilation on,
+    or any step that fails or runs past 60 s (each is bounded by timeout(1);
+    `LICKETYSYNC_SCCACHE_WAIT` shortens it for tests, and a value that is not a positive whole
+    number of seconds means 60, said so), means no sccache, and the line printed says why and how to
+    stop a stray server. Measured with sccache 0.19.0: six `--dist-status` at once started six
+    servers on one socket (each server removes the socket before it binds), and under the lock one;
+    six shells sourcing the helper at once left one server. `--show-stats` starts no server in
+    0.19.0, and `--start-server` starts a second one beside a running server, so neither is used.
+    sccache 0.19.0 has no setting that keeps a compiling client from starting a server when none
+    answers, so one can start outside the lock after a crash, a stop mid-build, or an idle exit (at
+    3600 s or at the user's own timeout); the header says so, and that such builds may fail, never
+    pass wrongly, and the strays exit after their idle timeout. Checked beside a server on
+    127.0.0.1:4226: ours listened only on its socket, the TCP server got none of its compilations,
+    and each kept its own cache. No sccache, and none exported, when a wrapper is chosen already
+    (`RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER`, or a configuration file that may name
+    `rustc-wrapper` or `include` another file: cargo uses it); when `CI` is set; with
+    `LICKETYSYNC_SCCACHE=0`; when any `SCCACHE_*` variable but `SCCACHE_CACHE_SIZE`,
+    `SCCACHE_IDLE_TIMEOUT`, `SCCACHE_LOG` and `SCCACHE_DIR` is set; with `CARGO_INCREMENTAL=1`, with
+    which sccache 0.19.0 refuses to compile ("incremental compilation is prohibited"; tested:
+    `CARGO_INCREMENTAL=0` and `CARGO_BUILD_INCREMENTAL=true` or `false` compile, and cargo rejects
+    `CARGO_BUILD_INCREMENTAL=1` with or without sccache); without flock; when the directories are
+    not the user's alone, a chmod to 700 included, or the socket path is too long for a socket; or
+    when the server cannot be reached, started or checked. sccache keys a Rust compilation on its
+    arguments other than `--out-dir`, `-L` and `--extern`, on its sources and the crates it links,
+    on every `CARGO_*` variable and on the working directory, so two trees, or two target
+    directories that `CARGO_TARGET_DIR` sets, share only the C and assembly that build scripts
+    compile through the wrapper too (cc-rs); Rust hits come within one tree and target directory.
+    Measured with an empty cache: a cold test build took 290 s filling the cache and 259 s in a
+    second target directory, against 266 s without; the second hit every C and assembly compilation
+    (415) and no Rust one (0 of 213). The coverage loop with its target emptied took all 65 of its
+    cacheable compilations from the cache; a cold gate's cargo-geiger scan took 242 s instead of 314
+    (221 hits), and in a warm gate about 184 s instead of 324 to 359. A cold gate in a new worktree
+    took 951 s with sccache (1638 s on main, without these changes). With sccache, cargo-geiger
+    still matched the baseline, every coverage row was the same as without it, and two trees built
+    at once against one cache each passed their own tests (828 and 829, the second tree's extra test
+    only in its own binaries). `ci/test-rustc-wrapper.sh` (61 cases, each bounded by timeout(1), on
+    a stand-in sccache that counts the servers it starts and stops; one case sources the helper in
+    six shells at once and expects one start; others give it a server of another version, one that
+    stays after its stop, one with another cache, one with distributed compilation on, a failing or
+    hanging step, a lock held past the wait, and waits of `0`, `-5`, `abc`, `1.5` and empty) runs in
+    `gate.sh` and CI's script job; `ci/test-mutants.sh` runs its cases with `LICKETYSYNC_SCCACHE=0`
+    and checks that the listing and the run build through sccache when it is installed.
+    `CONTRIBUTING.md` says where the socket and the cache are (a relative `XDG_CACHE_HOME` is
+    ignored), the cache's size, the idle exit and the upgrade, and how to see the statistics, stop
+    the server (never while a gate builds), clear the cache and find stray servers (`pgrep -a
+    sccache`) without touching any other sccache server or the user's own `SCCACHE_DIR`.
+  - Not changed: one target directory per worktree (one shared between trees let cargo take another
+    tree's test binaries as fresh), and cargo-mutants' copy mode.
+
 - Engine: a chunk request whose patience runs out is offered to the other connections even when
   another handler runs first at that instant (severity Medium). A handler other than the patience
   timer's that ran at or after the deadline before the timer fired (a peer's frame, such as the

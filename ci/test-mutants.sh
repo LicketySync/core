@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tests for ci/mutants.sh with a stand-in `cargo` and `rustc` first on PATH.
 # The stand-in rustc names the case's host. The stand-in cargo records its
-# arguments and, for the run, the runner variables it is given; it prints the
-# case's list for `--list`; for the run it writes the outcome files the case
+# arguments, the rustc wrapper it is given (ci/rustc-wrapper.sh's) and, for
+# the run, the runner variables it is given; it prints the case's list for
+# `--list`; for the run it writes the outcome files the case
 # gives it into mutants.out/ and exits with the case's code, or blocks until a
 # signal comes and records SIGINT, or, as cargo-mutants does, times the
 # unmutated tree's tests by its arguments, or runs the unmutated tree's tests
@@ -31,8 +32,11 @@ config="$(cd "$(dirname "$0")/.." && pwd)/.cargo/mutants.toml"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
-# The runner variables come only from ci/mutants.sh.
-unset "${!CARGO_TARGET_@}"
+# The runner variables come only from ci/mutants.sh, and so does the rustc
+# wrapper (ci/rustc-wrapper.sh, which it sources): each case runs with
+# LICKETYSYNC_SCCACHE=0, but for the two of sccache's.
+unset "${!CARGO_TARGET_@}" "${!SCCACHE_@}" RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER LICKETYSYNC_SCCACHE \
+  CARGO_INCREMENTAL CI
 cat > "$tmp/bin/rustc" << 'EOF'
 #!/usr/bin/env bash
 [ -z "${FAKE_RUSTC_EXIT:-}" ] || exit "$FAKE_RUSTC_EXIT"
@@ -41,6 +45,7 @@ EOF
 cat > "$tmp/bin/cargo" << 'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> args
+printf '%s\n' "${RUSTC_WRAPPER-unset}" >> wrapper
 # Whether cargo-mutants 27.1.0 caps the lints (src/main.rs, src/options.rs,
 # src/config.rs). It reads its config file first, whatever the command line
 # says of the cap: the file --config names, none with --no-config, or else
@@ -272,7 +277,7 @@ case_() {
     mkdir "$dir/.cargo"
     cp "$config" "$dir/.cargo/mutants.toml"
   fi
-  (cd "$dir" && env GITHUB_STEP_SUMMARY="$dir/summary" "$@" \
+  (cd "$dir" && env GITHUB_STEP_SUMMARY="$dir/summary" LICKETYSYNC_SCCACHE=0 "$@" \
     "$tmo" 60 "$script" "$shard" "$budget" "$dir") > "$dir/out" 2>&1 || rc=$?
   local ok=1
   [ "$rc" = "$want" ] || ok=0
@@ -419,6 +424,28 @@ case_ "the unmutated tree's doc-tests past both caps: the error names both" 1 13
   FAKE_BASELINE_TESTS="doc hog memory $((6442450944 + (64 << 20)))
 doc hog file 1073741825"
 
+# Builds go through sccache when it is installed, the listing's and the run's
+# (ci/rustc-wrapper.sh), unless LICKETYSYNC_SCCACHE=0; a stand-in sccache is
+# first on PATH, and its socket's directory under $tmp/xdg.
+mkdir "$tmp/sccache-bin" "$tmp/cargo-home"
+# The stand-in answers as a running server of its own version and cache would.
+cat > "$tmp/sccache-bin/sccache" << 'EOF'
+#!/bin/sh
+case $1 in
+  --version) echo "sccache 0.19.0" ;;
+  --dist-status) echo '{"Disabled":"disabled"}' ;;
+  --show-stats) printf '{"cache_location":"Local disk: \\"%s\\"","version":"0.19.0"}\n' "$SCCACHE_DIR" ;;
+esac
+EOF
+chmod +x "$tmp/sccache-bin/sccache"
+private="$tmp/xdg/licketysync/sccache"
+case_ "with sccache installed, cargo-mutants builds through it" 0 1/16 180m \
+  "== rustc wrapper: $tmp/sccache-bin/sccache, on its own server at $private/server.sock, its cache in $private/cache (LICKETYSYNC_SCCACHE=0 turns it off)" \
+  PATH="$tmp/sccache-bin:$PATH" XDG_CACHE_HOME="$tmp/xdg" CARGO_HOME="$tmp/cargo-home" LICKETYSYNC_SCCACHE=
+sccache_case=$n
+case_ "LICKETYSYNC_SCCACHE=0: no wrapper" 0 1/16 180m "== rustc wrapper: none (LICKETYSYNC_SCCACHE=0)" \
+  PATH="$tmp/sccache-bin:$PATH" XDG_CACHE_HOME="$tmp/xdg" CARGO_HOME="$tmp/cargo-home"
+
 # The stand-in decides the lint cap as cargo-mutants 27.1.0 does, so that the
 # check of case 1 below is not vacuous. Each row: what .cargo/mutants.toml
 # holds (- for no file; \n between lines), the arguments after --list, and the
@@ -553,6 +580,17 @@ for c in 9 10 11; do
     fails=$((fails + 1))
   fi
 done
+
+if [ "$(cat "$tmp/$sccache_case/wrapper")" = "$tmp/sccache-bin/sccache"$'\n'"$tmp/sccache-bin/sccache" ] &&
+  [ "$(cat "$tmp/$((sccache_case + 1))/wrapper")" = $'unset\nunset' ] &&
+  [ "$(cat "$tmp/1/wrapper")" = $'unset\nunset' ]; then
+  echo "ok   the listing and the run build through sccache when it is installed, and not when LICKETYSYNC_SCCACHE=0" \
+    "(as in every other case)"
+else
+  echo "FAIL the rustc wrapper cargo-mutants got, with sccache and then with LICKETYSYNC_SCCACHE=0:"
+  cat "$tmp/$sccache_case/wrapper" "$tmp/$((sccache_case + 1))/wrapper" | sed 's/^/  | /'
+  fails=$((fails + 1))
+fi
 
 if [ "$fails" -gt 0 ]; then
   echo "mutants: $fails failing case(s)"

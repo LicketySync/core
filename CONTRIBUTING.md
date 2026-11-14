@@ -72,7 +72,8 @@ group. The groups:
    copy of a version in a workflow or in `ci/geiger-baseline.txt` (below, "Pins
    and the weekly refresh"); `ci/toolchains.sh`.
 2. **Rust**: `cargo fmt`, clippy pedantic with `-D warnings` (all targets, all
-   features), nextest, doc-tests, rustdoc with warnings denied.
+   features), nextest on every crate but the four of group 8, doc-tests,
+   rustdoc with warnings denied.
 3. **Dependencies**: `cargo deny` (and the production bans of
    `deny-production.toml`), `cargo audit` on core's lockfile and on `fuzz/`'s,
    `cargo machete`, `cargo vet --locked`.
@@ -102,10 +103,12 @@ group. The groups:
    `ci/test-check-netlog.sh`); the tests of group 4's two checks
    (`ci/test-check-wasm-bindgen.sh`, `ci/test-check-vendored.sh`); and the
    download helper with the check that nothing downloads without it
-   (`ci/test-download.sh`, `ci/check-downloads.sh`).
+   (`ci/test-download.sh`, `ci/check-downloads.sh`); the helper that picks
+   sccache (`ci/test-rustc-wrapper.sh`).
 8. **Coverage**, last: at least 90% of lines in each of the keys, protocol,
    index and engine crates, measured per crate, after
-   `cargo llvm-cov clean --workspace`.
+   `cargo llvm-cov clean --workspace`. These are the gate's only runs of those
+   crates' tests; CI runs them under nextest too.
 
 The coverage threshold is per crate: only that crate's own files count, so a
 well-tested neighbour cannot mask an under-tested one (`gate.sh` has the exact
@@ -119,10 +122,10 @@ code of that run, and its coverage map counts the old code against the new
 files: the index measurement failed for no reason (twice, 2026-11-08).
 `cargo llvm-cov clean --workspace` removes every workspace crate's artifacts
 and the profile data there, and keeps the build of the dependencies. It takes
-under a second and the four measurements take as long after it as before (about
-230 s on the development machine, nearly all of it engine's tests); a plain
-`cargo llvm-cov clean`, which removes the whole directory, adds about 22 s for
-the dependencies' rebuild. Run the clean first before a coverage command of
+under a second and the four measurements take about as long after it as before
+(124 s against 119 s on the development machine, half of it engine's tests); a
+plain `cargo llvm-cov clean`, which removes the whole directory, adds about
+30 s for the dependencies' rebuild. Run the clean first before a coverage command of
 your own, too.
 
 `ci/geiger.sh` prints the cargo-geiger report and fails when any of a crate's
@@ -130,7 +133,38 @@ five used unsafe counts differs from its line in `ci/geiger-baseline.txt`, up
 or down, and prints the line to write. A change that moves them (usually a new
 or updated dependency) writes that line in the same commit, so the reviewers
 see the change; the baseline's header says how, and how to move to another
-cargo-geiger.
+cargo-geiger. When its inputs are those of a scan that passed, it skips the
+scan and says so; its header lists the inputs, and the stamp that records the
+passing scan is in `$XDG_CACHE_HOME/licketysync/geiger` (else
+`~/.cache/licketysync/geiger`). `LICKETYSYNC_GEIGER_FULL=1 ./gate.sh` scans
+anyway; CI always scans.
+
+Builds go through sccache when it is on `PATH` (`ci/rustc-wrapper.sh`, which
+`gate.sh` and `ci/mutants.sh` source, says when and what it caches here). It
+runs one server of its own, reached by the Unix socket `server.sock` in
+`$XDG_CACHE_HOME/licketysync/sccache` (else `~/.cache/licketysync/sccache`; a
+relative `XDG_CACHE_HOME` is ignored), with its cache in `cache/` there,
+whatever `SCCACHE_DIR` says. The cache holds up to 10 GiB, or
+`SCCACHE_CACHE_SIZE` (such as `2G`), and every cargo-mutants copy adds its own
+entries. The server exits after an hour with nothing to do
+(`SCCACHE_IDLE_TIMEOUT`, 3600 unless set). After an upgrade of sccache the
+helper replaces a server of the old version when it can read the server's
+report; otherwise it builds without sccache and prints the command that stops
+the server. To see the server's statistics, to stop it (never while a gate or a
+mutants run is building: its compilations would start servers of their own), to
+clear the cache once it has stopped, and to find stray sccache servers, touching
+neither any other sccache server nor your own `SCCACHE_DIR`:
+
+```sh
+case ${XDG_CACHE_HOME:-} in /*) d=$XDG_CACHE_HOME ;; *) d=$HOME/.cache ;; esac
+d=$d/licketysync/sccache
+SCCACHE_SERVER_UDS=$d/server.sock sccache --show-stats
+SCCACHE_SERVER_UDS=$d/server.sock sccache --stop-server
+rm -r -- "${d:?}/cache"
+pgrep -a sccache
+```
+
+`LICKETYSYNC_SCCACHE=0` turns it off. CI uses none.
 
 When `cargo vet --locked` fails after a dependency change: run `cargo vet` (it
 refreshes `supply-chain/imports.lock` from the Mozilla and Google audits), then

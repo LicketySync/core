@@ -31,13 +31,25 @@ dbg_macro = "deny"
 print_stdout = "warn"           # the CLI crate allows it locally
 print_stderr = "warn"
 
-# The dependencies (the cryptography above all) optimized in test and debug
-# builds, the workspace's own crates not, so coverage is measured as before:
-# the phase 0 gate (crates/engine/tests/converge.rs) took 389 s of wall time
-# and 41 CPU-minutes without it, 185 s and 21 with it (the engine brief's 13.4
-# allows this).
+# Every package that is not a workspace member, in dev and test builds: the
+# dependencies (the cryptography above all), and also the proc-macros and
+# build scripts the build runs and their own dependencies, since this override
+# outranks [profile.dev.build-override]. Optimized: the phase 0 gate
+# (crates/engine/tests/converge.rs) took 389 s of wall time and 41 CPU-minutes
+# without it, 185 s and 21 with it. Debug info as line tables only, which
+# backtraces need for file and line: the cold test build took 266 s instead of
+# 274, and its target directory holds 5.3 GB instead of 6.2.
 [profile.dev.package."*"]
 opt-level = 3
+debug = "line-tables-only"
+
+# The workspace's own crates in test builds (nextest, the coverage loop,
+# doc-tests, cargo-mutants, cargo-careful) at opt-level 1, with dev's debug
+# assertions and overflow checks; dev builds stay at 0. The gate's nextest
+# step took 28 s instead of 224 and its coverage loop 141 s instead of 283, and
+# every file's coverage stayed the same.
+[profile.test]
+opt-level = 1
 
 [profile.release]
 lto = "thin"

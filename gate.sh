@@ -13,8 +13,23 @@
 # database, each into its own clone (see deny.toml), and the Semgrep scan
 # fetches the community rules. Works from any directory and stops at the first
 # failing step.
+#
+# What the gate leaves to CI, besides the other operating systems:
+# - nextest here skips the tests of the crates in `covered` below (keys,
+#   protocol, index and engine). The coverage loop at the end runs them, once:
+#   each crate with -p, so with only the features it and its dependencies ask
+#   for (with --workspace, cargo unifies features across every crate), and
+#   under cfg(coverage), which cargo-llvm-cov sets. CI runs them both ways.
+# - ci/geiger.sh skips the cargo-geiger scan when its inputs are those of a
+#   scan that passed (its header lists them). LICKETYSYNC_GEIGER_FULL=1 scans
+#   anyway; CI always scans.
+# Builds go through sccache, on a server only this user can reach, when it is
+# installed (ci/rustc-wrapper.sh); LICKETYSYNC_SCCACHE=0 turns it off, and CI
+# uses none.
 set -euo pipefail
 cd "$(dirname "$0")"
+# The crates whose tests the coverage loop at the end runs, and nextest not.
+covered=(keys protocol index engine)
 
 step() { echo "== $*"; "$@"; }
 
@@ -197,10 +212,19 @@ if ! grep -q "^$RUST_NIGHTLY-" <<< "$installed"; then
   exit 1
 fi
 ci/toolchains.sh
+# sccache as rustc's wrapper, when it is installed (the helper says why).
+# shellcheck source=ci/rustc-wrapper.sh
+. ci/rustc-wrapper.sh
 
 step cargo fmt --all --check
 step cargo clippy --workspace --all-targets --all-features -- -D warnings
-step cargo nextest run --workspace --all-features
+# Every crate's tests but those of the crates the coverage loop at the end
+# tests, so that each test runs once.
+excluded=()
+for c in "${covered[@]}"; do
+  excluded+=(--exclude "licketysync-$c")
+done
+step cargo nextest run --workspace --all-features "${excluded[@]}"
 step cargo test --workspace --doc
 step env RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items
 step cargo deny check
@@ -270,10 +294,13 @@ step ci/test-check-vendored.sh
 # wget on its own.
 step ci/test-download.sh
 step ci/check-downloads.sh
+# The helper above that picks sccache, on a stand-in.
+step ci/test-rustc-wrapper.sh
 # 90% line coverage on each of the crates the plan names, and on the index
 # crate, which TM-17, TM-40 and TM-41 name as their enforcer (review ruling of
 # 2026-10-22), measured per crate: only that crate's own files count, so a
-# well-tested neighbour cannot mask it.
+# well-tested neighbour cannot mask it. These are the gate's only runs of
+# those crates' tests (nextest above leaves them out).
 # The clean comes first. cargo-llvm-cov reports on every test binary of a
 # workspace crate in target/llvm-cov-target, but before a run it removes only
 # the crate it measures, so a binary of another crate from an earlier gate run
@@ -282,15 +309,14 @@ step ci/check-downloads.sh
 # to 75% in a rerun of the case (views.rs and write.rs at about half): the gate
 # failed for no reason, twice on 2026-11-08. `clean --workspace` removes every
 # workspace crate's artifacts and the profile data there and keeps the
-# dependencies' build. Wider, a plain `cargo llvm-cov clean` removes the whole
-# directory and adds about 22 s (251 s for the loop on an empty directory, 229 s
-# on a warm one); narrower, deleting the test binaries by hand would copy
-# cargo-llvm-cov's own rules for which files are a crate's and save about 3 s.
-# Measured on 2026-11-09: the clean itself takes under a second and the loop
-# takes the same time after it (230 s against 229 s). Once is enough: what the
-# loop builds itself is of this tree.
+# dependencies' build: the clean takes under a second, and the loop then takes
+# 124 s against 119 s without it (measured without sccache). Wider, a plain
+# `cargo llvm-cov clean` removes the whole directory, and the loop then builds
+# the dependencies again (156 s); narrower, deleting the test binaries by hand
+# would copy cargo-llvm-cov's own rules for which files are a crate's. Once is
+# enough: what the loop builds itself is of this tree.
 step cargo llvm-cov clean --workspace
-for c in keys protocol index engine; do
+for c in "${covered[@]}"; do
   others=$(ls crates | grep -vx "$c" | paste -sd'|' -)
   step cargo llvm-cov nextest --all-features --fail-under-lines 90 \
     -p "licketysync-$c" --ignore-filename-regex "crates/($others)/"
