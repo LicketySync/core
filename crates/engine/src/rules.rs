@@ -59,7 +59,7 @@ pub(crate) fn file(net: &Net, i: usize, path: &str) -> Option<FileView> {
         .find(|f| f.path == path)
 }
 
-fn heads(f: &FileView) -> Vec<RecordHash> {
+pub(crate) fn heads(f: &FileView) -> Vec<RecordHash> {
     let mut h: Vec<RecordHash> = f.heads.iter().map(|h| h.hash).collect();
     h.sort_unstable();
     h
@@ -151,20 +151,30 @@ fn an_open_finishes_the_pending_free_list_before_the_folder_syncs() {
 /// 1 had not yet when it wrote its own edit over V1, its base. Returns V2 and
 /// the edit, once both are on both disks.
 pub(crate) fn conflict() -> (Net, RecordHash, RecordHash) {
-    let mut net = pair();
-    let v1 = write(&mut net, 0, "f.txt", &[1u8; 2000]).unwrap();
+    conflict_at("f.txt")
+}
+
+/// [`conflict`] at `path`: V1 of bytes 1, V2 of bytes 2 and the edit of
+/// bytes 3, 2 000 of each.
+pub(crate) fn conflict_at(path: &str) -> (Net, RecordHash, RecordHash) {
+    conflict_in(pair(), path)
+}
+
+/// [`conflict_at`] over `net`, a pair already connected.
+pub(crate) fn conflict_in(mut net: Net, path: &str) -> (Net, RecordHash, RecordHash) {
+    let v1 = write(&mut net, 0, path, &[1u8; 2000]).unwrap();
     net.advance(Duration::from_secs(3));
     net.hold = Some(Hold::new(0, 1, MessageType::ChunkReply));
-    let v2 = write(&mut net, 0, "f.txt", &[2u8; 2000]).unwrap();
+    let v2 = write(&mut net, 0, path, &[2u8; 2000]).unwrap();
     net.advance(Duration::from_secs(3));
-    let f = file(&net, 1, "f.txt").unwrap();
+    let f = file(&net, 1, path).unwrap();
     assert_eq!(heads(&f), vec![v2], "node 1 holds V2, which covers V1");
     assert_eq!(
         f.bases,
         vec![(Place::Path, v1)],
         "V2 is not on node 1's disk: the old file stays, V1 its base"
     );
-    let mine = write(&mut net, 1, "f.txt", &[3u8; 2000]).unwrap();
+    let mine = write(&mut net, 1, path, &[3u8; 2000]).unwrap();
     net.release();
     net.advance(Duration::from_secs(5));
     (net, v2, mine)
@@ -188,7 +198,7 @@ fn a_version_still_arriving_stays_a_head_beside_a_local_write_and_the_old_file_s
         let copy = f.conflict_copies[0];
         assert!(
             f.bases
-                .contains(&(Place::Copy(copy_name("f.txt", &copy)), copy)),
+                .contains(&(Place::Copy(copy_name("f.txt", &copy).unwrap()), copy)),
             "node {i}: the copy is on the disk beside the path"
         );
     }
@@ -201,7 +211,7 @@ fn a_write_over_a_conflict_turns_each_copy_into_an_ordinary_file() {
     // heads (4.4, "What becomes of a conflict copy").
     let (mut net, v2, _) = conflict();
     let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
-    let name = copy_name("f.txt", &copy);
+    let name = copy_name("f.txt", &copy).unwrap();
     let content = if copy == v2 { [2u8; 2000] } else { [3u8; 2000] };
     let v4 = write(&mut net, 0, "f.txt", &[4u8; 2000]).unwrap();
     net.advance(Duration::from_secs(5));
@@ -1172,7 +1182,7 @@ fn a_conflict_copy_keeps_its_place_on_the_disk_while_its_chunk_is_forgotten() {
     // conflict copy any more.
     let (mut net, v2, _) = conflict();
     let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
-    let name = copy_name("f.txt", &copy);
+    let name = copy_name("f.txt", &copy).unwrap();
     let content = if copy == v2 { [2u8; 2000] } else { [3u8; 2000] };
     let chunk = chunks_of(&net, 0, &copy)[0];
     let key = crate::store::chunk_key(&folder(), &chunk);
@@ -1458,7 +1468,7 @@ fn a_resolved_conflict_leaves_no_copy_slot_beside_its_path_on_any_disk() {
     // and the path's one base is the write.
     let (mut net, _, _) = conflict();
     let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
-    let name = copy_name("f.txt", &copy);
+    let name = copy_name("f.txt", &copy).unwrap();
     let v4 = write(&mut net, 0, "f.txt", &[4u8; 2000]).unwrap();
     net.advance(Duration::from_secs(5));
     for i in 0..2 {
@@ -1496,7 +1506,7 @@ fn a_write_over_a_conflict_writes_each_copy_with_its_own_size_and_time() {
     assert_eq!(view.conflict_copies, vec![v2]);
     write(&mut net, 0, "f.txt", &[4u8; 100]).unwrap();
     net.advance(Duration::from_secs(5));
-    let name = copy_name("f.txt", &v2);
+    let name = copy_name("f.txt", &v2).unwrap();
     for i in 0..2 {
         let c = file(&net, i, &name).unwrap();
         assert_eq!(c.heads.len(), 1, "node {i}: an ordinary file");
@@ -1520,7 +1530,7 @@ fn a_rename_over_a_conflict_turns_each_copy_into_an_ordinary_file() {
     // is never lost with the path (4.4, "What becomes of a conflict copy").
     let (mut net, v2, _) = conflict();
     let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
-    let name = copy_name("f.txt", &copy);
+    let name = copy_name("f.txt", &copy).unwrap();
     let (shown, copied) = if copy == v2 {
         ([3u8; 2000], [2u8; 2000])
     } else {

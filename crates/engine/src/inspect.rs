@@ -120,11 +120,12 @@ pub fn stored_blob(
     storage.get(&chunk_key(folder, hash))
 }
 
-/// The name of the conflict copy of `record` beside `path`: the path, then
-/// ` (conflict `, the first eight hex digits of the record hash, then `)`
+/// The name of the conflict copy of `record` beside `path`: the path with
+/// ` (conflict `, the first four bytes of the record hash in lowercase hex
+/// and `)` added, or a shortened name, or `None` when no name fits
 /// (`crate::sync::disk`), for checks from outside (the simulator's oracle).
 #[must_use]
-pub fn conflict_copy_name(path: &str, record: &RecordHash) -> String {
+pub fn conflict_copy_name(path: &str, record: &RecordHash) -> Option<String> {
     crate::sync::disk::copy_name(path, record)
 }
 

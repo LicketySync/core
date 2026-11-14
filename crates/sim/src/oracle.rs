@@ -317,12 +317,32 @@ fn check_heads(
 /// A holder's disk: each path with heads, and its bases.
 type Disk = Vec<(String, Vec<(Place, RecordHash)>)>;
 
+/// The bases a read or write holder has at a path with heads: its first head
+/// at the path, and each conflict copy (`copies`, in display order) that a
+/// name fits in its `Place::Copy` slot, of copies that share a name only the
+/// first, as the engine names them.
+fn expected_bases(
+    path: &str,
+    first: Option<RecordHash>,
+    copies: &[RecordHash],
+) -> Vec<(Place, RecordHash)> {
+    let mut named = BTreeSet::new();
+    first
+        .map(|h| (Place::Path, h))
+        .into_iter()
+        .chain(copies.iter().filter_map(|c| {
+            conflict_copy_name(path, c)
+                .filter(|name| named.insert(name.clone()))
+                .map(|name| (Place::Copy(name), *c))
+        }))
+        .collect()
+}
+
 /// (b′): what each read and write holder has on its disk (its bases)
-/// matches its heads: each path's `Place::Path` base is its first head, each
-/// conflict copy sits in its `Place::Copy` slot and no other copy does; at a
-/// path with no heads the only base is a held tree delete's at its own
-/// directory, so that nothing beneath a tree delete keeps a base unless it
-/// is live; and every read and write holder has the same slots. Every path
+/// matches its heads ([`expected_bases`]); at a path with no heads the only
+/// base is a held tree delete's at its own directory, so that nothing
+/// beneath a tree delete keeps a base unless it is live; and every read and
+/// write holder has the same slots. Every path
 /// is checked, since (b) refuses opaque records in every gate scenario
 /// (module documentation).
 fn check_bases(
@@ -340,17 +360,8 @@ fn check_bases(
         };
         let mut disk = Vec::new();
         for f in e.files(folder) {
-            let mut expected: Vec<(Place, RecordHash)> = f
-                .heads
-                .first()
-                .map(|h| (Place::Path, h.hash))
-                .into_iter()
-                .chain(
-                    f.conflict_copies
-                        .iter()
-                        .map(|c| (Place::Copy(conflict_copy_name(&f.path, c)), *c)),
-                )
-                .collect();
+            let mut expected =
+                expected_bases(&f.path, f.heads.first().map(|h| h.hash), &f.conflict_copies);
             let mut bases = f.bases.clone();
             expected.sort();
             bases.sort();
@@ -471,4 +482,40 @@ fn check_sealed_blobs(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A record hash whose first bytes are `head`, the rest zero.
+    fn hash(head: &[u8]) -> RecordHash {
+        let mut h = [0u8; 32];
+        for (b, x) in h.iter_mut().zip(head) {
+            *b = *x;
+        }
+        RecordHash(h)
+    }
+
+    #[test]
+    fn of_copies_that_share_a_name_only_the_first_has_the_slot() {
+        // Two copies of one path whose record hashes share their first four
+        // bytes share one name; the engine gives the slot to the first in
+        // display order, and so does the oracle.
+        let first = hash(&[9]);
+        let (a, b, c) = (hash(&[1, 2, 3, 4, 5]), hash(&[1, 2, 3, 4, 6]), hash(&[7]));
+        let name = |r: &RecordHash| conflict_copy_name("f.txt", r);
+        assert_eq!(name(&a), name(&b));
+        let named = |r: &RecordHash| (Place::Copy(name(r).unwrap_or_default()), *r);
+        assert_eq!(
+            expected_bases("f.txt", Some(first), &[b, c, a]),
+            vec![(Place::Path, first), named(&b), named(&c)]
+        );
+        let long = format!("{}/f", "d".repeat(4_090));
+        assert_eq!(
+            expected_bases(&long, Some(first), &[a]),
+            vec![(Place::Path, first)],
+            "a copy that no name fits has no slot"
+        );
+    }
 }

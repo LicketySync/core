@@ -40,6 +40,36 @@ use crate::runtime::{
     TimerId, Timers, Transport,
 };
 
+/// The fixed seed every property test of this crate runs from in the gate,
+/// so that the gate is deterministic; the keys, protocol and index crates'
+/// tests run from the same one.
+pub(crate) const PROPTEST_SEED: u64 = 0x6c69_636b_6574_7379;
+
+/// The proptest configuration of every property test of this crate: `cases`
+/// cases, or `PROPTEST_CASES` when it is set, from the fixed
+/// [`PROPTEST_SEED`], or from the seed `LICKETYSYNC_PROPTEST_SEED` names:
+/// `random` for a random one (a long run outside the gate), or a number.
+pub(crate) fn proptest_config(cases: u32) -> proptest::test_runner::Config {
+    use proptest::test_runner::{Config, RngSeed};
+    let cases = std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(cases);
+    let rng_seed = match std::env::var("LICKETYSYNC_PROPTEST_SEED") {
+        Ok(v) if v == "random" => RngSeed::Random,
+        Ok(v) => RngSeed::Fixed(
+            v.parse()
+                .unwrap_or_else(|_| panic!("LICKETYSYNC_PROPTEST_SEED={v}: random or a u64")),
+        ),
+        Err(_) => RngSeed::Fixed(PROPTEST_SEED),
+    };
+    Config {
+        cases,
+        rng_seed,
+        ..Config::default()
+    }
+}
+
 /// The write key of `seed`.
 pub(crate) fn write_key(seed: u8) -> WriteKey {
     WriteKey::from_secret(Suite::ONE, WriteSecret::from_bytes([seed; 32])).unwrap()

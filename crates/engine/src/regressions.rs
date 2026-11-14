@@ -16,15 +16,17 @@
 
 use core::time::Duration;
 
-use licketysync_keys::chunk::seal_chunk;
-use licketysync_keys::{CipherHash, FolderId, RecordHash};
+use licketysync_keys::chunk::{seal_chunk, SealedChunk};
+use licketysync_keys::records::SignedRecord;
+use licketysync_keys::{CipherHash, DeviceId, FolderId, RecordHash};
 use licketysync_protocol::connection::Timing;
 use licketysync_protocol::frame::{Frame, FrameKind, MessageType};
+use licketysync_protocol::limits::MAX_PATH_BYTES;
 
 use crate::config::EngineConfig;
 use crate::inspect::Place;
 use crate::issues::{IssueClass, IssueKind, StoreFailureCause, Subject};
-use crate::rules::{conflict, file};
+use crate::rules::{conflict, conflict_at, conflict_in, file, heads};
 use crate::runtime::{Instant, Peer, PeerId, Storage};
 use crate::store::{chunk_key, held_key};
 use crate::sync::disk::copy_name;
@@ -1310,7 +1312,7 @@ fn a_rename_between_a_path_and_one_of_its_conflict_copies_counts_no_engine_bug()
     let (mut net, _, _) = conflict();
     let f = folder();
     let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
-    let name = copy_name("f.txt", &copy);
+    let name = copy_name("f.txt", &copy).unwrap();
     let before = disk_and_records(&net, 0, "f.txt");
     assert!(
         before.0.contains(&(Place::Copy(name.clone()), copy)),
@@ -1358,12 +1360,12 @@ fn a_rename_between_two_paths_whose_conflict_copies_share_a_name_counts_no_engin
     // conflict copy beside either of its paths as a version at the copy's
     // name, so a copy beside each path under one name met at that name
     // (`WriteError::DuplicatePath`): `Internal`, an engine bug counted.
-    // Phase 0's copy names hold the whole path, so no two paths' copies
-    // share one; a shortened name could. The slot beside `g.txt` is planted.
+    // Two paths' copies share a name only if their record hashes collide in
+    // 128 bits (`copy_name`), so the slot beside `g.txt` is planted.
     let (mut net, _, _) = conflict();
     let f = folder();
     let copy = file(&net, 0, "f.txt").unwrap().conflict_copies[0];
-    let name = copy_name("f.txt", &copy);
+    let name = copy_name("f.txt", &copy).unwrap();
     let g = write(&mut net, 0, "g.txt", b"g").unwrap();
     let index = &mut net.nodes[0].engine.folders.get_mut(&f).unwrap().index;
     let mut txn = index.begin();
@@ -1390,4 +1392,629 @@ fn a_rename_between_two_paths_whose_conflict_copies_share_a_name_counts_no_engin
         disk_and_records(&net, 0, "g.txt"),
     ];
     assert_eq!(after, before, "nothing written");
+}
+
+/// A path of `len` bytes: one directory of `d`s, then `name`.
+fn long_path(len: usize, name: &str) -> String {
+    format!("{}/{name}", "d".repeat(len - name.len() - 1))
+}
+
+/// What a shortened name of a conflict copy of `record` ends in:
+/// ` (conflict `, the first 16 bytes of the record hash in lowercase hex,
+/// `)`.
+fn long_copy_tag(record: &RecordHash) -> String {
+    use core::fmt::Write as _;
+    let mut hex = String::new();
+    for x in record.0.iter().take(16) {
+        write!(hex, "{x:02x}").unwrap();
+    }
+    format!(" (conflict {hex})")
+}
+
+#[test]
+fn a_conflict_at_a_path_of_4077_bytes_or_more_is_resolved_by_a_write() {
+    // The bug: a conflict copy's name was its path with 20 bytes added, so
+    // at a path of 4 077 bytes or more it passed the 4 096-byte limit, and
+    // every write, delete, rename and mkdir of the path was refused with
+    // `WriteFailure::Path(TooLong)` on every device that held the copy. The
+    // name is now shortened to fit, its stem cut, its extension kept and 16
+    // bytes of its record hash shown, and a write over the conflict turns
+    // the copy into an ordinary file there (4.4, "What becomes of a conflict
+    // copy"). The copy's own writer writes: a copy of its own that has a name
+    // never refuses a write.
+    let name = format!("{}.txt", "r".repeat(96));
+    for len in [4_077, 4_096] {
+        let path = long_path(len, &name);
+        let (mut net, v2, _) = conflict_at(&path);
+        let copy = file(&net, 0, &path).unwrap().conflict_copies[0];
+        let (author, content) = if copy == v2 {
+            (0, [2u8; 2000])
+        } else {
+            (1, [3u8; 2000])
+        };
+        let written = write(&mut net, author, &path, &[4u8; 2000]);
+        assert!(written.is_ok(), "{len} bytes: {written:?}");
+        let v4 = written.unwrap();
+        net.advance(Duration::from_secs(5));
+        let dir = path.strip_suffix(name.as_str()).unwrap();
+        let copy_path = format!("{dir}{}.txt{}", "r".repeat(51), long_copy_tag(&copy));
+        assert_eq!(copy_path.len(), len - 1, "{len} bytes");
+        for i in 0..2 {
+            assert_eq!(
+                heads(&file(&net, i, &path).unwrap()),
+                vec![v4],
+                "{len} bytes, node {i}: the conflict is resolved"
+            );
+            let c = file(&net, i, &copy_path).unwrap();
+            assert_eq!(c.heads.len(), 1, "{len} bytes, node {i}: an ordinary file");
+            assert_eq!(read(&net, i, c.heads[0].hash), Ok(content.to_vec()));
+            assert_eq!(net.nodes[i].engine.counters().internal_errors, 0);
+        }
+    }
+}
+
+#[test]
+fn a_conflict_copy_that_no_name_fits_is_never_replaced_unseen() {
+    // Where not one character of a copy's last component fits beside its
+    // directories, the copy has no place on the disk, and it is counted.
+    // Another device's write over the conflict is not refused: it covers
+    // what is on its disk and leaves the copy a head, a conflict. The
+    // copy's own writer refuses every write of the path: its record would
+    // carry that device's later dot, by which any record built on it would
+    // cover the copy unseen (4.4, "Coverage"; "Why it is safe" 3). Once the
+    // other device deletes the path, the copy sits there on every disk, and
+    // its writer's next write covers it.
+    let path = long_path(MAX_PATH_BYTES, "f.txt");
+    let (mut net, v2, mine) = conflict_at(&path);
+    let copy = file(&net, 0, &path).unwrap().conflict_copies[0];
+    let (author, other, shown) = if copy == v2 { (0, 1, mine) } else { (1, 0, v2) };
+    for i in 0..2 {
+        let f = file(&net, i, &path).unwrap();
+        assert_eq!(
+            f.bases,
+            vec![(Place::Path, shown)],
+            "node {i}: no copy slot"
+        );
+        assert!(
+            net.nodes[i].engine.counters().copies_unplaced > 0,
+            "node {i}"
+        );
+    }
+    let f = folder();
+    let refused = [
+        net.with(author, |e, cx| e.write_file(cx, f, &path, b"x", 9)),
+        net.with(author, |e, cx| e.delete(cx, f, &path, 9)),
+        net.with(author, |e, cx| e.mkdir(cx, f, &path, 9)),
+        net.with(author, |e, cx| e.rename(cx, f, &path, "short", 9)),
+        net.with(author, |e, cx| e.rename(cx, f, "short", &path, 9)),
+    ];
+    for r in refused {
+        assert_eq!(r, Err(crate::WriteFailure::OwnVersionNotOnDisk));
+    }
+    // Later than both heads by its time, so first in display order.
+    let v4 = net
+        .with(other, |e, cx| e.write_file(cx, f, &path, &[4u8; 2000], 10))
+        .unwrap();
+    net.advance(Duration::from_secs(5));
+    let mut both = vec![v4, copy];
+    both.sort_unstable();
+    for i in 0..2 {
+        let v = file(&net, i, &path).unwrap();
+        assert_eq!(heads(&v), both, "node {i}: the copy stays a head");
+        assert_eq!(v.conflict_copies, vec![copy], "node {i}: a conflict");
+        assert_eq!(net.nodes[i].engine.counters().internal_errors, 0);
+    }
+    net.with(other, |e, cx| e.delete(cx, f, &path, 11)).unwrap();
+    net.advance(Duration::from_secs(5));
+    for i in 0..2 {
+        let v = file(&net, i, &path).unwrap();
+        assert_eq!(v.current, Some(copy), "node {i}: the copy at the path");
+        assert_eq!(v.bases, vec![(Place::Path, copy)], "node {i}: on the disk");
+    }
+    let v6 = write(&mut net, author, &path, &[6u8; 10]).unwrap();
+    net.advance(Duration::from_secs(5));
+    for i in 0..2 {
+        let v = file(&net, i, &path).unwrap();
+        assert_eq!(v.current, Some(v6), "node {i}");
+        assert!(v.conflict_copies.is_empty(), "node {i}: resolved");
+    }
+}
+
+#[test]
+fn a_tree_delete_above_a_copy_with_no_name_takes_it_only_past_a_later_record_of_its_writer() {
+    // 4.4, "What becomes of a conflict copy", and "Why it is safe" 8a: a tree
+    // delete of a directory above the path, by any device, covers a copy
+    // that no name fits once the delete's join reaches a later record of the
+    // copy's writer beneath that directory, and then no device has the copy,
+    // none having had it on its disk. Without such a record the copy is not
+    // covered: it comes to the path on every device.
+    for later in [false, true] {
+        let dir = "d".repeat(4_085);
+        let path = format!("{dir}/f.txt");
+        let f = folder();
+        let mut net = pair();
+        net.with(0, |e, cx| e.mkdir(cx, f, &dir, 0)).unwrap();
+        net.advance(Duration::from_secs(3));
+        let (mut net, v2, _) = conflict_in(net, &path);
+        let copy = file(&net, 0, &path).unwrap().conflict_copies[0];
+        assert_eq!(copy_name(&path, &copy), None, "no name fits");
+        let (author, other) = if copy == v2 { (0, 1) } else { (1, 0) };
+        if later {
+            write(&mut net, author, &format!("{dir}/g.txt"), b"later").unwrap();
+            net.advance(Duration::from_secs(3));
+        }
+        net.with(other, |e, cx| e.delete(cx, f, &dir, 9)).unwrap();
+        net.advance(Duration::from_secs(5));
+        for i in 0..2 {
+            let view = file(&net, i, &path);
+            let held = view
+                .as_ref()
+                .is_some_and(|v| v.heads.iter().any(|h| h.hash == copy));
+            assert_eq!(held, !later, "later record {later}, node {i}: {view:?}");
+            if !later {
+                let v = view.unwrap();
+                assert_eq!(v.current, Some(copy), "node {i}: the copy at the path");
+                assert_eq!(v.bases, vec![(Place::Path, copy)], "node {i}: on the disk");
+            }
+        }
+    }
+}
+
+/// Node `n`'s device ID, from its config's device seed.
+fn device_of(n: u8) -> DeviceId {
+    licketysync_keys::device::DeviceKey::from_device_seed(&config(n, vec![]).device_seed)
+        .device_id()
+}
+
+/// A file record of folder 1 at `path` by `device`, concurrent with every
+/// other (an empty vector), whose one chunk is sealed from `content`; and
+/// that sealed chunk.
+fn crafted_file(
+    path: &str,
+    device: DeviceId,
+    counter: u64,
+    mtime_ns: i64,
+    content: &[u8],
+) -> (SignedRecord, SealedChunk) {
+    let sealed = seal_chunk(&write_key(1).chunk_keys(), content).unwrap();
+    let size = content.len() as u64;
+    let record = signed_file(
+        path,
+        (device, counter),
+        mtime_ns,
+        size,
+        &sealed,
+        sealed.cipher_hash,
+    );
+    (record, sealed)
+}
+
+/// [`crafted_file`]'s record, its content claimed but its one chunk named
+/// by a hash that no blob has.
+fn crafted_file_with_no_chunk(
+    path: &str,
+    device: DeviceId,
+    counter: u64,
+    mtime_ns: i64,
+    content: &[u8],
+) -> SignedRecord {
+    let sealed = seal_chunk(&write_key(1).chunk_keys(), content).unwrap();
+    let size = content.len() as u64;
+    signed_file(
+        path,
+        (device, counter),
+        mtime_ns,
+        size,
+        &sealed,
+        CipherHash([0xee; 32]),
+    )
+}
+
+/// The signed file record of [`crafted_file`], of `size` bytes, by the
+/// device and counter of `dot`, its chunk named `cipher_hash`.
+fn signed_file(
+    path: &str,
+    dot: (DeviceId, u64),
+    mtime_ns: i64,
+    size: u64,
+    sealed: &SealedChunk,
+    cipher_hash: CipherHash,
+) -> SignedRecord {
+    use licketysync_protocol::record::{Chunk, Dot, IndexDraft, Kind, Meta, Vector};
+    let key = write_key(1);
+    IndexDraft {
+        meta: Meta {
+            path: path.to_owned(),
+            kind: Kind::File,
+            size,
+            mtime_ns,
+            mode: 0,
+            plain_hashes: vec![sealed.plain_hash],
+            written_at: 0,
+            dot: Dot {
+                device: dot.0,
+                counter: dot.1,
+            },
+            vector: Vector::from_sorted(Vec::new()).unwrap(),
+            deleted: false,
+            tree: false,
+        },
+        chunks: vec![Chunk {
+            cipher_hash,
+            stored_len: u32::try_from(sealed.stored.len()).unwrap(),
+        }],
+        replaces: Vec::new(),
+    }
+    .sign(&key, &key.record_keys(), &mut |b: &mut [u8]| b.fill(0x5a))
+    .unwrap()
+}
+
+/// Puts `records` and the blobs of `chunks` in node `i`'s committed store, as
+/// held there in folder 1, and restarts it as a write holder, its paths
+/// applied.
+fn plant_files(net: &mut Net, i: usize, records: &[SignedRecord], chunks: &[SealedChunk]) {
+    let f = folder();
+    let committed = &mut net.nodes[i].cx.storage.committed;
+    for (seq, r) in (1u64..).zip(records) {
+        let mut value = seq.to_be_bytes().to_vec();
+        value.extend_from_slice(&r.to_bytes());
+        committed.insert(crate::store::record_key(&f, &r.hash()), value);
+    }
+    for c in chunks {
+        committed.insert(chunk_key(&f, &c.cipher_hash), c.stored.clone());
+        committed.insert(held_key(&f, &c.cipher_hash), Vec::new());
+    }
+    net.restart(i, key_config(u8::try_from(i).unwrap()));
+    // The open leaves every path to the folder's next transaction, which a
+    // write elsewhere runs.
+    write(net, i, "elsewhere", b"e").unwrap();
+}
+
+/// The counters of the planted records: 2026-01-01, in microseconds.
+const PLANTED: u64 = 1_767_225_600_000_000;
+/// The modification times of node 0's copy and another device's of
+/// `s.txt`, found by trying times until the two records' hashes shared
+/// their first four bytes, and so their copy name.
+const OWN_MTIME: i64 = 66_867;
+const OTHER_MTIME: i64 = 1_076_100;
+
+/// Nodes 0 and 1, apart, node 0 holding at `s.txt` a first version by a
+/// third device and two conflict copies whose names are one: another
+/// device's, first in display order of the two, and node 0's own. Returns
+/// the net, the first version, the other's copy and node 0's.
+fn copies_sharing_a_name() -> (Net, RecordHash, RecordHash, RecordHash) {
+    let (first, a) = crafted_file(
+        "s.txt",
+        DeviceId([0x55; 32]),
+        PLANTED + 1,
+        1 << 30,
+        b"first",
+    );
+    let (own, b) = crafted_file("s.txt", device_of(0), PLANTED + 2, OWN_MTIME, b"one");
+    let (other, c) = crafted_file(
+        "s.txt",
+        DeviceId([0x77; 32]),
+        PLANTED + 3,
+        OTHER_MTIME,
+        b"two",
+    );
+    assert_eq!(
+        own.hash().0[..4],
+        other.hash().0[..4],
+        "the times give one name"
+    );
+    let mut net = Net::new(vec![key_config(0), key_config(1)]);
+    let hashes = (first.hash(), other.hash(), own.hash());
+    plant_files(&mut net, 0, &[first, own, other], &[a, b, c]);
+    (net, hashes.0, hashes.1, hashes.2)
+}
+
+#[test]
+fn a_copy_of_this_devices_that_shares_its_name_with_an_earlier_copy_is_never_replaced_unseen() {
+    // The bug: two conflict copies of one path whose record hashes share
+    // their first four bytes share one name, and so one slot, which went to
+    // each in turn as the path was applied again. A write by the device that
+    // wrote one of them was refused only when its copy had no name: while
+    // the other held the slot it covered the first version and that copy,
+    // and left its own copy a head beside its new dot, by which any record
+    // built on that write could cover the copy unseen. The first copy in
+    // display order now has the slot, and a device whose own copy holds no
+    // slot refuses to write the path.
+    let (mut net, first, other, own) = copies_sharing_a_name();
+    assert_eq!(
+        write(&mut net, 0, "s.txt", b"x"),
+        Err(WriteFailure::OwnVersionNotOnDisk)
+    );
+    let name = copy_name("s.txt", &own).unwrap();
+    let v = file(&net, 0, "s.txt").unwrap();
+    assert_eq!(v.conflict_copies, vec![other, own]);
+    assert_eq!(
+        v.bases,
+        vec![(Place::Path, first), (Place::Copy(name), other)]
+    );
+    assert!(net.nodes[0].engine.counters().copies_unplaced > 0);
+    assert_eq!(net.nodes[0].engine.counters().internal_errors, 0);
+}
+
+#[test]
+fn every_device_gives_a_shared_copy_name_to_the_first_copy_in_display_order() {
+    // The same bug, across devices: each device's slot depended on how often
+    // it had applied the path, so two devices that held the same records
+    // could keep different disks there (the oracle's (b′)). Node 1, which
+    // wrote neither copy, may write the path: its write turns the slot's copy
+    // into a file and leaves node 0's a head.
+    let (mut net, first, other, own) = copies_sharing_a_name();
+    net.connect(0, 1);
+    net.advance(Duration::from_secs(5));
+    let name = copy_name("s.txt", &own).unwrap();
+    for i in 0..2 {
+        let v = file(&net, i, "s.txt").unwrap();
+        assert_eq!(
+            v.bases,
+            vec![(Place::Path, first), (Place::Copy(name.clone()), other)],
+            "node {i}"
+        );
+    }
+    let written = write(&mut net, 1, "s.txt", b"x").unwrap();
+    net.advance(Duration::from_secs(5));
+    for i in 0..2 {
+        let at = heads(&file(&net, i, "s.txt").unwrap());
+        assert!(
+            at.contains(&own) && at.contains(&written),
+            "node {i}: {at:?}"
+        );
+        let c = file(&net, i, &name).unwrap();
+        assert_eq!(c.heads.len(), 1, "node {i}: the other's copy, a file");
+        assert_eq!(
+            read(&net, i, c.heads[0].hash),
+            Ok(b"two".to_vec()),
+            "node {i}"
+        );
+    }
+}
+
+#[test]
+fn a_copy_of_this_devices_whose_content_is_not_on_the_disk_is_never_replaced_unseen() {
+    // The same bug, for a copy of this device's whose chunk is not stored
+    // here (one its store lost, coming back from a peer): it had a name but
+    // no slot, and a write here was not refused.
+    let (first, a) = crafted_file(
+        "t.txt",
+        DeviceId([0x55; 32]),
+        PLANTED + 1,
+        1 << 30,
+        b"first",
+    );
+    let (own, _) = crafted_file("t.txt", device_of(0), PLANTED + 2, 0, b"one");
+    let mut net = Net::new(vec![key_config(0)]);
+    let (first, own) = {
+        let hashes = (first.hash(), own.hash());
+        plant_files(&mut net, 0, &[first, own], &[a]);
+        hashes
+    };
+    let v = file(&net, 0, "t.txt").unwrap();
+    assert_eq!(v.conflict_copies, vec![own]);
+    assert_eq!(
+        v.bases,
+        vec![(Place::Path, first)],
+        "its chunk not stored: no slot"
+    );
+    assert_eq!(
+        write(&mut net, 0, "t.txt", b"x"),
+        Err(WriteFailure::OwnVersionNotOnDisk)
+    );
+}
+
+#[test]
+fn a_version_of_this_devices_shown_at_the_path_but_not_on_its_disk_is_never_replaced_unseen() {
+    // The bug: the refusal looked only at conflict copies. Node 0's V0
+    // conflicts with node 1's V1, shown first; node 0 loses V0's chunk, and
+    // node 2, which never had V0 on its disk, deletes the path, so V0 is
+    // shown first on node 0 with its content on no disk there. Node 0's next
+    // write went through: it covered the old base and left V0 a head beside
+    // its new dot, and node 2's next write, built on node 0's, covered V0
+    // unseen on every device. Node 0 now refuses while a version of its own
+    // is a head at the path that is not on its disk, and V0 is kept.
+    let f = folder();
+    let mut net = Net::new(vec![key_config(0), key_config(1), key_config(2)]);
+    let v0 = net
+        .with(0, |e, cx| e.write_file(cx, f, "p.txt", &[1u8; 2000], 1))
+        .unwrap();
+    net.with(1, |e, cx| e.write_file(cx, f, "p.txt", &[2u8; 2000], 2))
+        .unwrap();
+    net.connect(0, 1);
+    net.advance(Duration::from_secs(70));
+    assert_eq!(file(&net, 0, "p.txt").unwrap().conflict_copies, vec![v0]);
+    // Node 0 loses V0's chunk at rest, and node 1, its one other holder, is
+    // gone.
+    net.disconnect(0, 1);
+    let chunk = first_chunk(&net, 0, v0);
+    let committed = &mut net.nodes[0].cx.storage.committed;
+    committed.remove(&chunk_key(&f, &chunk));
+    committed.remove(&held_key(&f, &chunk));
+    net.restart(0, key_config(0));
+    net.connect(0, 2);
+    net.advance(Duration::from_secs(70));
+    net.with(2, |e, cx| e.delete(cx, f, "p.txt", 3)).unwrap();
+    net.advance(Duration::from_secs(5));
+    let v = file(&net, 0, "p.txt").unwrap();
+    assert_eq!(v.current, Some(v0), "V0 shown on node 0");
+    assert!(v.bases.iter().all(|(_, r)| *r != v0), "and not on its disk");
+    assert_eq!(
+        write(&mut net, 0, "p.txt", b"x"),
+        Err(WriteFailure::OwnVersionNotOnDisk)
+    );
+    write(&mut net, 2, "p.txt", b"y").unwrap();
+    net.advance(Duration::from_secs(5));
+    for i in [0, 2] {
+        let at = heads(&file(&net, i, "p.txt").unwrap());
+        assert!(at.contains(&v0), "node {i}: V0 kept, {at:?}");
+    }
+}
+
+#[test]
+fn a_version_of_this_devices_shown_first_and_off_its_disk_is_never_replaced_unseen() {
+    // The same bug, planted: node 0's own version is first in display order
+    // and its chunk is not stored here (its store lost, the version coming
+    // back from a peer).
+    let (other, a) = crafted_file("u.txt", DeviceId([0x55; 32]), PLANTED + 1, 0, b"other");
+    let (own, _) = crafted_file("u.txt", device_of(0), PLANTED + 2, 1 << 30, b"one");
+    let mut net = Net::new(vec![key_config(0)]);
+    let own = {
+        let hash = own.hash();
+        plant_files(&mut net, 0, &[other, own], &[a]);
+        hash
+    };
+    let v = file(&net, 0, "u.txt").unwrap();
+    assert_eq!(v.current, Some(own));
+    assert!(
+        v.bases.iter().all(|(_, r)| *r != own),
+        "its chunk not stored"
+    );
+    assert_eq!(
+        write(&mut net, 0, "u.txt", b"x"),
+        Err(WriteFailure::OwnVersionNotOnDisk)
+    );
+}
+
+#[test]
+fn a_save_while_a_newer_version_downloads_is_not_refused() {
+    // The bug: only copy slots counted as a version's place on the disk.
+    // Node 1's V, later by its time, reaches node 0 without its chunk; node
+    // 0's save W is then a conflict copy whose place is the path's own base,
+    // and every later save there was refused until V's content arrived,
+    // which a peer that withholds it can put off without end (TM-22).
+    let f = folder();
+    let mut net = pair();
+    net.hold = Some(Hold::new(1, 0, MessageType::ChunkReply));
+    let v = net
+        .with(1, |e, cx| e.write_file(cx, f, "w.txt", b"newer", 9))
+        .unwrap();
+    net.advance(Duration::from_secs(3));
+    assert_eq!(heads(&file(&net, 0, "w.txt").unwrap()), vec![v]);
+    let w = net
+        .with(0, |e, cx| e.write_file(cx, f, "w.txt", b"mine", 0))
+        .unwrap();
+    let x = file(&net, 0, "w.txt").unwrap();
+    assert_eq!(x.conflict_copies, vec![w], "V shown, W a copy");
+    assert!(x.bases.contains(&(Place::Path, w)), "W on the disk: {x:?}");
+    let again = net.with(0, |e, cx| e.write_file(cx, f, "w.txt", b"again", 1));
+    assert!(again.is_ok(), "{again:?}");
+}
+
+#[test]
+fn a_version_of_this_devices_identical_to_the_one_shown_does_not_refuse_a_write() {
+    // A version of this device's with the content of the version shown is
+    // its twin: that content is on the disk with the shown version's base,
+    // and a write covers the twin with that base (4.4, "Bases"). It is no
+    // reason to refuse, though it is the record of no base.
+    let f = folder();
+    let mut net = Net::new(vec![key_config(0), key_config(1)]);
+    let mine = net
+        .with(0, |e, cx| e.write_file(cx, f, "t.txt", b"same", 1))
+        .unwrap();
+    let shown = net
+        .with(1, |e, cx| e.write_file(cx, f, "t.txt", b"same", 2))
+        .unwrap();
+    net.connect(0, 1);
+    net.advance(Duration::from_secs(5));
+    let v = file(&net, 0, "t.txt").unwrap();
+    assert_eq!(
+        (v.current, v.conflict_copies.clone()),
+        (Some(shown), vec![])
+    );
+    assert!(
+        v.bases.iter().all(|(_, r)| *r != mine),
+        "the twin has no base"
+    );
+    let written = write(&mut net, 0, "t.txt", b"new").unwrap();
+    net.advance(Duration::from_secs(5));
+    for i in 0..2 {
+        assert_eq!(
+            heads(&file(&net, i, "t.txt").unwrap()),
+            vec![written],
+            "node {i}"
+        );
+    }
+}
+
+#[test]
+fn a_twin_of_this_devices_on_its_disk_does_not_refuse_a_write_before_the_shown_one_is() {
+    // The bug: a version of this device's that is no conflict copy was
+    // judged by the version shown alone. Two devices write the same bytes
+    // apart, and the other's is later by its time, so it is shown; until it
+    // was on node 0's disk, node 0's own version, still the path's base and
+    // so on the disk, was taken for one off it, and node 0's write was
+    // refused.
+    let f = folder();
+    let mut net = Net::new(vec![key_config(0), key_config(1)]);
+    let mine = net
+        .with(0, |e, cx| e.write_file(cx, f, "t.txt", b"same", 1))
+        .unwrap();
+    let shown = net
+        .with(1, |e, cx| e.write_file(cx, f, "t.txt", b"same", 2))
+        .unwrap();
+    net.connect(0, 1);
+    let v = file(&net, 0, "t.txt").unwrap();
+    assert_eq!(v.current, Some(shown), "the other's version shown");
+    assert_eq!(
+        v.bases,
+        vec![(Place::Path, mine)],
+        "not yet on node 0's disk"
+    );
+    let written = write(&mut net, 0, "t.txt", b"new");
+    assert!(written.is_ok(), "{written:?}");
+}
+
+#[test]
+fn a_version_that_claims_this_devices_content_with_no_chunk_does_not_refuse_its_writes() {
+    // The same bug, by a write holder, under its own device ID: a version
+    // that claims node 0's content, later by its time, with a chunk that no
+    // blob has, is shown and is on no disk. Node 0's own version, the path's
+    // base, was taken for one off the disk, and node 0 was refused at the
+    // path for good.
+    let mut net = Net::new(vec![key_config(0), key_config(1)]);
+    let mine = write(&mut net, 0, "t.txt", b"same").unwrap();
+    let forged =
+        crafted_file_with_no_chunk("t.txt", DeviceId([0x66; 32]), PLANTED, 1 << 30, b"same");
+    let shown = forged.hash();
+    plant_files(&mut net, 1, &[forged], &[]);
+    net.connect(0, 1);
+    net.advance(Duration::from_secs(70));
+    let v = file(&net, 0, "t.txt").unwrap();
+    assert_eq!(v.current, Some(shown));
+    assert_eq!(v.bases, vec![(Place::Path, mine)]);
+    let written = write(&mut net, 0, "t.txt", b"new");
+    assert!(written.is_ok(), "{written:?}");
+}
+
+#[test]
+fn a_version_of_this_devices_whose_content_no_device_has_keeps_its_writes_refused() {
+    // A record under node 0's ID, its content withheld (here a chunk that no
+    // blob has): no device has that content, so no other device's write,
+    // later or earlier, nor its delete, covers the version, and node 0 stays
+    // refused at the path (4.4, "What becomes of a conflict copy"; TM-40).
+    let f = folder();
+    let mut net = Net::new(vec![key_config(0), key_config(1)]);
+    let forged = crafted_file_with_no_chunk("z.txt", device_of(0), PLANTED, 5, b"one");
+    plant_files(&mut net, 1, &[forged], &[]);
+    net.connect(0, 1);
+    net.advance(Duration::from_secs(5));
+    let refused = |net: &mut Net, after: &str| {
+        assert_eq!(
+            write(net, 0, "z.txt", b"x"),
+            Err(WriteFailure::OwnVersionNotOnDisk),
+            "{after}"
+        );
+    };
+    refused(&mut net, "at first");
+    for (content, mtime) in [(&b"later"[..], 10), (&b"earlier"[..], 1)] {
+        net.with(1, |e, cx| e.write_file(cx, f, "z.txt", content, mtime))
+            .unwrap();
+        net.advance(Duration::from_secs(5));
+        refused(&mut net, "after another device's write");
+    }
+    net.with(1, |e, cx| e.delete(cx, f, "z.txt", 2)).unwrap();
+    net.advance(Duration::from_secs(5));
+    refused(&mut net, "after another device's delete");
 }

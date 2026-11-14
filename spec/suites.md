@@ -219,13 +219,14 @@ its own rule, so no two jobs can produce the same output from the same input. `k
 registry lists every label in use and is the one place a label is added; the table below copies it
 and must stay identical to it. Output is always 32 bytes, truncated only where `keys.md` says so (a
 16-byte LAN beacon ID, peer tag and link beacon ID under `licketysync/v1/link/discovery`, a 20-byte
-DHT ID, the 24-byte chunk nonce, and the 8-byte entries of the chunker's gear table); the
-extendable-output mode is not used. Crate `blake3` 1 in its default build, which is not pure Rust:
-on x86-64 its build script compiles the upstream assembly with `cc`, and on little-endian AArch64
-the C NEON code (the `pure` feature would turn both off); WebAssembly gets SIMD only through the
-`wasm32_simd` feature, which is not enabled, so the browser build runs the portable Rust code. Its
-unsafe and foreign code is accepted and shows in cargo-geiger's report. The `rayon` feature may be
-used for large files, nothing else.
+DHT ID, the 24-byte chunk nonce, and the 8-byte entries of the chunker's gear table) and in a
+conflict copy's name, which shows the first 4 bytes of its record hash, or 16 when shortened
+(`protocol.md` §4.4); the extendable-output mode is not used. Crate `blake3` 1 in its default build,
+which is not pure Rust: on x86-64 its build script compiles the upstream assembly with `cc`, and on
+little-endian AArch64 the C NEON code (the `pure` feature would turn both off); WebAssembly gets
+SIMD only through the `wasm32_simd` feature, which is not enabled, so the browser build runs the
+portable Rust code. Its unsafe and foreign code is accepted and shows in cargo-geiger's report. The
+`rayon` feature may be used for large files, nothing else.
 
 - **The labelled hash `H` for every identifier and link over public data.** `H(label, x) =
   BLAKE3(label || 0x00 || x)`, with `label` an ASCII label under `licketysync/v1/hash/`. It names

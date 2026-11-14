@@ -5,6 +5,186 @@ changed and why.
 
 ## Unreleased
 
+- Engine: a version of this device's on its disk is never taken for one off it because the version
+  shown is not (severity Low). The refusal of the change below judged a version of this device's
+  that is no conflict copy by the version shown alone, even when its own version was the path's
+  base. Two devices that wrote the same bytes apart were refused for about a second after they met,
+  until the other's version was on the disk; and a write holder, under any device ID, could keep a
+  device from writing a path for good with a version that claims that device's content, later by its
+  time, naming a chunk that exists nowhere. A version's own base now counts first: a base is on the
+  disk and in the write's `S`, so nothing is covered unseen.
+  - How long the refusal lasts is stated as it is: when no device has the content of this device's
+    own version (every copy of it lost, or a record forged under its ID with the content withheld),
+    no other device's write, earlier or later, delete or rename ends it, since a version beats a
+    tombstone and no device's `S` holds it. Only the content arriving, a tree delete above the path
+    that covers it ("Why it is safe" 8a), or the folder shared again ends it, and at the folder's
+    root only the content or a re-share. `protocol.md` §4.4 lists the honest ways out, then this
+    case; TM-40 says why it is within §3.6 (a write holder can write over or delete the file anyway,
+    other devices can still write the path, and counter exhaustion, already accepted, is worse); the
+    error's doc says the same.
+  - Tests: `a_twin_of_this_devices_on_its_disk_does_not_refuse_a_write_before_the_shown_one_is` and
+    `a_version_that_claims_this_devices_content_with_no_chunk_does_not_refuse_its_writes`, each
+    failing without the change with `Err(OwnVersionNotOnDisk)`;
+    `a_version_of_this_devices_whose_content_no_device_has_keeps_its_writes_refused` pins the
+    refusal after another device's later write, earlier write and delete.
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
+    `on_disk` (`write.rs`), 6 caught; none missed or timed out.
+
+- Engine: a version of this device's that is a head at a path but not on its disk is never replaced
+  unseen (severity Medium), and a save while a newer version is still arriving is not refused. The
+  refusal of the long-path fix looked only at conflict copies, and counted only copy slots as a
+  place on the disk.
+  - When this device's own version was the one shown at a path and its content was not on the disk
+    (after a restored backup, or a chunk lost or unreadable at a restart, once another device
+    deleted what had been shown), the path's base was another record: the device's write went
+    through, left that version a head beside its new dot, and any record built on the write covered
+    it unseen, on every device. The device now refuses to write, delete or rename a path while a
+    version it wrote there is a head that is not on its disk: a conflict copy, or the version shown,
+    that is the record of no base there, or a twin of the version shown while that one is the record
+    of none (a twin holds the shown version's content, and a write covers it with that version's
+    base, so it refuses nothing while that one is on the disk). A tombstone is always on the disk.
+    `WriteFailure::NoPlaceForCopy` becomes `OwnVersionNotOnDisk`.
+  - A version is on the disk when it is the record of any base, not only of a copy slot. Before,
+    when a version later by its time arrived without its content and this device then saved the
+    path, its save was a conflict copy whose place was the path's own base, and every later save
+    there was refused until the other version's content arrived, which a peer that withholds it can
+    put off without end (TM-22, §3.3).
+  - The simulator's oracle (b′) gives a shared name's slot to the first copy in display order, as
+    the engine does.
+  - Specs: `protocol.md` §4.4 states the rule and what ends it, and what a restored device does;
+    "Why it is safe" 3 cites it. TM-40 states the lockout as it is: one record signed under an
+    honest device's ID at a path, its content withheld, makes that device refuse to write there,
+    with no grinding, at the cost of one record per path, within §3.6.
+  - Tests:
+    `a_version_of_this_devices_shown_at_the_path_but_not_on_its_disk_is_never_replaced_unseen`
+    (three nodes: node 0 loses its copy's chunk, node 2, which never had it, deletes the path, node
+    0's version is then shown, node 0's write is refused, and node 2's next write leaves the version
+    a head),
+    `a_version_of_this_devices_shown_first_and_off_its_disk_is_never_replaced_unseen`
+    (planted) and `a_save_while_a_newer_version_downloads_is_not_refused`;
+    `a_version_of_this_devices_identical_to_the_one_shown_does_not_refuse_a_write` keeps the twin
+    rule; and the oracle's `of_copies_that_share_a_name_only_the_first_has_the_slot`. With the
+    refusal for conflict copies only, the first two fail, each write let through; with only copy
+    slots counted as a place, the third fails, its second save refused; with a twin taken for a
+    version with no place, the fourth fails, its write refused; and without the first-copy rule, the
+    oracle's test finds both copies in one slot.
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
+    `Engine::promotions` and `on_disk` (`write.rs`), 11 caught and 1 unviable (a `Default` the type
+    lacks). None missed or timed out.
+
+- Engine: a conflict copy with no place on the disk is never replaced unseen (severity Medium). Two
+  conflict copies of one path whose names are kept whole share one name when their record hashes
+  share their first four bytes, a 2^-32 chance between honest devices and one a write holder can
+  grind for with about 2^32 signatures. They shared one copy slot, which `apply_path` gave to each
+  in turn every time it applied the path again, since it read the slots once before naming them, so
+  devices that held the same records could keep different disks there. And a device refused to write
+  a path only while one of its own copies there had no name: while its own copy did not hold the
+  shared slot, or while its content was not on the disk yet (its store lost, the copy coming back
+  from a peer), its write covered the rest and left that copy a head beside its new dot, by which
+  every record built on the write could cover the copy, lost then from every device without any
+  having had it on a disk. The bug is older than the long-path fix.
+  - Of the copies that share a name, the first in display order has the slot, on every device alike;
+    the others have no place on the disk and are counted with the copies that no name fits
+    (`Counters::copies_unplaced`, which was `copies_unnamed`).
+  - A device refuses to write a path while a conflict copy it wrote there holds no copy slot,
+    whatever the reason (`WriteFailure::NoPlaceForCopy`, which was `NoRoomForCopy`), and writes it
+    again once that copy holds one or is no longer a conflict copy.
+  - `protocol.md` §4.4, "What becomes of a conflict copy", says when a copy has no place on the disk
+    and that its writer does not write the path then. TM-40 says what grinding for a shared name
+    gains: the later copy has no place on any disk, and its writer is refused at the path until
+    another device puts it there, which is within §3.6.
+  - Regression tests, on records planted with real chunks:
+    `a_copy_of_this_devices_that_shares_its_name_with_an_earlier_copy_is_never_replaced_unseen` and
+    `every_device_gives_a_shared_copy_name_to_the_first_copy_in_display_order`, over two records
+    whose hashes share their first four bytes, found by trying modification times; and
+    `a_copy_of_this_devices_whose_content_is_not_on_the_disk_is_never_replaced_unseen`. With the old
+    slots (the last copy applied holding the name) the first two fail, the first because its write
+    is let through and the second on node 0's slot; with the old refusal (only for a copy with no
+    name) the first and the third fail, each write let through.
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
+    `apply_path` (`sync/disk.rs`), 13 caught; `Engine::promotions` (`write.rs`), 8 caught and 1
+    unviable (a `Default` the type lacks). None missed or timed out.
+
+- Engine: a conflict at a path of 4 077 bytes or more is resolved by a write. A conflict copy was
+  named its path with ` (conflict `, eight hex digits and `)` added, 20 bytes, so at such a path the
+  name passed the 4 096 bytes of the path grammar. A write over a conflict first writes each copy at
+  its own path (`protocol.md` §4.4, "What becomes of a conflict copy"), so every write, delete,
+  rename and mkdir of the path was refused with a misleading `WriteFailure::Path(TooLong)`, on every
+  device that held the copy. Nothing was lost: every head stayed. Phase 1 would have made it far
+  easier to hit, since a name must also fit the file system's 255-byte name limit (TM-4's resolver
+  refuses names the platform cannot hold): any file name of about 236 bytes or more could have had
+  no copy beside it. Found by the reviews of the engine's first batch of mutants.
+  - `copy_name` keeps the name as it was, the path with ` (conflict `, the first four bytes of the
+    record hash in lowercase hex and `)` added, where it fits 4 096 bytes in all and
+    `MAX_NAME_BYTES` (255) in its last component. Where it does not, the name is shortened: the
+    first 16 bytes of the record hash take the place of the four, and the last component's stem
+    (what precedes its last `.`, or the whole component when it has none) is cut on a code point
+    boundary until that component is at most 255 bytes and shorter than the path's own, the
+    extension kept, or the whole component is cut when not one character of the stem fits beside the
+    extension. So a copy's name is never its own path, which would make every write over the path
+    write it twice (`DuplicatePath`): kept whole it is longer, shortened its last component is
+    shorter; and a shortened name fits wherever its path does. The 16 bytes keep copies apart: a cut
+    alone gave two long names in one directory that keep the same part one copy name whenever their
+    records shared four bytes of hash, a 2^-32 chance for honest devices and one a write-key holder
+    could grind for, which put two copy slots at one name and made a rename between the two paths
+    reach `DuplicatePath`. Records at two paths are two records, so the copies of two paths now
+    share a name only if two record hashes collide in 128 bits (about 2^64 hashes of work), and two
+    shortened copies of one path stay apart too; a shortened name never equals a whole one, the 20th
+    byte from its end being a hex digit where the other has a space. The path's keyed tag would have
+    kept two paths apart as well, but needs the folder's keys and leaves two shortened copies of one
+    path four bytes apart. The name depends on the path and the record alone, so every device names
+    a copy alike, which `apply_path` relies on when it compares a slot's name with the copy's.
+    `MAX_NAME_BYTES` is a protocol limit (`protocol.md` section 5), not a parameter for each
+    device's file system: the name becomes the path of a record that every device syncs and shows
+    the same way (§4.4), so it cannot depend on one device's limit.
+  - Where not one character fits (the name kept whole would pass the limits, and fewer bytes than
+    the first character needs are left beside the 44-byte suffix of a shortened name: for an ASCII
+    first character, a last component of 45 bytes or fewer that does not fit whole, or directories
+    of more than 4 051 bytes), the copy gets no slot on the disk, and each application of the path
+    counts it (`Counters::copies_unnamed`). Another device's write over the conflict is not refused:
+    it covers what is on its disk and leaves the copy a head, a conflict. The device that wrote the
+    copy refuses to write the path (`WriteFailure::NoRoomForCopy`) while it is a conflict copy,
+    whatever the write: its new record would carry a later dot of that device beside the copy it
+    does not cover, and every record built on that one would then cover the copy by its dot (4.4,
+    "Coverage") without any device having had it on a disk, a silent loss. With the refusal taken
+    out, a test showed it: the copy's writer wrote the path, the other device then edited it, and
+    the copy was gone from both. Another device's delete or rename of the path, or its write there
+    with an earlier modification time, puts the copy at the path, and its writer can write there
+    again. A tree delete of a directory above the path, by any device, takes such a copy once its
+    join reaches a later record of the copy's writer beneath that directory (`protocol.md` §4.4,
+    "Why it is safe" 8a), and then no device has it.
+  - `write_error` maps the index's path refusal to `WriteFailure::Internal`, an engine bug counted:
+    every path a write names is checked before the write is built, and a copy's name passes
+    `check_path`, so a path the index refuses is one the engine built. `WriteFailure::Path` is only
+    for a path the caller named.
+  - Specs: `protocol.md` §4.4 states the copy's path, cut on code points, its hex in lowercase, and
+    what becomes of a copy that no name fits, a directory above it deleted or moved included; "Why
+    it is safe" 3 cites the refusal it now relies on; section 9 says such a copy stays a conflict;
+    section 5 lists `MAX_NAME_BYTES`. `suites.md` §2.4 lists the record hash bytes a copy's name
+    shows, and `threat-model.md` §5 says that whoever sees those names and a sealed peer's records
+    can tell which record a copy is. The engine's property tests run from the fixed seed other
+    crates use (`testkit::proptest_config`).
+  - Tests: `a_conflict_at_a_path_of_4077_bytes_or_more_is_resolved_by_a_write` (4 077 and 4 096
+    bytes, written over by the copy's own writer),
+    `a_conflict_copy_that_no_name_fits_is_never_replaced_unseen` and
+    `a_tree_delete_above_a_copy_with_no_name_takes_it_only_past_a_later_record_of_its_writer`; unit
+    tests of `copy_name` at both limits, with two-, three- and four-byte characters at the cut, a
+    long extension, a leading dot and no dot; `a_copy_name_is_never_its_own_path`;
+    `two_paths_never_share_a_copy_name`, two long names that keep one part, with records that share
+    four bytes of hash; and `every_copy_name_passes_check_path`, 1 024 paths of the grammar up to
+    4 096 bytes, each with a longer name beside it, whose record shares four bytes of hash, that
+    must get another copy name. With main's `copy_name` and `write_error` put back, eleven of these
+    twelve fail, the regression test with `Err(Path(TooLong(4097)))`;
+    `a_copy_name_is_never_its_own_path` passes there, main's names being the path and more. With
+    four bytes of hash in a shortened name instead of 16, both distinctness tests find two equal
+    copy names; with the bound that keeps a shortened component shorter than the path's taken out,
+    the own-path test and the property test fail.
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
+    `copy_name`, `suffix`, `prefix`, `apply` and `apply_path` (`sync/disk.rs`), 31 caught;
+    `write_error`, `Engine::promotions` and `Engine::decide_write` (`write.rs`), 8 caught and 2
+    unviable (a `Default` the type lacks); `conflict_copy_name` (`inspect.rs`, which the
+    simulator's oracle calls), 3 caught. None missed or timed out.
+
 - Engine: two peers can no longer keep a chunk from an honest holder by taking turns (severity
   Medium). The in-flight table kept one ask time per hash, which every ask reset and a refusal or a
   disconnect left in place, and whenever a hash was free the first connection in handle order with
@@ -3273,6 +3453,33 @@ changed and why.
     protocol crate, one bit per folder per connection), set when a pass skips a lacking hash another
     connection holds and fired when that hash comes free with the waiting connection first in line,
     at least 1 s after its latest `CHUNK_NOT_FOUND` and at most once per `STATUS_INTERVAL`.
+    And from the long-path fix ("a conflict at a path of 4 077 bytes or more"):
+    - a person's change (edit, delete, rename) the engine refuses with `OwnVersionNotOnDisk` must
+      be neither lost nor silently replaced; proposed: it stays on the disk, its record is not
+      written there, and a notice says why;
+    - a plain notice for a copy with no slot on the disk (today `copies_unplaced` only counts it);
+    - where a version pushed off its path with no slot goes on a real disk: it must be the archive
+      (TM-35), or threat-model §3.2's "Cannot … destroy a file beyond the reach of the archive"
+      changes, since at a path of 4 077 bytes or more, or by grinding two whole names of one path
+      into one, a write holder can still leave a version on no disk and then cover it;
+    - a path frozen for the copy's writer while no other write device is active;
+    - the two remedies, and their trade-off: falling back to the nearest directory above where the
+      shortened name fits (the folder's root always does), which ends the refusal for a copy that no
+      name fits; against it, a tree delete of the path's own directory then covers a copy that sits
+      outside it;
+    - a directory move writing the no-slot copies beneath it at their new paths;
+    - Windows device names (`CON.txt` …) that a cut can produce, which the TM-4 resolver and the
+      slot check handle;
+    - once a copy that shares its name is promoted, the other copy's slot names a live file, and on
+      a real disk two entries cannot share one name;
+    - deciding "mine" by the records this device signed and keeps a note of, not by the device ID a
+      record claims: a forged record under this device's ID then harms only its forger, as in the
+      residual of two devices under one ID ("Why it is safe" 8b), and no longer stops this device
+      writing the path (TM-40). Against it: a device restored from a backup has no note of its own
+      later records, so that rule alone would bring back the loss after a restored backup that the
+      refusal closes;
+    - a deliberate way for the person to give up a version that no device holds, which today keeps
+      its writer from writing the path until the folder is shared again (TM-40).
   - Dependencies: none new; the engine depends on the workspace's keys, protocol and index crates,
     dev-depends on the simulator and `proptest`; the simulator depends on the keys crate;
     `ci/geiger-baseline.txt`'s `engine` and `sim` lines now count the keys crate's dependencies.

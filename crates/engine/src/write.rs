@@ -34,7 +34,11 @@
 //!    loss, while a twin is covered with its base. A write over a conflict
 //!    first writes each conflict copy on the disk as a version at its own
 //!    path (`Change::Promote`), in the same commit, so it becomes an
-//!    ordinary file (4.4, "What becomes of a conflict copy").
+//!    ordinary file (4.4, "What becomes of a conflict copy"). A copy with no
+//!    place on the disk (`crate::sync::disk`) is left a head, a conflict.
+//!    While a version this device wrote is a head at a path the write writes
+//!    and is not on the disk, the write is refused
+//!    ([`WriteFailure::OwnVersionNotOnDisk`]).
 //! 4. In phase B the index signs the records (`Txn::write`, counters from the
 //!    high-water mark and the wall clock), and each blob that is not stored
 //!    as it should be is staged then: a blob the book counts as stored is
@@ -49,7 +53,7 @@
 use core::fmt;
 use std::collections::BTreeSet;
 
-use licketysync_index::{Change, Index, Place, Put, WriteError};
+use licketysync_index::{Change, Index, PathView, Place, Put, WriteError};
 use licketysync_keys::chunk::{seal_chunk, SealedChunk};
 use licketysync_keys::{CipherHash, FolderId, RecordHash};
 use licketysync_protocol::limits::MAX_CHUNKS;
@@ -78,7 +82,7 @@ pub enum WriteFailure {
     Paused,
     /// The folder is misconfigured or its store unreadable.
     NotUsable,
-    /// The path breaks the grammar of `SealedMeta.path` (4.4).
+    /// A path the write names breaks the grammar of `SealedMeta.path` (4.4).
     Path(PathError),
     /// A delete or a rename of a path with nothing on the disk.
     NoSuchPath,
@@ -93,6 +97,25 @@ pub enum WriteFailure {
     RenameOntoItself,
     /// More chunks than a record may name (`MAX_CHUNKS`).
     TooLarge,
+    /// A version this device wrote is a head at the path and is not on its
+    /// disk: a conflict copy with no place there (no name fits, or a copy
+    /// before it in display order has its name), or a version whose content
+    /// this device lacks, as after a restored backup or a lost chunk (4.4,
+    /// "What becomes of a conflict copy"). The write would leave it a head
+    /// beside a later record of this device's, whose dot would let any
+    /// record built on that one cover the version unseen (4.4, "Coverage").
+    /// The refusal lasts until the content arrives or another device acts:
+    /// one with the version on its disk writes, deletes or renames over it,
+    /// or one puts it at the path (by a delete or rename of the path, or a
+    /// write there with an earlier modification time) or frees a shared name.
+    /// For a version whose content no device has (every copy of it lost, or
+    /// a record forged under this device's ID with its content withheld),
+    /// no other device's write, delete or rename ends it: only the content
+    /// arriving, a tree delete of a directory above the path that covers it
+    /// through a later record of this device's beneath (4.4, "Why it is
+    /// safe" 8a), or the folder shared again; at the folder's root, only the
+    /// content or a re-share.
+    OwnVersionNotOnDisk,
     /// The next counter would pass `MAX_COUNTER`: the folder must be shared
     /// again (4.4, section 5).
     CounterExhausted,
@@ -114,6 +137,9 @@ impl fmt::Display for WriteFailure {
             Self::NoSuchPath => f.write_str("nothing is on the disk at that path"),
             Self::RenameOntoItself => f.write_str("a rename that would write one path twice"),
             Self::TooLarge => f.write_str("the file needs more chunks than a record names"),
+            Self::OwnVersionNotOnDisk => {
+                f.write_str("a version this device wrote is a head there that is not on its disk")
+            }
             Self::CounterExhausted => {
                 f.write_str("the folder's counter is exhausted: share it again")
             }
@@ -125,12 +151,14 @@ impl fmt::Display for WriteFailure {
 
 impl std::error::Error for WriteFailure {}
 
-/// The index's refusal as a write failure.
+/// The index's refusal as a write failure. A path the index refuses is one
+/// the engine built, its bug: every path the write names passed
+/// `check_path` up front, and a conflict copy's name does too
+/// (`crate::sync::disk::copy_name`).
 pub(crate) fn write_error(e: &WriteError) -> WriteFailure {
     match e {
         WriteError::NotWriteKey => WriteFailure::NotWriteKey,
         WriteError::CounterExhausted => WriteFailure::CounterExhausted,
-        WriteError::Path(p) => WriteFailure::Path(*p),
         _ => WriteFailure::Internal,
     }
 }
@@ -152,6 +180,17 @@ impl Edit<'_> {
             Self::Rename { to, .. } => to,
         }
     }
+}
+
+/// Whether the content of `head`, a version at the path `view` shows, is on
+/// the disk there by `bases`: it is the record of a base, which a write
+/// covers; or, not being a conflict copy, it holds the shown version's
+/// content, a twin that a write covers with that version's base (4.4,
+/// "Bases").
+fn on_disk(view: &PathView, bases: &[(Place, RecordHash)], head: &RecordHash) -> bool {
+    let is_base = |r: &RecordHash| bases.iter().any(|(_, base)| base == r);
+    is_base(head)
+        || (!view.conflict_copies.contains(head) && view.current.as_ref().is_some_and(is_base))
 }
 
 /// The names of the conflict copies on the disk beside `path`: its
@@ -275,8 +314,8 @@ impl Engine {
         mtime_ns: i64,
     ) -> Result<(), WriteFailure> {
         self.refuse_up_front(folder, &op)?;
+        let promotes = self.promotions(folder, &op)?;
         let (mut changes, blobs, target) = self.changes(cx, folder, op, mtime_ns)?;
-        let promotes = self.promotions(folder, &op);
         promotes
             .into_iter()
             .rev()
@@ -425,18 +464,38 @@ impl Engine {
     /// The conflict copies on the disk at the paths `op` writes, each written
     /// as a version at its own path first (4.4, "What becomes of a conflict
     /// copy").
-    fn promotions(&self, folder: FolderId, op: &Edit<'_>) -> Vec<Change> {
+    ///
+    /// # Errors
+    /// [`WriteFailure::OwnVersionNotOnDisk`]: a version this device wrote is a
+    /// head at one of those paths that is not on the disk there.
+    fn promotions(&self, folder: FolderId, op: &Edit<'_>) -> Result<Vec<Change>, WriteFailure> {
         let Some(f) = self.folders.get(&folder) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let paths: Vec<&str> = match op {
             Edit::Rename { from, to } => vec![*from, *to],
             _ => vec![op.path()],
         };
+        let own = f.index.own();
+        let mine = |record: &RecordHash| {
+            f.index
+                .record(record)
+                .and_then(|r| r.dot)
+                .is_some_and(|d| d.device == own)
+        };
         let mut out = Vec::new();
         for path in paths {
-            let heads = f.index.path(path).map(|v| v.heads).unwrap_or_default();
-            for (place, record) in f.index.bases(path) {
+            let view = f.index.path(path);
+            let bases = f.index.bases(path);
+            if view.as_ref().is_some_and(|v| {
+                v.heads
+                    .iter()
+                    .any(|h| !h.tombstone && mine(&h.hash) && !on_disk(v, &bases, &h.hash))
+            }) {
+                return Err(WriteFailure::OwnVersionNotOnDisk);
+            }
+            let heads = view.map(|v| v.heads).unwrap_or_default();
+            for (place, record) in bases {
                 let Place::Copy(name) = place else {
                     continue;
                 };
@@ -463,7 +522,7 @@ impl Engine {
                 });
             }
         }
-        out
+        Ok(out)
     }
 
     /// A file's chunks sealed, and the blobs among them not stored as they
@@ -536,6 +595,8 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
+        #![proptest_config(crate::testkit::proptest_config(256))]
+
         /// Any content cuts into chunks that join back to it, of the size
         /// asked but the last, and as many as the size says.
         #[test]
@@ -567,6 +628,7 @@ mod tests {
             WriteFailure::NoSuchPath,
             WriteFailure::RenameOntoItself,
             WriteFailure::TooLarge,
+            WriteFailure::OwnVersionNotOnDisk,
             WriteFailure::CounterExhausted,
             WriteFailure::Store(StoreFailureCause::Full),
             WriteFailure::Internal,
@@ -587,8 +649,8 @@ mod tests {
         );
         assert_eq!(
             write_error(&WriteError::Path(PathError::TooLong(5_000))),
-            WriteFailure::Path(PathError::TooLong(5_000)),
-            "the index's path refusal keeps its reason"
+            WriteFailure::Internal,
+            "a path the index refuses is one the engine built: its bug"
         );
         assert_eq!(
             write_error(&WriteError::DuplicatePath("a".into())),

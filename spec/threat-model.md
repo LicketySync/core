@@ -1902,14 +1902,25 @@ display order (non-tombstones first, directories before files, then the later mo
 then the smaller record hash; `protocol.md` §4.4) the first sits at the path, and the others, where
 their content differs, become named conflict copies. It never outranks coverage, and every head
 stays a head, so a writer who sets a future modification time or grinds record hashes gains only
-which copy is shown first; a later record that covers them all replaces them. The modification time
-is only ever compared, never subtracted, and a value the local file system cannot set is an issue
-raised against the record, never a panic (TM-23). A device's clock enters the index in two places
-only, and neither orders versions nor decides by itself what another device holds. First, a new
-record's counter is at least its writer's wall clock, up to `CLOCK_FLOOR_MAX` (the clock floor,
-which keeps a device restored from a backup from reusing counters, a protection of the writer's own
-that no other device checks), so counters roughly follow time and rank a vector's entries when it is
-pruned. Second, a write holder's clock decides when it signs a **watermark** (the owner's decisions
+which copy is shown first; a later record that covers them all replaces them. A write holder can
+also keep an honest device from writing a path, with no grinding: one record signed under that
+device's ID at the path, its content withheld, is a version of that device's that is not on its
+disk, so the device refuses to write, delete or rename the path (`protocol.md` §4.4), at the cost of
+one record per path; where no name fits, or for two copies that share a name, the display order also
+decides which writer is refused. Since no device has that content, no other device's write, earlier
+or later, delete or rename ends the refusal (a version beats a tombstone, and no device's `S` holds
+it): only the content arriving, a tree delete above the path that covers it through a later record
+under the device's ID beneath it (`protocol.md` §4.4, "Why it is safe" 8a), or sharing the folder
+again; at the folder's root, only the content or a re-share. That is within §3.6: a write holder can
+write over or delete the file anyway, other devices can still write the path, and counter
+exhaustion, already accepted, is worse. The modification time is only ever compared, never
+subtracted, and a value the local file system cannot set is an issue raised against the record,
+never a panic (TM-23). A device's clock enters the index in two places only, and neither orders
+versions nor decides by itself what another device holds. First, a new record's counter is at least
+its writer's wall clock, up to `CLOCK_FLOOR_MAX` (the clock floor, which keeps a device restored
+from a backup from reusing counters, a protection of the writer's own that no other device checks),
+so counters roughly follow time and rank a vector's entries when it is pruned.
+Second, a write holder's clock decides when it signs a **watermark** (the owner's decisions
 of 2026-11-08, "Switch" and "After 365 days", and of 2026-11-12, "A year after arrival, together",
 for cleanups "the same logic as the deletion of a file", and "Wait, never early"): each write holder
 notes, by its own calendar, when each tombstone, tree delete and cleanup arrived there, and signs,
@@ -2274,19 +2285,21 @@ tombstone, short of the old deletions a cleanup group with an empty `because` na
 deletes that cleanup groups are issued `because` of: those sit in the sealed part, padded to a power
 of two. Padmé padding blurs each chunk's size, which still shows to within about 3% from 64 KiB, 6%
 from 256 bytes and 12% below that (`keys.md` §3.3); it does not hide the number of chunks, the
-total volume, or when changes happen. A sealed peer can also show a stale snapshot to a peer that
-has no persisted state yet for a path, such as one on its first sync; the regression is found
-when that peer meets a fresher one (TM-17). And it can bring back, whenever
-it likes, a file whose deletion a watermark has forgotten, a year or more after a write holder
-received it (sooner where that write holder's clock is wrong, TM-40), even at a path re-created
-since, as a conflict copy; keep and replay stale copies,
-which write holders then name; and take away again from another sealed peer, by replaying a genuine
-old deletion, a version that came back after that deletion was forgotten, until a write holder meets
-that peer (§3.3; `protocol.md` §4.4). Compression inside the encrypted chunk, when a writer enables
-it, is a CRIME-style length channel: where bytes an attacker can influence share a chunk with
-secrets, the padded size reveals how well they compressed together. Padmé blunts it (2 KiB
-granularity at 64 KiB, 128 KiB at 4 MiB) but does not remove it; phase 0 uses no compression, and
-the release that enables one states this channel on the site before it ships (TM-15).
+total volume, or when changes happen. A conflict copy's name on a key holder's disk shows the first
+4 bytes of its record hash (16 when shortened, `protocol.md` §4.4), so whoever sees those names and
+also a sealed peer's records can tell which record, and so which file ID and history, the copy is.
+A sealed peer can also show a stale snapshot to a peer that has no persisted state yet for a path,
+such as one on its first sync; the regression is found when that peer meets a fresher one (TM-17).
+And it can bring back, whenever it likes, a file whose deletion a watermark has forgotten, a year or
+more after a write holder received it (sooner where that write holder's clock is wrong, TM-40), even
+at a path re-created since, as a conflict copy; keep and replay stale copies, which write holders
+then name; and take away again from another sealed peer, by replaying a genuine old deletion, a
+version that came back after that deletion was forgotten, until a write holder meets that peer
+(§3.3; `protocol.md` §4.4). Compression inside the encrypted chunk, when a writer enables it, is a
+CRIME-style length channel: where bytes an attacker can influence share a chunk with secrets, the
+padded size reveals how well they compressed together. Padmé blunts it (2 KiB granularity at 64 KiB,
+128 KiB at 4 MiB) but does not remove it; phase 0 uses no compression, and the release that enables
+one states this channel on the site before it ships (TM-15).
 
 **To a key holder.** A write or read key holder sees everything in the folder, every other peer's
 device ID, name and reported tier (shown marked "reported", like the name), and, through chunk

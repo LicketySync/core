@@ -164,6 +164,13 @@ pub const MAX_PEER_NAMES: u64 = 1_048_576;
 pub const MAX_FUTURE_KNOWN: usize = 1_024;
 /// `SealedMeta.path`: at most this many bytes.
 pub const MAX_PATH_BYTES: usize = 4_096;
+/// `MAX_NAME_BYTES`: the last component of a conflict copy's name, at most
+/// this many bytes (4.4, "What becomes of a conflict copy"): the least of the
+/// common file systems' name limits (Linux's count bytes; Windows' and
+/// Apple's count characters or UTF-16 units, of which 255 bytes of UTF-8
+/// never hold more). One constant for every device, so that every device
+/// names a copy alike.
+pub const MAX_NAME_BYTES: usize = 255;
 /// `MAX_CHUNK_PLAINTEXT`: the largest raw chunk, 4 MiB.
 pub const MAX_CHUNK_PLAINTEXT: usize = licketysync_keys::chunk::MAX_CHUNK_PLAINTEXT;
 /// `ChunkRef.stored_len` at least: one byte of payload, padded, plus nonce and tag.
@@ -293,6 +300,7 @@ mod tests {
         assert_eq!(MAX_FIELD_NUMBER, 536_870_911);
         assert_eq!(MAX_SEND_QUEUE, 134_217_728);
         assert_eq!(MAX_SEALED_BYTES, 2_097_192);
+        assert_eq!(MAX_NAME_BYTES, 255);
         assert_eq!(MAX_CLEANUP_SEALED_BYTES, 1_064);
         assert_eq!(MAX_STORED_LEN, 4_325_416);
         assert_eq!(MIN_STORED_LEN, 46);

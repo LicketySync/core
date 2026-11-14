@@ -280,6 +280,13 @@ pub struct Counters {
     pub store_failures: u64,
     /// Write attempts refused locally (a read or sealed key, a pause …).
     pub writes_refused: u64,
+    /// Conflict copies with no place on the disk, counted each time their
+    /// path is applied: no name fits beside their path, or a copy before
+    /// them in display order has their name. A write at the path leaves such
+    /// a copy a head, a conflict, and its own writer refuses to write there
+    /// (4.4, "What becomes of a conflict copy";
+    /// `WriteFailure::OwnVersionNotOnDisk`).
+    pub copies_unplaced: u64,
     /// The paths applied to the disk, for the test that holding a tree
     /// delete applies only what it dropped.
     #[cfg(test)]

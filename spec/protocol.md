@@ -1710,12 +1710,42 @@ verification below.
   conflict, holding the heads on its disk, first writes each conflict copy it has on disk as a
   version at the copy's own path (the same chunks, `S` empty), in the same commit: from then on the
   copy is an ordinary live file, synced like any other and kept until a person deletes it, and the
-  path's own heads are covered. Contents are never merged (the owner's decision), so every overlap
-  of two concurrent edits leaves one such file, and the index grows with these live files, one
-  record each, never with history.
+  path's own heads are covered. A copy's own path, the same on every device, is the path with
+  ` (conflict `, the first four bytes of its record hash in lowercase hex and `)` added. Where that
+  would pass 4 096 bytes in all or `MAX_NAME_BYTES` (255) in its last component (the least name
+  limit of common file systems), the first 16 bytes of the record hash, in lowercase hex, go there
+  instead, and the last component's stem (what precedes its last `.`, or the whole component when it
+  has none) is cut on a code point (Unicode scalar value) boundary to the longest prefix with which
+  that component is at most `MAX_NAME_BYTES` and shorter than the path's own; when not one character
+  of the stem fits beside the extension, the whole component is cut instead. So a copy's name is
+  never its own path, and the copies of two paths share a name only if their record hashes collide
+  in 128 bits. A copy has no place on the disk where not one character of its name fits, or where a
+  copy before it in display order has its name (two copies of one path kept whole share one when
+  their record hashes share their first four bytes): another device's write leaves it a head, a
+  conflict. A device does not write, delete or rename a path while a version it wrote at the path is
+  a head that is not on its disk: one that is the record of no base there, unless it is a twin of
+  the version shown (holding that version's content, which a write covers with that version's base)
+  and that one is on the disk; a copy with no place, or a version whose content it lacks, is such a
+  version. That write's dot would let every record built on it cover the version unseen ("Coverage";
+  "Why it is safe" 3). The refusal lasts until the content arrives, another device with the version
+  on its disk writes, deletes or renames over it, or another device puts it at the path (by a delete
+  or rename of the path, or a write there with an earlier modification time) or frees its name (a
+  write over a shared name promotes the copy that holds it). For a version whose content no device
+  has (every copy of it lost, or a record forged under the device's ID with its content withheld),
+  no other device's write, delete or rename ends it, since a version beats a tombstone and no
+  device's `S` holds it: only its content arriving, a tree delete above the path that covers it
+  ("Why it is safe" 8a), or the folder shared again does, and at the folder's root only the content
+  or a re-share. A tree delete of a directory above the path, by any device (a directory moved is
+  deleted where it was), covers a copy with no place on the disk once its join reaches a later
+  record of the copy's writer beneath that directory ("Why it is safe" 8a), and then no device has
+  the copy, none having had it on its disk. Contents are never merged (the owner's decision), so
+  every overlap of two concurrent edits leaves one such file, and the index grows with these live
+  files, one record each, never with history.
 - So a device restored from an old backup, which still holds an old head, makes its next edit cover
   that old head and not the later versions it never held: every peer that holds the later versions
-  then holds two heads, a conflict, and nothing is lost silently.
+  then holds two heads, a conflict, and nothing is lost silently. A version it wrote and no longer
+  holds on its disk, coming back from a peer as a head, keeps it from writing that path until the
+  content arrives or another device acts, as above.
 - Sealed peers compute no heads, since they cannot read paths, vectors or deletion marks; they hold
   records by the sealed-peer rule, which is all they need to store, serve and garbage-collect: a
   chunk that no held record names is freed (4.6).
@@ -1749,9 +1779,10 @@ anything, which a write holder can do anyway by writing over it.
    knows; if `c = U.counter`, `U'` is `U` (A1, A2); otherwise `U'` came after `U` on its device (A1,
    the writer's rule). For a version, `U'` was written by `U`'s own device at `U`'s path after `U`,
    from its bases there and their twins, which put the bases first and its own records first among
-   them: so `U` was in that `S`, or had been replaced there by an applied version that `U'`'s `S`
-   held, through a chain of records each covering the one before, or deleted there. `V` replacing
-   `U` follows the path's own history.
+   them: so `U` was in that `S` (a device does not write a path while a version it wrote at the path
+   is a head that is not on its disk, "What becomes of a conflict copy"), or had been replaced there
+   by an applied version that `U'`'s `S` held, through a chain of records each covering the one
+   before, or deleted there. `V` replacing `U` follows the path's own history.
 4. *An older version never replaces a newer one.* If `V` knows `U`, then `U` does not cover `V`: `U`
    covering `V` needs `V.counter ≤ U.vector[V.device_id] < U.counter`, and `V` knowing `U` needs
    `U.counter < V.counter` (1). This looks at no entry but dots, so it holds however much either
@@ -3072,6 +3103,7 @@ not the only way to build it.
 | `WATERMARK_INTERVAL` (the least time between two watermarks a write holder signs in a folder: within one opening by monotonic time, which counts time asleep, whatever the wall clock reads; across openings by its wall clock, from the last signing's stored reading, a reading earlier than that one counting as passed, 4.4; also, by monotonic time, the least time between two rounds that a change of the greatest watermark owes toward a peer that reports the sealed tier, 4.5) | 1 day |
 | `PEER_NAMES_WINDOW` (the window of `MAX_PEER_NAMES`, by the write holder's wall clock, 4.4, 4.5) | 30 days |
 | `MAX_REPLACES` (names in an index record's `replaces`, 4.4) | 64 |
+| `MAX_NAME_BYTES` (the last component of a conflict copy's name, 4.4) | 255 |
 | `MAX_CLEANUP_ENTRIES` (names in one cleanup record, 4.4) | 16 384 |
 | `MAX_CLEANUP_GROUPS` (groups in one cleanup record, 4.4) | 1 024 |
 | `MAX_STALE_KNOWN` (stale copies and forgotten records a write holder notes per folder, 4.5) | 65 536 |
@@ -3899,9 +3931,10 @@ version still on its way comes back as a file.
 
 **What becomes of a conflict copy.** Until someone saves the file again, the copy is the second
 version the index keeps, shown the same way on every device. The device where the person saves the
-file first turns each copy into an ordinary file of its own, beside the original, which syncs like
-any other file and stays until the person deletes it. So every time two edits overlap, one file is
-left over, and the index grows by that file's one record, never by history.
+file first turns each copy it has on its disk into an ordinary file of its own, beside the original,
+which syncs like any other file and stays until the person deletes it; a copy whose name cannot fit
+beside a very long path has no place on the disk, and stays a conflict. So every time two edits
+overlap, one file is left over, and the index grows by that file's one record, never by history.
 
 **Two devices create the same file independently.** L and D, apart, each create `notes.txt`: VL with
 counter (L, 100) and VD with counter (D, 150), both with empty lists. When they meet, neither list

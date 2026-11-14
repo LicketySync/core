@@ -108,8 +108,9 @@ pub struct Ledger {
     /// [`WriteFailure`] but `Paused` and `Store`, which are tried again): a
     /// read or sealed key, but also an unknown folder, a folder not usable,
     /// a bad path, no such path, a rename that would write one path twice,
-    /// too large, the counter exhausted or an internal error. The workload
-    /// moves past each; the oracle compares the count with the scenario's
+    /// too large, a conflict copy of its own with no place on the disk, the counter
+    /// exhausted or an internal error. The workload moves past each; the
+    /// oracle compares the count with the scenario's
     /// [`crate::oracle::Expect::refused`].
     pub refused: u64,
     /// Every write that made a record: its peer, path and record hash.
