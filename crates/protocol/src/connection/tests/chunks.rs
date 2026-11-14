@@ -666,8 +666,10 @@ fn in_flight_limit_on_the_requester() {
     let mut p = Pair::open();
     p.a.auto = false;
     for i in 0..64u8 {
+        assert_eq!(p.b.conn.requests_free(), 64 - usize::from(i));
         p.b.request_chunk(p.now, CipherHash([i; 32])).unwrap();
     }
+    assert_eq!(p.b.conn.requests_free(), 0);
     assert_eq!(
         p.b.request_chunk(p.now, CipherHash([100; 32])).err(),
         Some(SendError::InFlightFull)
@@ -1008,4 +1010,161 @@ fn a_peer_that_floods_requests_and_never_reads_is_bounded() {
     }
     p.a.receive(p.now, &frame(&request(&f, CipherHash([201; 32]))));
     assert_eq!(closed(&p.a).map(|c| c.0), Some(CloseReason::ProtocolError));
+}
+
+/// B asks A for `h`, A answers `CHUNK_NOT_FOUND`, and B's pass ends
+/// waiting for a trigger. The answer's time.
+fn waiting_on(p: &mut Pair, h: CipherHash) -> Duration {
+    let f = p.a.folder_id();
+    p.b.request_chunk(p.now, h).unwrap();
+    p.b.receive(p.now, &frame(&reply(&f, h, 2, vec![])));
+    p.b.pass_done(p.now);
+    assert_eq!(
+        p.b.conn.chunk_position(Tick::at(p.now), &f),
+        Err(SendError::PassWaiting)
+    );
+    p.now
+}
+
+/// B's engine finds A the next to ask for a hash another connection held.
+fn hash_freed(p: &mut Pair) {
+    let f = p.a.folder_id();
+    let out = p.b.conn.hash_freed(Tick::at(p.now), f);
+    p.b.apply(p.now, out);
+}
+
+/// B's pass to A left a hash another connection held, then B's engine
+/// finds A the next to ask for one.
+fn skipped_then_freed(p: &mut Pair) {
+    let f = p.a.folder_id();
+    p.b.conn.pass_skipped(f);
+    hash_freed(p);
+}
+
+#[test]
+fn a_freed_hash_is_a_trigger_within_the_other_triggers_limits() {
+    // The waiting-pass residual (TM-22): a pass that got a CHUNK_NOT_FOUND
+    // waited for a Status with more chunks stored or a completed round, which
+    // a quiet folder may never bring, while another connection held a
+    // request for a hash A has. A freed hash is a trigger, no sooner than
+    // 1 s after the latest CHUNK_NOT_FOUND and at most once per
+    // STATUS_INTERVAL, the later one deferred, never dropped.
+    let mut p = Pair::open();
+    let f = p.a.folder_id();
+    p.a.auto = false;
+    p.b.auto = false;
+    let allowed = |p: &Pair| p.b.saw(|e| matches!(e, Event::PassAllowed { .. }));
+    let nf_at = waiting_on(&mut p, CipherHash([1; 32]));
+    p.now += Duration::from_millis(300);
+    skipped_then_freed(&mut p);
+    assert!(!allowed(&p), "not before 1 s");
+    assert_eq!(p.b.wake, Some(nf_at + s(1)));
+    wake_b_until(&mut p, nf_at + s(1) - Duration::from_millis(1));
+    assert!(!allowed(&p));
+    wake_b_until(&mut p, nf_at + s(1));
+    assert!(allowed(&p));
+    assert_eq!(p.b.conn.chunk_position(Tick::at(p.now), &f), Ok(None));
+    // Again within STATUS_INTERVAL of the one acted on: deferred.
+    let eval = nf_at + Duration::from_millis(300);
+    p.b.events.clear();
+    p.now += s(2);
+    waiting_on(&mut p, CipherHash([2; 32]));
+    skipped_then_freed(&mut p);
+    assert!(!allowed(&p), "deferred");
+    wake_b_until(&mut p, eval + s(30) - Duration::from_millis(1));
+    assert!(!allowed(&p));
+    wake_b_until(&mut p, eval + s(30));
+    assert!(allowed(&p), "acted on at the window's end");
+}
+
+#[test]
+fn a_freed_hash_counts_from_the_latest_not_found_and_while_the_pass_asks() {
+    // A freed hash while the pass still asks is remembered and judged when
+    // the pass ends, as a completed round is; a later CHUNK_NOT_FOUND spends
+    // it.
+    let mut p = Pair::open();
+    let f = p.a.folder_id();
+    p.a.auto = false;
+    p.b.auto = false;
+    let allowed = |p: &Pair| p.b.saw(|e| matches!(e, Event::PassAllowed { .. }));
+    let (h1, h2) = (CipherHash([1; 32]), CipherHash([2; 32]));
+    p.b.request_chunk(p.now, h1).unwrap();
+    p.b.receive(p.now, &frame(&reply(&f, h1, 2, vec![])));
+    p.b.request_chunk(p.now, h2).unwrap();
+    p.now += s(2);
+    skipped_then_freed(&mut p);
+    assert!(!allowed(&p), "still asking");
+    p.b.pass_done(p.now);
+    assert!(allowed(&p), "judged as the pass ends");
+    // The late answer for h2 is a CHUNK_NOT_FOUND after the trigger: the
+    // pass waits again, for a new one.
+    p.b.events.clear();
+    p.b.receive(p.now, &frame(&reply(&f, h2, 2, vec![])));
+    let later = p.now + s(40);
+    wake_b_until(&mut p, later);
+    assert!(!allowed(&p), "spent");
+    assert_eq!(
+        p.b.conn.chunk_position(Tick::at(p.now), &f),
+        Err(SendError::PassWaiting)
+    );
+    skipped_then_freed(&mut p);
+    assert!(allowed(&p));
+}
+
+#[test]
+fn a_freed_hash_is_a_trigger_only_for_a_pass_that_skipped_one() {
+    // A pass that asked for every hash it could, and was refused, is not
+    // owed the freed-hash trigger: two peers that both lack a hash nobody
+    // has would otherwise trigger each other's passes for it for good. The
+    // pass's skip is forgotten when the next pass starts.
+    let mut p = Pair::open();
+    let f = p.a.folder_id();
+    p.a.auto = false;
+    p.b.auto = false;
+    let allowed = |p: &Pair| p.b.saw(|e| matches!(e, Event::PassAllowed { .. }));
+    waiting_on(&mut p, CipherHash([1; 32]));
+    assert!(!p.b.conn.skipped(&f));
+    p.now += s(2);
+    hash_freed(&mut p);
+    let later = p.now + s(40);
+    wake_b_until(&mut p, later);
+    assert!(!allowed(&p), "nothing skipped");
+    // A skip of a pass ended: the next pass forgets it.
+    p.b.conn.pass_skipped(f);
+    assert!(p.b.conn.skipped(&f));
+    let out = p.b.conn.hash_freed(Tick::at(p.now), f);
+    p.b.apply(p.now, out);
+    assert!(allowed(&p), "skipped, then freed");
+    p.b.events.clear();
+    waiting_on(&mut p, CipherHash([2; 32]));
+    assert!(!p.b.conn.skipped(&f), "forgotten as the pass started");
+    let later = p.now + s(40);
+    wake_b_until(&mut p, later);
+    hash_freed(&mut p);
+    let later = p.now + s(40);
+    wake_b_until(&mut p, later);
+    assert!(!allowed(&p), "the new pass skipped nothing");
+}
+
+#[test]
+fn a_trigger_is_deferred_only_when_the_pass_waits_and_one_has_fired() {
+    // Inside the window after a trigger was acted on, a freed hash for a
+    // pass that skipped none is no trigger: nothing is kept for the
+    // window's end, and no wake is armed for it.
+    let mut p = Pair::open();
+    let f = p.a.folder_id();
+    p.a.auto = false;
+    p.b.auto = false;
+    let nf_at = waiting_on(&mut p, CipherHash([1; 32]));
+    skipped_then_freed(&mut p);
+    wake_b_until(&mut p, nf_at + s(1));
+    assert_eq!(p.b.conn.chunk_position(Tick::at(p.now), &f), Ok(None));
+    p.now += s(2);
+    waiting_on(&mut p, CipherHash([2; 32]));
+    assert!(!p.b.conn.skipped(&f));
+    hash_freed(&mut p);
+    assert_eq!(p.b.conn.chunks_wake(), None, "nothing deferred");
+    // A trigger that fired is deferred to the window's end.
+    skipped_then_freed(&mut p);
+    assert_eq!(p.b.conn.chunks_wake(), Some(nf_at + s(30)));
 }

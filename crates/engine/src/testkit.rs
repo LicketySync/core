@@ -418,15 +418,24 @@ impl Hold {
 
 /// Frames held back on chosen streams until a test delivers them, one
 /// handler a delivery ([`Net::deliver`]): a peer that answers late, or never.
+/// What it holds between two nodes goes when their connection ends (a
+/// disconnect, a hang-up or a restart).
 #[derive(Debug, Default)]
 pub(crate) struct Gate {
     /// What is held: the frames of a kind on a stream (from, to), and of a
     /// chunk request or reply only those for the hash, when one is named.
     pub(crate) rules: Vec<(usize, usize, MessageType, Option<CipherHash>)>,
-    held: BTreeMap<(usize, usize), Vec<Frame>>,
+    pub(crate) held: BTreeMap<(usize, usize), Vec<Frame>>,
 }
 
 impl Gate {
+    /// The connection between `a` and `b` ended: what was held between them
+    /// goes with it.
+    fn forget(&mut self, a: usize, b: usize) {
+        self.held.remove(&(a, b));
+        self.held.remove(&(b, a));
+    }
+
     /// What of `bytes` (from, to) is delivered now: the frames no rule holds.
     fn pass(&mut self, from: usize, to: usize, bytes: Vec<u8>) -> Vec<u8> {
         if !self.rules.iter().any(|r| (r.0, r.1) == (from, to)) {
@@ -546,11 +555,13 @@ impl Net {
             return;
         };
         let from = PeerId::new(hold.from as u64);
+        // The gate's rules hold what they name of it, as of any other bytes.
+        let bytes = self.gate.pass(hold.from, hold.to, hold.bytes);
         self.streams
             .entry((hold.from, hold.to))
             .or_default()
-            .extend_from_slice(&hold.bytes);
-        for piece in hold.bytes.chunks(crate::runtime::MAX_CHUNK) {
+            .extend_from_slice(&bytes);
+        for piece in bytes.chunks(crate::runtime::MAX_CHUNK) {
             let n = &mut self.nodes[hold.to];
             n.engine.on_message(&mut n.cx, from, piece);
         }
@@ -560,7 +571,9 @@ impl Net {
     pub(crate) fn restart(&mut self, i: usize, config: EngineConfig) {
         let n = &mut self.nodes[i];
         for p in core::mem::take(&mut n.cx.connected) {
-            let other = &mut self.nodes[p.as_u64() as usize];
+            let j = p.as_u64() as usize;
+            self.gate.forget(i, j);
+            let other = &mut self.nodes[j];
             other.cx.connected.remove(&PeerId::new(i as u64));
             let me = PeerId::new(i as u64);
             other.engine.on_disconnected(&mut other.cx, me);
@@ -588,8 +601,7 @@ impl Net {
     /// Disconnects `a` and `b`, both hearing `on_disconnected`; what the
     /// gate held between them goes with the connection.
     pub(crate) fn disconnect(&mut self, a: usize, b: usize) {
-        self.gate.held.remove(&(a, b));
-        self.gate.held.remove(&(b, a));
+        self.gate.forget(a, b);
         let (pa, pb) = (PeerId::new(a as u64), PeerId::new(b as u64));
         self.nodes[a].cx.connected.remove(&pb);
         self.nodes[b].cx.connected.remove(&pa);
@@ -645,6 +657,7 @@ impl Net {
             let n = &mut self.nodes[i];
             n.engine.on_disconnected(&mut n.cx, p);
             let j = p.as_u64() as usize;
+            self.gate.forget(i, j);
             if self.nodes[j].cx.connected.remove(&me) {
                 let n = &mut self.nodes[j];
                 n.engine.on_disconnected(&mut n.cx, me);
@@ -734,4 +747,27 @@ fn the_reads_at_one_instant_count_afresh_once_time_passes() {
             assert_eq!(cx.now(), Instant::from_nanos(t));
         }
     }
+}
+
+#[test]
+fn the_gate_holds_what_a_release_brings_and_forgets_what_a_connection_ended_with() {
+    let mut net = crate::tests::pair();
+    let before = net.statuses(0, 1).len();
+    // A hold takes node 0's Status bytes before the gate sees them; its
+    // release passes them through the gate, which keeps them.
+    net.hold = Some(Hold::new(0, 1, MessageType::Status));
+    net.gate.rules.push((0, 1, MessageType::Status, None));
+    net.advance(Duration::from_secs(31));
+    net.release();
+    assert_eq!(net.statuses(0, 1).len(), before, "the gate held them");
+    assert!(net.deliver(0, 1, |_| true) > 0);
+    assert!(net.statuses(0, 1).len() > before);
+    // What the gate holds goes with the connection, at a restart as at a
+    // disconnect or a hang-up.
+    let delivered = net.statuses(0, 1).len();
+    net.advance(Duration::from_secs(31));
+    assert_eq!(net.statuses(0, 1).len(), delivered, "the next one held");
+    net.restart(1, config(1, vec![folder_key(1, 1)]));
+    net.gate.rules.clear();
+    assert_eq!(net.deliver(0, 1, |_| true), 0, "forgotten");
 }

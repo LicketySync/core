@@ -5,6 +5,167 @@ changed and why.
 
 ## Unreleased
 
+- Engine: a conflict copy with no place on the disk is never replaced unseen (severity Medium). Two
+  conflict copies of one path whose names are kept whole share one name when their record hashes
+  share their first four bytes, a 2^-32 chance between honest devices and one a write holder can
+  grind for with about 2^32 signatures. They shared one copy slot, which `apply_path` gave to each
+  in turn every time it applied the path again, since it read the slots once before naming them, so
+  devices that held the same records could keep different disks there. And a device refused to write
+  a path only while one of its own copies there had no name: while its own copy did not hold the
+  shared slot, or while its content was not on the disk yet (its store lost, the copy coming back
+  from a peer), its write covered the rest and left that copy a head beside its new dot, by which
+  every record built on the write could cover the copy, lost then from every device without any
+  having had it on a disk. The bug is older than the long-path fix.
+  - Of the copies that share a name, the first in display order has the slot, on every device alike;
+    the others have no place on the disk and are counted with the copies that no name fits
+    (`Counters::copies_unplaced`, which was `copies_unnamed`).
+  - A device refuses to write a path while a conflict copy it wrote there holds no copy slot,
+    whatever the reason (`WriteFailure::NoPlaceForCopy`, which was `NoRoomForCopy`), and writes it
+    again once that copy holds one or is no longer a conflict copy.
+  - `protocol.md` §4.4, "What becomes of a conflict copy", says when a copy has no place on the disk
+    and that its writer does not write the path then. TM-40 says what grinding for a shared name
+    gains: the later copy has no place on any disk, and its writer is refused at the path until
+    another device puts it there, which is within §3.6.
+  - Regression tests, on records planted with real chunks:
+    `a_copy_of_this_devices_that_shares_its_name_with_an_earlier_copy_is_never_replaced_unseen` and
+    `every_device_gives_a_shared_copy_name_to_the_first_copy_in_display_order`, over two records
+    whose hashes share their first four bytes, found by trying modification times; and
+    `a_copy_of_this_devices_whose_content_is_not_on_the_disk_is_never_replaced_unseen`. With the old
+    slots (the last copy applied holding the name) the first two fail, the first because its write
+    is let through and the second on node 0's slot; with the old refusal (only for a copy with no
+    name) the first and the third fail, each write let through.
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
+    `apply_path` (`sync/disk.rs`), 13 caught; `Engine::promotions` (`write.rs`), 8 caught and 1
+    unviable (a `Default` the type lacks). None missed or timed out.
+
+- Engine: a version of this device's that is a head at a path but not on its disk is never replaced
+  unseen (severity Medium), and a save while a newer version is still arriving is not refused. The
+  refusal of the long-path fix looked only at conflict copies, and counted only copy slots as a
+  place on the disk.
+  - When this device's own version was the one shown at a path and its content was not on the disk
+    (after a restored backup, or a chunk lost or unreadable at a restart, once another device
+    deleted what had been shown), the path's base was another record: the device's write went
+    through, left that version a head beside its new dot, and any record built on the write covered
+    it unseen, on every device. The device now refuses to write, delete or rename a path while a
+    version it wrote there is a head that is not on its disk: a conflict copy, or the version shown,
+    that is the record of no base there, or a twin of the version shown while that one is the record
+    of none (a twin holds the shown version's content, and a write covers it with that version's
+    base, so it refuses nothing while that one is on the disk). A tombstone is always on the disk.
+    `WriteFailure::NoPlaceForCopy` becomes `OwnVersionNotOnDisk`.
+  - A version is on the disk when it is the record of any base, not only of a copy slot. Before,
+    when a version later by its time arrived without its content and this device then saved the
+    path, its save was a conflict copy whose place was the path's own base, and every later save
+    there was refused until the other version's content arrived, which a peer that withholds it can
+    put off without end (TM-22, §3.3).
+  - The simulator's oracle (b′) gives a shared name's slot to the first copy in display order, as
+    the engine does.
+  - Specs: `protocol.md` §4.4 states the rule and what ends it, and what a restored device does;
+    "Why it is safe" 3 cites it. TM-40 states the lockout as it is: one record signed under an
+    honest device's ID at a path, its content withheld, makes that device refuse to write there,
+    with no grinding, at the cost of one record per path, within §3.6.
+  - Tests:
+    `a_version_of_this_devices_shown_at_the_path_but_not_on_its_disk_is_never_replaced_unseen`
+    (three nodes: node 0 loses its copy's chunk, node 2, which never had it, deletes the path, node
+    0's version is then shown, node 0's write is refused, and node 2's next write leaves the version
+    a head),
+    `a_version_of_this_devices_shown_first_and_off_its_disk_is_never_replaced_unseen`
+    (planted) and `a_save_while_a_newer_version_downloads_is_not_refused`;
+    `a_version_of_this_devices_identical_to_the_one_shown_does_not_refuse_a_write` keeps the twin
+    rule; and the oracle's `of_copies_that_share_a_name_only_the_first_has_the_slot`. With the
+    refusal for conflict copies only, the first two fail, each write let through; with only copy
+    slots counted as a place, the third fails, its second save refused; with a twin taken for a
+    version with no place, the fourth fails, its write refused; and without the first-copy rule, the
+    oracle's test finds both copies in one slot.
+  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
+    `Engine::promotions` and `on_disk` (`write.rs`), 11 caught and 1 unviable (a `Default` the type
+    lacks). None missed or timed out.
+
+- Protocol and engine: a hash another connection withholds reaches an honest holder whose chunk pass
+  waits, or has filled its room, after at most one turn of each connection ahead of it (severity
+  Medium). After a `CHUNK_NOT_FOUND` a pass waited for a Status with more chunks stored or a
+  completed round, which a quiet folder may never bring, so one key holder that took a request and
+  never answered kept the hash from an honest holder whose pass waited (TM-22's residual: in a probe
+  the requester never asked the holder in an hour). `protocol.md` §4.6 has a third trigger, a freed
+  hash, for a pass that skipped a hash it lacked because another connection held it or had the turn,
+  and states the requester's rule for a hash asked of several connections: the patience, the turns,
+  and the hash kept for a waiting connection. Such a connection counts in line, and when it stands
+  first for a free hash the requester lacks, last asked of another connection, the hash is kept for
+  it, with the freed-hash trigger, until it asks, its connection ends or the hold passes
+  (`STATUS_INTERVAL` and 1 s), at most as many such hashes, in hash order, as it may send requests
+  once its trigger acts (`Connection::requests_free`, less the hashes kept for it already), the rest
+  going on to the next in line. Kept whatever its room, two waiting peers that kept their triggers
+  from acting held a whole batch by turns, and the holder got only its room's worth a round: 40
+  chunks at room 4 took 287 s, 400 at room 64 more than TM-22's 212 s, and 65 536 would take about
+  17.6 hours. The trigger alone missed whenever it could not act yet (its window spent, which a peer
+  can do by letting go of another hash the holder is owed, or within 1 s of the latest
+  `CHUNK_NOT_FOUND`): the hash went on, and the peer that withheld it asked again a second later; in
+  probes the holder was never asked in 15 to 30 minutes, with one peer withholding or two, and one
+  random swarm in 1 000 never fetched. The requester also keeps each lacking hash's place in line
+  once its requests end, until it is stored or no longer wanted, and keeps hashes for waiting
+  connections between and after its runs of the passes as well as before: forgetting the place at a
+  refusal or a disconnect, and looking only before the passes, missed a holder whose pass had filled
+  its room when the hash came free (never fetched in an hour, also when the other peer simply
+  disconnected). The hold ends a hostile waiting peer's turn however it keeps its trigger from
+  acting; the trigger is given again whenever the passes run while the hash is kept, since a
+  `CHUNK_NOT_FOUND` spends every trigger fired before it; and a request for a kept hash counts its
+  patience from when it was kept, so that a turn lasts at most the patience. TM-22 states the bound,
+  (N + 1) × 60 + 31 s for N connections ahead of the holder, at least about r hashes of a larger
+  batch a round for a holder with room for r and at once every hash beyond the room of the
+  connections ahead, the condition the hold rests on (the holder's restarted pass reaches the kept
+  hash within 31 s) (random swarms of one to three withholding peers: at most 204 s over 1 000
+  seeds), and the costs: two bits per folder per connection (`Connection::pass_skipped`, cleared by
+  a pass's first request and set only for the hashes a pass passes over looking for its requests,
+  and the freed hash, set by `Connection::hash_freed`); at most one in-flight entry per lacking
+  hash, about 80 bytes once its requests end, in proportion to what the chunk state already holds;
+  and restarts a third party can cause at most once per `STATUS_INTERVAL` per folder per connection,
+  each at worst one 74-byte request and one 76-byte `CHUNK_NOT_FOUND` per chunk the requester lacks,
+  what an active folder already costs. Two residuals stay: a waiting peer whose pass skipped a hash
+  still held elsewhere can be triggered for another free hash, within the same bound; and a peer
+  whose latest pass never met a withheld hash is not counted in line for it. Considered and not
+  taken: the trigger for any waiting connection first in line, with no skipped bit (it triggered a
+  connection for the hash it had just refused, and two connections that both lack a hash triggered
+  each other every 30 s for good); asking a restarted pass only for the hashes another connection
+  held (one more bit per folder per connection, to save what an active folder already pays); asking
+  the owed connection for that one hash outside its pass (a request outside any pass, which §4.6's
+  waiting rule would have to allow); letting a restarted pass ask the hashes kept for it first (a
+  pass asks in ascending order, so the hashes it jumped would wait for its next pass); and marking
+  every connection's pass as having skipped a hash whenever the requester comes to lack one, which
+  would close the second residual but let peers that lack a new hash take it ahead of its holder,
+  whose window was then spent: 381 of 1 000 random swarms never fetched. With it: whose turn a hash
+  is costs a binary search and the connections passed, not every connection that could ask (before,
+  about 143 ms a run of the passes and 8 s a cascade at 65 536 hashes and 128 connections); the
+  passes run again while the connections that may ask or that wait change; TM-22 says that an honest
+  holder with room for r requests gets about r hashes of a larger batch a round. The test kit's gate
+  drops what it held at a hang-up and at a restart, as at a disconnect, and holds what a hold's
+  release brings. Regression tests, in the engine's `withheld` module:
+  `one_peer_that_lets_go_of_a_chunk_while_the_holders_trigger_cannot_act_never_keeps_it`,
+  `one_peer_never_keeps_a_chunk_from_a_holder_whose_own_status_spends_its_trigger_window`,
+  `one_peer_that_aims_its_refusals_at_the_holders_spent_trigger_window_never_keeps_a_chunk`,
+  `two_peers_that_aim_their_refusals_at_the_holders_spent_trigger_window_never_keep_a_chunk` and
+  `random_swarms_of_peers_that_withhold_fetch_every_file_within_the_bound` (40 seeds and the two
+  that failed; `LICKETYSYNC_SWARM_SEEDS` runs more);
+  `a_holder_whose_pass_is_stalled_when_the_patience_runs_out_is_asked_once_its_pass_ends`,
+  `a_holder_whose_pass_is_stalled_when_another_refuses_the_chunk_is_asked_once_its_pass_ends` and
+  `a_holder_mid_pass_when_another_disconnects_is_asked_for_the_chunk_once_its_pass_ends`;
+  `a_peer_that_keeps_its_trigger_from_acting_holds_a_chunk_kept_for_it_only_the_hold`,
+  `a_chunk_kept_for_a_waiting_peer_that_asks_late_counts_its_patience_from_when_it_was_kept`,
+  `a_late_refusal_from_a_waiting_peer_a_chunk_is_kept_for_never_spends_its_turn` and
+  `a_waiting_peer_whose_pass_skipped_nothing_is_passed_over_for_one_whose_pass_did` and
+  `waiting_peers_that_keep_their_triggers_from_acting_hold_no_more_of_a_batch_than_their_room`; in
+  `regressions`, `one_silent_peer_never_keeps_a_chunk_from_an_honest_holder_whose_pass_waits` (the
+  first probe, no longer ignored),
+  `two_peers_that_both_lack_a_chunk_never_trigger_each_others_passes_for_it`,
+  `a_peer_that_refuses_a_chunk_it_held_and_asks_again_never_keeps_it_from_a_waiting_holder` and
+  `a_peer_that_holds_a_chunk_and_disconnects_frees_it_to_a_waiting_holder`; the protocol's
+  `a_freed_hash_is_a_trigger_within_the_other_triggers_limits`,
+  `a_freed_hash_counts_from_the_latest_not_found_and_while_the_pass_asks`,
+  `a_freed_hash_is_a_trigger_only_for_a_pass_that_skipped_one` and
+  `a_trigger_is_deferred_only_when_the_pass_waits_and_one_has_fired`; and the in-flight table's
+  `a_hash_still_lacking_keeps_its_place_in_line_once_its_requests_end`,
+  `a_hash_freed_for_a_waiting_connection_first_in_line_is_kept_for_it_until_the_hold`,
+  `a_waiting_connection_is_kept_no_more_hashes_than_it_could_ask` and
+  `whose_turn_a_hash_is_costs_a_search_and_the_connections_passed_not_every_connection`.
+
 - CI: Semgrep rules ban, by spelling, the unsafe code that `forbid(unsafe_code)` misses when a macro
   defined in another crate expands it into a crate, and that cargo-geiger misses in a macro's body
   (TM-7); each allow-list is empty, and file names count in any case, as macOS and Windows read
@@ -69,81 +230,6 @@ changed and why.
     refusal after another device's later write, earlier write and delete.
   - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
     `on_disk` (`write.rs`), 6 caught; none missed or timed out.
-
-- Engine: a version of this device's that is a head at a path but not on its disk is never replaced
-  unseen (severity Medium), and a save while a newer version is still arriving is not refused. The
-  refusal of the long-path fix looked only at conflict copies, and counted only copy slots as a
-  place on the disk.
-  - When this device's own version was the one shown at a path and its content was not on the disk
-    (after a restored backup, or a chunk lost or unreadable at a restart, once another device
-    deleted what had been shown), the path's base was another record: the device's write went
-    through, left that version a head beside its new dot, and any record built on the write covered
-    it unseen, on every device. The device now refuses to write, delete or rename a path while a
-    version it wrote there is a head that is not on its disk: a conflict copy, or the version shown,
-    that is the record of no base there, or a twin of the version shown while that one is the record
-    of none (a twin holds the shown version's content, and a write covers it with that version's
-    base, so it refuses nothing while that one is on the disk). A tombstone is always on the disk.
-    `WriteFailure::NoPlaceForCopy` becomes `OwnVersionNotOnDisk`.
-  - A version is on the disk when it is the record of any base, not only of a copy slot. Before,
-    when a version later by its time arrived without its content and this device then saved the
-    path, its save was a conflict copy whose place was the path's own base, and every later save
-    there was refused until the other version's content arrived, which a peer that withholds it can
-    put off without end (TM-22, §3.3).
-  - The simulator's oracle (b′) gives a shared name's slot to the first copy in display order, as
-    the engine does.
-  - Specs: `protocol.md` §4.4 states the rule and what ends it, and what a restored device does;
-    "Why it is safe" 3 cites it. TM-40 states the lockout as it is: one record signed under an
-    honest device's ID at a path, its content withheld, makes that device refuse to write there,
-    with no grinding, at the cost of one record per path, within §3.6.
-  - Tests:
-    `a_version_of_this_devices_shown_at_the_path_but_not_on_its_disk_is_never_replaced_unseen`
-    (three nodes: node 0 loses its copy's chunk, node 2, which never had it, deletes the path, node
-    0's version is then shown, node 0's write is refused, and node 2's next write leaves the version
-    a head),
-    `a_version_of_this_devices_shown_first_and_off_its_disk_is_never_replaced_unseen`
-    (planted) and `a_save_while_a_newer_version_downloads_is_not_refused`;
-    `a_version_of_this_devices_identical_to_the_one_shown_does_not_refuse_a_write` keeps the twin
-    rule; and the oracle's `of_copies_that_share_a_name_only_the_first_has_the_slot`. With the
-    refusal for conflict copies only, the first two fail, each write let through; with only copy
-    slots counted as a place, the third fails, its second save refused; with a twin taken for a
-    version with no place, the fourth fails, its write refused; and without the first-copy rule, the
-    oracle's test finds both copies in one slot.
-  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
-    `Engine::promotions` and `on_disk` (`write.rs`), 11 caught and 1 unviable (a `Default` the type
-    lacks). None missed or timed out.
-
-- Engine: a conflict copy with no place on the disk is never replaced unseen (severity Medium). Two
-  conflict copies of one path whose names are kept whole share one name when their record hashes
-  share their first four bytes, a 2^-32 chance between honest devices and one a write holder can
-  grind for with about 2^32 signatures. They shared one copy slot, which `apply_path` gave to each
-  in turn every time it applied the path again, since it read the slots once before naming them, so
-  devices that held the same records could keep different disks there. And a device refused to write
-  a path only while one of its own copies there had no name: while its own copy did not hold the
-  shared slot, or while its content was not on the disk yet (its store lost, the copy coming back
-  from a peer), its write covered the rest and left that copy a head beside its new dot, by which
-  every record built on the write could cover the copy, lost then from every device without any
-  having had it on a disk. The bug is older than the long-path fix.
-  - Of the copies that share a name, the first in display order has the slot, on every device alike;
-    the others have no place on the disk and are counted with the copies that no name fits
-    (`Counters::copies_unplaced`, which was `copies_unnamed`).
-  - A device refuses to write a path while a conflict copy it wrote there holds no copy slot,
-    whatever the reason (`WriteFailure::NoPlaceForCopy`, which was `NoRoomForCopy`), and writes it
-    again once that copy holds one or is no longer a conflict copy.
-  - `protocol.md` §4.4, "What becomes of a conflict copy", says when a copy has no place on the disk
-    and that its writer does not write the path then. TM-40 says what grinding for a shared name
-    gains: the later copy has no place on any disk, and its writer is refused at the path until
-    another device puts it there, which is within §3.6.
-  - Regression tests, on records planted with real chunks:
-    `a_copy_of_this_devices_that_shares_its_name_with_an_earlier_copy_is_never_replaced_unseen` and
-    `every_device_gives_a_shared_copy_name_to_the_first_copy_in_display_order`, over two records
-    whose hashes share their first four bytes, found by trying modification times; and
-    `a_copy_of_this_devices_whose_content_is_not_on_the_disk_is_never_replaced_unseen`. With the old
-    slots (the last copy applied holding the name) the first two fail, the first because its write
-    is let through and the second on node 0's slot; with the old refusal (only for a copy with no
-    name) the first and the third fail, each write let through.
-  - Mutants (cargo-mutants 27.1.0 under `ci/mutants.sh`'s caps, lints capped, every engine test):
-    `apply_path` (`sync/disk.rs`), 13 caught; `Engine::promotions` (`write.rs`), 8 caught and 1
-    unviable (a `Default` the type lacks). None missed or timed out.
 
 - Engine: a conflict at a path of 4 077 bytes or more is resolved by a write. A conflict copy was
   named its path with ` (conflict `, eight hex digits and `)` added, 20 bytes, so at such a path the
@@ -3488,12 +3574,6 @@ changed and why.
     - how a rename on the disk between a path and one of its conflict copies is recorded;
     - a directory move: versions at every new path, then a tree delete; none into itself;
     - normalising both paths before `refuse_up_front` compares them.
-    And one from the chunk-withhold fix's security review: a holder whose pass waits for a trigger
-    cannot be asked, so one peer that takes a request and never answers keeps the hash from it in a
-    quiet folder (TM-22's residual); proposed, a third pass trigger (`protocol.md` §4.6 and the
-    protocol crate, one bit per folder per connection), set when a pass skips a lacking hash another
-    connection holds and fired when that hash comes free with the waiting connection first in line,
-    at least 1 s after its latest `CHUNK_NOT_FOUND` and at most once per `STATUS_INTERVAL`.
     And from the long-path fix ("a conflict at a path of 4 077 bytes or more"):
     - a person's change (edit, delete, rename) the engine refuses with `OwnVersionNotOnDisk` must
       be neither lost nor silently replaced; proposed: it stays on the disk, its record is not
@@ -3521,6 +3601,8 @@ changed and why.
       refusal closes;
     - a deliberate way for the person to give up a version that no device holds, which today keeps
       its writer from writing the path until the folder is shared again (TM-40).
+    And from the withheld-chunk fix: when a folder can be removed, its in-flight entries, kept
+    places and kept hashes go with it (today a folder is never removed, so none outlives it).
   - Dependencies: none new; the engine depends on the workspace's keys, protocol and index crates,
     dev-depends on the simulator and `proptest`; the simulator depends on the keys crate;
     `ci/geiger-baseline.txt`'s `engine` and `sim` lines now count the keys crate's dependencies.

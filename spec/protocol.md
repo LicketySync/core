@@ -2747,18 +2747,53 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
 - **Passes** (no state per hash). A requester asks a peer for a folder's chunks in **passes**: in
   ascending `cipher_hash` order over the chunks it still lacks, keeping only its position, the last
   hash it asked that peer for; a pass ends when no lacking hash lies above the position. A
-  `CHUNK_NOT_FOUND` does not pause the pass, which goes on with the next hash, and the requester asks
-  other peers that have the folder open for the missing chunk. After a pass that got no
+  `CHUNK_NOT_FOUND` does not pause the pass, which goes on with the next hash, and the requester
+  asks other peers that have the folder open for the missing chunk. After a pass that got no
   `CHUNK_NOT_FOUND`, the next pass to that peer starts whenever the requester lacks chunks again.
-  After a pass that got any, the next pass to that peer for the folder starts only once a trigger has
-  fired, either a Status from the peer showing a `chunks_stored` greater than in its last Status
-  before the latest `CHUNK_NOT_FOUND`, or a completed round with that peer, and no sooner than 1 s
-  (`CHUNK_BUSY_BACKOFF`'s minimum) after the latest `CHUNK_NOT_FOUND`; the requester evaluates the
-  trigger at most once per `STATUS_INTERVAL`, and a trigger that comes inside that window is
-  deferred, by one pending bit, and evaluated when the window ends, never dropped. Per folder per
-  connection the state is one position, one number (the peer's `chunks_stored` at the latest
-  `CHUNK_NOT_FOUND`), one time (that answer's) and the pending bit, whatever the number of hashes; Status comes at least every `STATUS_INTERVAL` (4.5), so
-  a peer that fetches a chunk it lacked is asked again within about twice that.
+  After a pass that got any, the next pass to that peer for the folder starts only once a trigger
+  has fired, a Status from the peer showing a `chunks_stored` greater than in its last Status before
+  the latest `CHUNK_NOT_FOUND`, a completed round with that peer, or a freed hash, after a pass that
+  skipped a hash for another connection's request or turn (below, "Several connections"), and no
+  sooner than 1 s (`CHUNK_BUSY_BACKOFF`'s minimum) after the latest `CHUNK_NOT_FOUND`; the requester
+  evaluates the trigger at most once per `STATUS_INTERVAL`, and a trigger that comes inside that
+  window is deferred, by one pending bit, and evaluated when the window ends, never dropped. Per
+  folder per connection the state is fixed, whatever the number of hashes: the pass's position and
+  whether it got a `CHUNK_NOT_FOUND`, or, while it waits, when it may start once a trigger has
+  fired; the peer's latest `chunks_stored`, and its value at the latest `CHUNK_NOT_FOUND`, with that
+  answer's time; when a trigger was last evaluated, and the pending bit; one bit each for a
+  completed round and a freed hash since that answer; and one for a hash the latest pass skipped.
+  Status comes at least every `STATUS_INTERVAL` (4.5), so a peer that fetches a chunk it lacked is
+  asked again within about twice that.
+- **Several connections** (the requester's own rule; nothing on the wire). A hash asked of one
+  connection is asked of no other until every connection still holding the request was asked at
+  least the chunk patience ago, twice `STATUS_INTERVAL` (60 s), or a chunk for it arrived, whether
+  or not that chunk left the hash lacking; a `CHUNK_NOT_FOUND`, a `CHUNK_BUSY` or the end of a
+  connection ends only that connection's request, and a late chunk is dropped. A hash free again
+  goes round the connections that may ask now (room in flight, no backoff, the pass not waiting) in
+  the order the requester made them, starting after the connection asked last for it: one made
+  since the round began, or asked already in it, waits for the next round, and one that cannot ask
+  when its turn comes (its room full, backing off, or its pass, past the hash, waiting without
+  having skipped one as below) is passed over. The requester keeps that place (the connection asked
+  last, and where the round ends) for each hash it still lacks once the hash's requests have ended,
+  until the hash is stored or no longer wanted. A connection whose pass waits, with room in flight
+  and no backoff, and whose latest pass, from its first request on, skipped a hash the requester
+  lacked for another connection's request or turn (not its own; the hashes passed over while looking
+  for a pass's first request count for that pass), counts in line with those that may ask. When it
+  stands first for a free hash the requester lacks, and another connection was asked for that hash
+  last, the hash is kept for it, as many such hashes, in hash order, as it may send requests once
+  its trigger acts: its peer's `max_requests_in_flight`, at most `MAX_REQUESTS_IN_FLIGHT`, less
+  its requests outstanding and the hashes kept for it already; the rest go on to the next in line,
+  as past a connection whose room is full. For a hash kept for it, the requester gives it the
+  freed-hash trigger (above), again whenever it runs the passes while the hash is kept (a
+  `CHUNK_NOT_FOUND` spends every trigger fired before it), and asks no other connection for the hash
+  until this one asks for it, its connection ends, or `STATUS_INTERVAL` and 1 s (31 s, the hold)
+  have passed, when its turn ends. The requester looks for such hashes before, between and after its
+  runs of the passes, which run again until the connections that may ask and those that wait stay
+  the same. A request for a hash kept for the connection counts its patience from when the hash was
+  kept, so that a turn lasts at most the patience. So a peer that holds a request and never answers,
+  refuses it or disconnects delays the hash by its turn, and cannot keep it from a peer that holds
+  it, whether that peer's pass waits or has filled its room, short of the residuals threat model
+  TM-22 states.
 - On receipt the requester first checks that `data` is at most 4 325 416 bytes (longer is
   **malformed**, before any hash is computed), then `H("licketysync/v1/hash/chunk", data) = cipher_hash`.
   A mismatch is **forged** (section 5): the sender delivered bytes that are not the chunk it named.

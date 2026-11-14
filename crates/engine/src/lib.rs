@@ -98,6 +98,8 @@ mod rules;
 mod testkit;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod withheld;
 
 pub use config::{ConfigError, EngineConfig, MAX_FOLDERS};
 pub use engine::Engine;

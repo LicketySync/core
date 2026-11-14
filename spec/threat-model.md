@@ -243,8 +243,8 @@ from which peer, which usually shows which device wrote it. Besides: device IDs 
 peers it connects to, and folder IDs (no Hello carries a clock).
 It can ask any peer for any chunk by its ciphertext hash; tell that two chunks are identical
 (convergent encryption, section 5); withhold data, go offline, or serve slowly (delaying a chunk
-another peer holds by about the chunk patience per connection ahead of the honest holder, while
-it can be asked; one peer keeps it from a holder whose pass waits, TM-22); store far more than
+another peer holds by at most the chunk patience per connection ahead of the honest holder,
+and the 31 s hold, TM-22); store far more than
 asked; **keep stale copies and replay them**: a sealed peer cannot tell an old version from a
 concurrent one, so it keeps every version no signed record or cleanup names, and a hostile holder of
 the sealed key (or the read key) that kept the folder's history can replay every genuine old version
@@ -1154,28 +1154,64 @@ one monotonic time per folder per connection; a reconcile pass sends at most
 `MAX_PASS_REQUESTS` requests, whatever the responder answers; chunk requests are bounded by
 `max_requests_in_flight`, a queued request holds only its hash and the chunk is read from storage
 only as it is sent, a requester keeps one `CHUNK_BUSY` backoff timer per connection and no state per
-hash after `CHUNK_NOT_FOUND`; a hash outstanding on one connection goes to another only once every
-connection holding it was asked at least the chunk patience ago (two `STATUS_INTERVAL`s, 60 s) or a
-chunk for it arrived, one ask time kept per connection and dropped by its refusal or disconnect, and
-then round the connections that could ask for it now (room in flight, no backoff, a pass not waiting
-for a trigger) in the order the device made them, from the one after the connection asked last, one
-made since the round began or passed by it waiting for the next round, two numbers per hash; so key
-holders of any tier, under any number of device identities, that take requests and never answer, or
-refuse, reconnect or report more chunks stored to be asked again, even by turns, have at most one
-turn each a round, of at most about the patience: N connections ahead of an honest holder delay a
-hash it holds about N times the patience, bounded by the connection limits, while the honest holder
-can be asked; a connection that can no longer ask when its turn comes (its room filled, backing off,
-or its pass past the hash or waiting) is passed over, the passes running again in the same handler
-until none drops out, and a hash freed in a handler where no connection can ask for it starts its
-round again with the first that does. Residual: an honest holder whose pass waits for a trigger,
-after a `CHUNK_NOT_FOUND` for another hash it lacks, cannot be asked, so one peer that takes the
-request and never answers keeps the hash from it until the folder brings a trigger (a Status with
-more chunks stored, or a completed round, `protocol.md` §4.6), which a quiet folder may never do; a
-third pass trigger, which fires when a hash the pass skipped comes free, is to close it, a phase 1
-item. A key holder of any tier, under any number of device identities, can still make a device queue
-up to `MAX_SEND_QUEUE` (128 MiB) of chunk replies per connection by reading them slowly, for as
-long as it keeps the connection alive (a reader that trickles is never closed by `IDLE_TIMEOUT`), so
-what bounds the total is the phase 1 connection limit; and a write
+hash after `CHUNK_NOT_FOUND`; a hash asked of several connections follows `protocol.md` §4.6,
+"Several connections": it goes to another connection only once every connection holding it was asked
+at least the chunk patience ago (two `STATUS_INTERVAL`s, 60 s) or a chunk for it arrived, one ask
+time kept per connection and dropped by its refusal or disconnect, and then round the connections in
+the order the device made them, from the one after the connection asked last, one made since the
+round began or passed by it waiting for the next round. A connection whose pass waits for a trigger
+after a `CHUNK_NOT_FOUND`, its latest pass having skipped a hash for another connection's request or
+turn, counts in line, unless its room is full or it backs off, and a free hash the device lacks for
+which it stands first, last asked of another connection, is kept for it, with the freed-hash
+trigger, as many in hash order as it may send requests once its trigger acts (its peer's
+`max_requests_in_flight`, at most `MAX_REQUESTS_IN_FLIGHT`, less its requests outstanding and the
+hashes kept for it already), the rest going on to the next in line, until it asks, its connection
+ends or the hold passes (`STATUS_INTERVAL` and 1 s, 31 s), when its turn ends; its request, if it
+asks, counts the patience from when the hash was kept. So key holders of any tier, under any number
+of device identities, that take requests and never answer, refuse, disconnect, reconnect, report
+more chunks stored to be asked again, or keep their own trigger from acting by letting a
+`CHUNK_NOT_FOUND` come now and then, even by turns, have at most one turn each a round, of at most
+the patience: N connections ahead of an honest holder delay a hash it holds by at most the turns of
+those N and of the one holding the hash, and the holder's own wait for its trigger, at most (N + 1)
+× 60 + 31 s, bounded by the connection limits, and an honest holder with room for r requests gets at
+least about r hashes of a larger batch a round, and at once every hash beyond what the connections
+ahead have room for. The hold assumes that the holder's restarted pass, which asks in hash order,
+reaches the kept hash within 31 s: with many lacking hashes below it to ask for first, at most its
+room at a time and each answered within a round trip, it may not, and gets the hash in a later
+round. A connection that cannot ask when its turn comes (its room filled, backing off, or its pass,
+past the hash, waiting without having skipped one) is passed over; the device keeps hashes for
+waiting connections before, between and after its runs of the passes, which run again in the same
+handler until the connections that may ask and those that wait stay the same (at most three changes
+per connection), so a holder whose room was full, or whose pass was past the hash, is asked for it
+once its pass waits having skipped it. While a connection waits with its skip bit set, each run of
+the passes also looks at every hash of the folder with an entry or a place, at most one per lacking
+hash, as a pass's own look at the lacking hashes does. Each hash asked for holds at most one entry
+while the device lacks it: one ask time per connection holding its request (bounded as above), its
+place, two numbers, and the connection it is kept for, with two times, about 150 bytes; once its
+requests have ended, only its place, about 80 bytes, until it is stored or no longer wanted; each at
+most about twice that with the maps' own overhead. Only the chunks of records a write key signed
+lack (and, at a sealed peer, genuine old versions another sealed peer replays, section 3.3), and the
+chunk state already holds at least about 120 bytes for each lacking chunk (its hash in the lacking
+set and its position in each record that names it, besides the record), so the table grows in
+proportion to it: 65 536 lacking chunks cost at most about 20 MB more. The freed-hash trigger lets a
+third party restart a waiting peer's pass, within the bound every trigger shares: at most once per
+`STATUS_INTERVAL` (30 s) per folder per connection, and no sooner than 1 s after that peer's latest
+`CHUNK_NOT_FOUND`. One restart costs that peer at worst one chunk request (74 bytes) and one
+`CHUNK_NOT_FOUND` (76 bytes, before the channel's own overhead) for each chunk the requester lacks
+and may ask it for, at most `max_requests_in_flight` of them outstanding at once: what an active
+folder already costs, since each chunk the peer stores restarts its pass the same way through its
+Status. Two residuals: while some hash stays held elsewhere, a waiting peer whose pass skipped it
+can be triggered for another free hash it lacks, and asked for what it lacks again, at most once per
+`STATUS_INTERVAL` per folder per connection, as above; and a peer whose latest pass never met a hash
+held elsewhere, because the pass ended before the device came to lack the hash or went on above it,
+is not counted in line for it, so a hash that peer stored before its latest `CHUNK_NOT_FOUND` waits
+for its next trigger of another kind (a Status with more chunks stored, a completed round) or for
+another holder, and in a quiet folder, held by one key holder that takes the request and never
+answers, may never come from it. A key holder of any tier, under any number of device identities,
+can still make a device queue up to `MAX_SEND_QUEUE` (128 MiB) of chunk replies per connection by
+reading them
+slowly, for as long as it keeps the connection alive (a reader that trickles is never closed by
+`IDLE_TIMEOUT`), so what bounds the total is the phase 1 connection limit; and a write
 holder can make every peer store as many concurrent versions, tombstones and tree deletes as it
 signs (section 3.6), and keep every deletion held past its year, without bound, by holding
 forgetting back (section 3.6; a peer that is a write holder's only link, or a network attacker that

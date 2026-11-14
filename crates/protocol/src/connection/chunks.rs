@@ -6,8 +6,9 @@
 //! requests in flight both ways (this side's at most the peer's
 //! `max_requests_in_flight`, itself at most `MAX_REQUESTS_IN_FLIGHT`),
 //! `CHUNK_BUSY` at dispatch, the requester's one `CHUNK_BUSY_BACKOFF` timer,
-//! the chunk passes (one position, one number, one time and two bits per
-//! folder), the ciphertext hash of every chunk sent and received, and Status
+//! the chunk passes (a fixed state per folder, whatever the number of
+//! hashes: [`FolderChunks`]), the ciphertext hash of every chunk sent and
+//! received, and Status
 //! with `chunks_stored` and the device name. Any peer with the folder open may
 //! ask for any chunk, whatever tier it reports (ruling S-3).
 
@@ -87,14 +88,31 @@ pub(super) struct FolderChunks {
     /// The latest `CHUNK_NOT_FOUND`: its time and the peer's `chunks_stored`
     /// in its last Status before it.
     latest_not_found: Option<(Duration, u64)>,
-    /// A round with the peer completed since the latest `CHUNK_NOT_FOUND`,
-    /// whatever the pass was doing then: a trigger, judged when the pass
-    /// comes to wait if it was still asking.
-    round_since_not_found: bool,
+    /// The triggers other than a Status that fired since the latest
+    /// `CHUNK_NOT_FOUND`.
+    fired: Fired,
+    /// The latest pass, from its first request on, left a hash this side
+    /// lacks because another connection held it or had the turn
+    /// ([`Connection::pass_skipped`]); cleared when a pass makes its first
+    /// request.
+    skipped: bool,
     /// When a trigger was last acted on (at most once per
     /// `STATUS_INTERVAL`), and whether one waits for that window to end.
     last_eval: Option<Duration>,
     pending: bool,
+}
+
+/// The triggers other than a Status that fired since the latest
+/// `CHUNK_NOT_FOUND`, whatever the pass was doing then: each is judged when
+/// the pass comes to wait if it was still asking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Fired {
+    /// A round with the peer completed.
+    round: bool,
+    /// A hash this side lacks, last asked of another connection, came free
+    /// with this peer the next to ask for it, while `skipped` was set
+    /// ([`Connection::hash_freed`]).
+    freed: bool,
 }
 
 impl FolderChunks {
@@ -104,17 +122,22 @@ impl FolderChunks {
             peer_stored: None,
             pass: Pass::Free,
             latest_not_found: None,
-            round_since_not_found: false,
+            fired: Fired {
+                round: false,
+                freed: false,
+            },
+            skipped: false,
             last_eval: None,
             pending: false,
         }
     }
 
     /// Whether a trigger has fired since the latest `CHUNK_NOT_FOUND`: a
-    /// completed round, or the peer's `chunks_stored` above its value then.
+    /// completed round, a freed hash, or the peer's `chunks_stored` above its
+    /// value then.
     fn triggered(&self) -> bool {
         let baseline = self.latest_not_found.map_or(0, |(_, b)| b);
-        self.round_since_not_found || self.peer_stored.is_some_and(|s| s > baseline)
+        self.fired.round || self.fired.freed || self.peer_stored.is_some_and(|s| s > baseline)
     }
 }
 
@@ -153,6 +176,15 @@ impl Connection {
             .as_ref()
             .map_or(0, |p| p.hello.max_requests_in_flight);
         usize::try_from(advertised.min(MAX_REQUESTS_IN_FLIGHT)).unwrap_or(0)
+    }
+
+    /// How many more chunk requests this side may send on the connection: the
+    /// peer's `max_requests_in_flight`, at most `MAX_REQUESTS_IN_FLIGHT`, less
+    /// those outstanding (every folder's).
+    #[must_use]
+    pub fn requests_free(&self) -> usize {
+        self.requests_allowed()
+            .saturating_sub(self.chunks.ours.len())
     }
 
     fn chunk_room(&self, now: Duration) -> Result<(), SendError> {
@@ -205,6 +237,9 @@ impl Connection {
         self.observe(tick, &mut out);
         let now = self.now;
         if let Some(x) = open_mut(&mut self.folders, &folder) {
+            if x.chunks.pass == Pass::Free {
+                x.chunks.skipped = false;
+            }
             x.chunks.pass = Pass::Asking {
                 position: cipher_hash,
                 not_found,
@@ -431,7 +466,7 @@ impl Connection {
         };
         let c = &mut x.chunks;
         c.latest_not_found = Some((now, c.peer_stored.unwrap_or(0)));
-        c.round_since_not_found = false;
+        c.fired = Fired::default();
         c.pending = false;
         c.pass = match c.pass {
             Pass::Asking { position, .. } => Pass::Asking {
@@ -446,17 +481,58 @@ impl Connection {
     /// whatever the pass is doing (R2-B1).
     pub(super) fn round_completed_for_chunks(&mut self, folder: FolderId, out: &mut Output) {
         if let Some(x) = open_mut(&mut self.folders, &folder) {
-            x.chunks.round_since_not_found = true;
+            x.chunks.fired.round = true;
         }
         self.trigger(folder, out);
+    }
+
+    /// Whether the latest pass to this peer for `folder`, from its first
+    /// request on, left a hash this side lacks for another connection's
+    /// request or turn ([`Self::pass_skipped`]).
+    #[must_use]
+    pub fn skipped(&self, folder: &FolderId) -> bool {
+        self.folders
+            .get(folder)
+            .and_then(|f| f.open.as_ref())
+            .is_some_and(|x| x.chunks.skipped)
+    }
+
+    /// The pass to this peer for `folder` left a hash this side lacks
+    /// because another connection held it or had the turn (4.6, "Several
+    /// connections"), not for a request of its own: remembered until the
+    /// next pass makes its first request.
+    pub fn pass_skipped(&mut self, folder: FolderId) {
+        if let Some(x) = open_mut(&mut self.folders, &folder) {
+            x.chunks.skipped = true;
+        }
+    }
+
+    /// The requester's rule for a hash asked of several connections (4.6,
+    /// "Several connections") made this peer the next to ask for a hash of
+    /// `folder` this side lacks, last asked of another connection: a
+    /// trigger when the pass skipped such a hash ([`Self::pass_skipped`]),
+    /// remembered whatever the pass is doing, and acted on within the same
+    /// limits as the others (at most once per `STATUS_INTERVAL`, and no
+    /// sooner than 1 s after the latest `CHUNK_NOT_FOUND`).
+    pub fn hash_freed(&mut self, tick: Tick, folder: FolderId) -> Output {
+        let mut out = Output::default();
+        self.observe(tick, &mut out);
+        if let Some(x) = open_mut(&mut self.folders, &folder) {
+            if x.chunks.skipped {
+                x.chunks.fired.freed = true;
+            }
+        }
+        self.trigger(folder, &mut out);
+        self.finish(&mut out);
+        out
     }
 
     /// A trigger may have fired for the folder: acted on now when the pass
     /// waits for one and one has fired, or, when a trigger was acted on less
     /// than `STATUS_INTERVAL` ago, kept in one pending bit and acted on when
-    /// the interval has passed (coordinator ruling of 2026-10-22: deferred,
-    /// never dropped). A trigger that fires while a pass is still asking is
-    /// remembered and judged when the pass ends ([`Self::pass_done`]).
+    /// the interval has passed: deferred, never dropped. A trigger that fires
+    /// while a pass is still asking is remembered and judged when the pass
+    /// ends ([`Self::pass_done`]).
     fn trigger(&mut self, folder: FolderId, out: &mut Output) {
         let (now, interval) = (self.now, self.config.timing.status);
         let Some(x) = open_mut(&mut self.folders, &folder) else {

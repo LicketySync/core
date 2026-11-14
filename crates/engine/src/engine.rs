@@ -457,8 +457,9 @@ impl Engine {
     /// armed that the folders' state needs: the resume probe while a folder
     /// is paused, the deferred commit while phase C left index work, the
     /// free tick while chunks wait to be freed or re-read, and the chunk
-    /// patience, once the entries of chunk requests that all ended in this
-    /// handler are gone (`InFlight::sweep`). A patience timer that is due is
+    /// patience, once the chunk requests that all ended in this handler are
+    /// gone, each hash still lacking keeping only its place
+    /// (`InFlight::sweep`). A patience timer that is due is
     /// left armed: a handler that runs at or after its deadline before it
     /// fires (a message, or another timer due at that instant) would find
     /// its expiry left out of `next_expiry`, and moving or cancelling the
@@ -496,7 +497,12 @@ impl Engine {
         {
             arm(cx, Purpose::FreeTick, now.saturating_add(FREE_TICK));
         }
-        self.in_flight.sweep();
+        let folders = &self.folders;
+        self.in_flight.sweep(now, |folder, hash| {
+            folders
+                .get(folder)
+                .is_some_and(|f| f.book.lacking().contains(hash))
+        });
         let next = self
             .in_flight
             .next_expiry(patience(&self.settings.timing), now);
