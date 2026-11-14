@@ -61,7 +61,8 @@ pub struct Engine {
     /// Chunk requests outstanding, on which connections, since when
     /// (`crate::inflight`).
     pub(crate) in_flight: InFlight,
-    /// When the chunk patience timer is armed for.
+    /// When the chunk patience timer is armed for; once that instant is not
+    /// after `now`, the timer is due and is left to fire.
     patience_at: Option<Instant>,
     /// Index work that phase C brought, waiting for the next commit
     /// (`crate::sync`), which a handler of its own makes at once. Bounded by
@@ -456,7 +457,12 @@ impl Engine {
     /// armed that the folders' state needs: the resume probe while a folder
     /// is paused, the deferred commit while phase C left index work, the
     /// free tick while chunks wait to be freed or re-read, and the chunk
-    /// patience.
+    /// patience. A patience timer that is due is left armed: a handler that
+    /// runs at or after its deadline before it fires (a message, or another
+    /// timer due at that instant) would find its expiry left out of
+    /// `next_expiry`, and moving or cancelling the timer then would skip the
+    /// passes it drives. Once it fires the timer is armed only after `now`,
+    /// so it never fires twice at one instant (TM-22).
     fn settle_states(&mut self, cx: &mut dyn Context) {
         let now = cx.now();
         let ids: Vec<FolderId> = self.folders.keys().copied().collect();
@@ -491,7 +497,8 @@ impl Engine {
         let next = self
             .in_flight
             .next_expiry(patience(&self.settings.timing), now);
-        if next != self.patience_at {
+        let due = self.patience_at.is_some_and(|at| at <= now);
+        if !due && next != self.patience_at {
             match next {
                 Some(at) => {
                     if !self.timers.arm(cx, Purpose::ChunkPatience, at) {

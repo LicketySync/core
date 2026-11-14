@@ -125,6 +125,13 @@ impl TimerTable {
         self.armed.contains(&purpose)
     }
 
+    /// The id of `purpose`, once it has one, for the tests that read its
+    /// deadline from the runtime.
+    #[cfg(test)]
+    pub(crate) fn id_of(&self, purpose: Purpose) -> Option<TimerId> {
+        self.by_purpose.get(&purpose).copied()
+    }
+
     /// Disarms `purpose`; its id stays its own.
     pub(crate) fn cancel<T: Timers + ?Sized>(&mut self, cx: &mut T, purpose: Purpose) {
         if self.armed.remove(&purpose) {

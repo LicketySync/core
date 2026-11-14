@@ -17,14 +17,16 @@
 use core::time::Duration;
 
 use licketysync_keys::{CipherHash, FolderId, RecordHash};
+use licketysync_protocol::connection::Timing;
 use licketysync_protocol::frame::{Frame, MessageType};
 
 use crate::config::EngineConfig;
 use crate::issues::{IssueClass, IssueKind, StoreFailureCause, Subject};
-use crate::runtime::{PeerId, Storage};
+use crate::runtime::{Instant, Peer, PeerId, Storage};
 use crate::store::{chunk_key, held_key};
 use crate::testkit::{config, folder_key, Hold, Net};
 use crate::tests::{folder, pair, state, write};
+use crate::timers::Purpose;
 use crate::FolderState;
 
 fn key_config(n: u8) -> EngineConfig {
@@ -586,4 +588,194 @@ fn a_folder_past_the_open_limit_of_a_connection_is_counted_and_named() {
             .count();
         assert_eq!(up_to_date, 64, "node {i}");
     }
+}
+
+/// What runs at a chunk request's patience deadline besides its timer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtDeadline {
+    /// Nothing: the patience timer alone.
+    Alone,
+    /// The Status ticks of the connections node 2 opened as it asked, which
+    /// fall on that instant. The test net fires the timers due at one
+    /// instant in node order, so node 1's Status reaches node 2 before any
+    /// of node 2's own timers fires.
+    StatusTick,
+    /// A handler with nothing to do, this many nanoseconds after the
+    /// deadline, before the timer fires (late, as a runtime may fire it).
+    Idle(u64),
+    /// Node 0's second frame of an unknown non-critical type, which is only
+    /// counted (protocol.md 5), this many nanoseconds after the deadline.
+    Frame(u64),
+}
+
+/// A frame of a type nobody knows that a receiver may ignore.
+fn unknown_non_critical() -> Vec<u8> {
+    Frame::new(0x7ff0, vec![]).unwrap().encode()
+}
+
+/// The deadline node `i`'s timer for `purpose` is armed at, if it is.
+fn armed_at(net: &Net, i: usize, purpose: Purpose) -> Option<u64> {
+    let n = &net.nodes[i];
+    let id = n.engine.timers.id_of(purpose)?;
+    n.cx.timers.get(&id).map(|at| at.as_nanos())
+}
+
+/// Fires node `i`'s timers due at `at`, where the net's clock is, lowest id
+/// first, settling after each: what `Net::advance` does at that instant
+/// for node `i` before any node after it.
+fn fire_due(net: &mut Net, i: usize, at: u64) {
+    loop {
+        let n = &mut net.nodes[i];
+        let due = n.cx.timers.iter().filter(|(_, t)| t.as_nanos() == at);
+        let Some(id) = due.map(|(id, _)| *id).min() else {
+            return;
+        };
+        n.cx.timers.remove(&id);
+        n.engine.on_timer(&mut n.cx, id);
+        net.settle();
+    }
+}
+
+/// Nodes 0 and 1 hold the one chunk of a file, and node 2 has asked node 0
+/// for it; node 0's answer, and all it sends node 2 after it, is held back
+/// for good, and node 2 may not ask node 1 yet. For
+/// [`AtDeadline::StatusTick`] node 2 asked as it met node 0; otherwise the
+/// three met 2 s before node 0 wrote the file, so that no other timer falls
+/// on the deadline. Returns the net, the record, its content and the
+/// deadline.
+fn asked_of_a_silent_peer(case: AtDeadline) -> (Net, RecordHash, Vec<u8>, u64) {
+    let mut net = three();
+    let content = vec![5u8; 500];
+    net.connect(0, 1);
+    let record = if case == AtDeadline::StatusTick {
+        net.advance(Duration::from_secs(2));
+        let record = write(&mut net, 0, "p.bin", &content).unwrap();
+        net.advance(Duration::from_secs(3));
+        net.hold = Some(Hold::new(0, 2, MessageType::ChunkReply));
+        net.connect(0, 2);
+        net.connect(1, 2);
+        record
+    } else {
+        net.connect(0, 2);
+        net.connect(1, 2);
+        net.advance(Duration::from_secs(2));
+        net.hold = Some(Hold::new(0, 2, MessageType::ChunkReply));
+        write(&mut net, 0, "p.bin", &content).unwrap()
+    };
+    assert_eq!(
+        read(&net, 1, record),
+        Ok(content.clone()),
+        "node 1 holds it"
+    );
+    assert!(read(&net, 2, record).is_err(), "node 1 is not asked yet");
+    let asked = Instant::from_nanos(net.now);
+    let wait = crate::inflight::patience(&Timing::SPEC);
+    assert_eq!(wait, Duration::from_secs(60));
+    let deadline = asked.saturating_add(wait);
+    assert_eq!(
+        net.nodes[2].engine.in_flight.next_expiry(wait, asked),
+        Some(deadline),
+        "node 2 asked node 0 now"
+    );
+    (net, record, content, deadline.as_nanos())
+}
+
+#[test]
+fn a_chunk_whose_patience_runs_out_while_another_handler_runs_is_offered_elsewhere() {
+    // Node 0 takes node 2's request and never answers while it stays
+    // connected, so once the request's patience runs out node 2 must ask
+    // node 1 (`inflight`; TM-22). The patience timer was disarmed, the
+    // passes never driven, whenever a handler other than its own ran at or
+    // after the deadline before it fired: `InFlight::next_expiry` leaves out
+    // an expiry at `now`, and `settle_states` cancelled the timer. So a
+    // peer that never answers could keep the hash from the others by
+    // sending frames that cost it nothing. `Alone` shows the timer is armed
+    // at all.
+    let cases = [
+        AtDeadline::Alone,
+        AtDeadline::StatusTick,
+        AtDeadline::Idle(0),
+        AtDeadline::Idle(1_000_000),
+        AtDeadline::Frame(0),
+        AtDeadline::Frame(1_000_000),
+    ];
+    let fetched: Vec<(AtDeadline, bool)> = cases
+        .into_iter()
+        .map(|case| {
+            let (mut net, record, content, deadline) = asked_of_a_silent_peer(case);
+            let from_0 = PeerId::new(0);
+            if let AtDeadline::Frame(_) = case {
+                // The first is answered Unsupported.
+                let n = &mut net.nodes[2];
+                n.engine
+                    .on_message(&mut n.cx, from_0, &unknown_non_critical());
+                net.settle();
+            }
+            net.advance(Duration::from_nanos(deadline - 1 - net.now));
+            assert_eq!(
+                armed_at(&net, 2, Purpose::ChunkPatience),
+                Some(deadline),
+                "{case:?}"
+            );
+            let due: usize = net
+                .nodes
+                .iter()
+                .map(|n| {
+                    n.cx.timers
+                        .values()
+                        .filter(|at| at.as_nanos() == deadline)
+                        .count()
+                })
+                .sum();
+            if case == AtDeadline::StatusTick {
+                let own = |net: &Net| {
+                    [PeerId::new(0), PeerId::new(1)].map(|p| armed_at(net, 2, Purpose::Wake(p)))
+                };
+                assert_eq!(own(&net), [Some(deadline); 2], "node 2's Status ticks");
+                let heard = net.statuses(1, 2).len();
+                net.now = deadline;
+                for n in &mut net.nodes {
+                    n.cx.now = deadline;
+                }
+                fire_due(&mut net, 0, deadline);
+                fire_due(&mut net, 1, deadline);
+                assert_eq!(
+                    net.statuses(1, 2).len(),
+                    heard + 1,
+                    "node 1's Status reached node 2"
+                );
+                assert_eq!(
+                    own(&net),
+                    [Some(deadline); 2],
+                    "before node 2's own timers fired"
+                );
+            } else {
+                assert_eq!(due, 1, "{case:?}: the patience timer alone is due");
+            }
+            if let AtDeadline::Idle(late) | AtDeadline::Frame(late) = case {
+                net.now = deadline + late;
+                for n in &mut net.nodes {
+                    n.cx.now = deadline + late;
+                }
+                let n = &mut net.nodes[2];
+                let counted = n.engine.counters().unsupported;
+                if let AtDeadline::Frame(_) = case {
+                    n.engine
+                        .on_message(&mut n.cx, from_0, &unknown_non_critical());
+                    assert_eq!(n.engine.counters().unsupported, counted + 1, "{case:?}");
+                } else {
+                    n.engine.run(&mut n.cx, |_, _, _| ());
+                }
+                net.settle();
+            }
+            net.advance(Duration::from_secs(65));
+            assert!(net.nodes[2].cx.connected.contains(&from_0), "{case:?}");
+            assert!(
+                !net.nodes[2].engine.timers.is_armed(Purpose::ChunkPatience),
+                "{case:?}: nothing is left to wait for"
+            );
+            (case, read(&net, 2, record) == Ok(content))
+        })
+        .collect();
+    assert!(fetched.iter().all(|(_, ok)| *ok), "{fetched:?}");
 }

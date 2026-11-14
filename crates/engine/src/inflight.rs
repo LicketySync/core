@@ -117,7 +117,8 @@ impl InFlight {
 
     /// When the next outstanding hash runs out of patience after `now`, if
     /// any does. A hash whose patience ran out already was offered to the
-    /// passes then, and every later pass may take it.
+    /// passes when the patience timer fired (the engine leaves a timer that
+    /// is due armed until it does), and every later pass may take it.
     pub(crate) fn next_expiry(&self, patience: Duration, now: Instant) -> Option<Instant> {
         self.asked
             .values()

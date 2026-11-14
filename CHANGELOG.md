@@ -6,6 +6,29 @@ paths or the API also names the security-reviewer pass.
 
 ## Unreleased
 
+- Engine: a chunk request whose patience runs out is offered to the other connections even when
+  another handler runs first at that instant (severity Medium). A handler other than the patience
+  timer's that ran at or after the deadline before the timer fired (a peer's frame, such as the
+  Status another peer sends on its tick, which falls on that instant when the hash was asked as the
+  connections opened, or another timer due then) cancelled the timer: `InFlight::next_expiry` names
+  only expiries after `now`, and `settle_states` took that for none due. The passes were not
+  driven, so a peer that took the request and stayed connected without answering kept the hash from
+  every other connection until something else drove them. A hostile key holder of any tier could do
+  so at will: a frame of an unknown non-critical type costs it nothing after the first (protocol.md
+  5), and a stream of them lands in that window, which defeated the patience's protection against a
+  peer that withholds data or serves slowly (threat model §3.3; §3.10 and TM-22 for the bounded
+  tables). `settle_states` now leaves a patience timer that is due armed until it fires; it still
+  arms one only after `now`, so the timer never fires twice at one instant. The other fix
+  considered, treating a passed deadline as fired at the start of every handler, works too, but
+  leaves the timer armed with nothing noting it, to fire again for nothing; this one keeps the
+  engine's note of the timer true and relies only on the runtime's rule that a timer past its
+  deadline fires at the next opportunity, as every engine timer does. Found by engine mutants batch
+  2 (`settle_states`' `!=` replaced with `==` survived: no test saw the timer go). The regression
+  test `a_chunk_whose_patience_runs_out_while_another_handler_runs_is_offered_elsewhere` covers the
+  timer alone, another peer's Status arriving at the deadline before the requester's own timers
+  fire, and a handler with nothing to do and the silent peer's cheap frame, each at the deadline
+  and 1 ms after it.
+
 - Engine: tests that catch the 25 mutants of the engine crate's first batch that the Mutants run
   on 9349d4f found surviving, and two more in the same functions that the unit tests alone let
   through. Tests only, and one test helper, `plant_and_restart`, which plants records and restarts
