@@ -106,6 +106,14 @@ fn temp_of(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// The open lock beside a store at `path`.
+fn lock_of(path: &Path) -> PathBuf {
+    let mut name = std::ffi::OsString::from(".");
+    name.push(path.file_name().unwrap());
+    name.push(".lock");
+    path.with_file_name(name)
+}
+
 /// Stores in one scratch directory, removed with it.
 struct Sqlite {
     dir: PathBuf,
@@ -468,14 +476,17 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     files
 }
 
-/// A copy of `from` and its sidecars at `to`, taken while another connection
-/// holds them, as a crash would leave them.
+/// A copy of `from`, its sidecars and its open lock at `to`, taken while
+/// another connection holds them, as a crash would leave them.
 fn copy_live(from: &Path, to: &Path) {
     fs::copy(from, to).unwrap();
     for suffix in ["-wal", "-journal"] {
         if beside(from, suffix).exists() {
             fs::copy(beside(from, suffix), beside(to, suffix)).unwrap();
         }
+    }
+    if lock_of(from).exists() {
+        fs::copy(lock_of(from), lock_of(to)).unwrap();
     }
 }
 
@@ -679,18 +690,22 @@ fn a_store_is_placed_only_where_nothing_is_and_only_as_built() {
     assert_eq!(files::place(&temp, id, &dir.join("free")), Ok(()));
     assert_eq!(fs::read(dir.join("free")).unwrap(), b"ours");
     assert!(!temp.exists());
-    // The temporary name holding another file by then: not placed.
-    fs::write(&temp, b"ours").unwrap();
-    let id = files::file_id(&temp).unwrap();
-    fs::write(dir.join("swap"), b"swapped in").unwrap();
-    fs::rename(dir.join("swap"), &temp).unwrap();
-    assert!(matches!(
-        files::place(&temp, id, &dir.join("third")),
-        Err(OpenError::Io(_))
-    ));
-    assert!(!dir.join("third").exists());
-    assert_eq!(fs::read(&temp).unwrap(), b"swapped in");
-    fs::remove_file(&temp).unwrap();
+    // The temporary name holding another file by then: not placed. (Windows
+    // gives no device and inode here, so there it would be.)
+    #[cfg(unix)]
+    {
+        fs::write(&temp, b"ours").unwrap();
+        let id = files::file_id(&temp).unwrap();
+        fs::write(dir.join("swap"), b"swapped in").unwrap();
+        fs::rename(dir.join("swap"), &temp).unwrap();
+        assert!(matches!(
+            files::place(&temp, id, &dir.join("third")),
+            Err(OpenError::Io(_))
+        ));
+        assert!(!dir.join("third").exists());
+        assert_eq!(fs::read(&temp).unwrap(), b"swapped in");
+        fs::remove_file(&temp).unwrap();
+    }
     // A creation whose placement fails leaves no temporary file.
     let names = files::Names {
         path: dir.join("absent").join("store"),
@@ -699,8 +714,75 @@ fn a_store_is_placed_only_where_nothing_is_and_only_as_built() {
         temp: temp.clone(),
         lock: dir.join(".lock"),
     };
-    assert!(matches!(files::create(&names), Err(OpenError::Io(_))));
+    let held = files::lock_open(&names.lock).unwrap();
+    assert!(matches!(
+        files::create(&names, &held),
+        Err(OpenError::Io(_))
+    ));
+    drop(held);
     assert!(!temp.exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Regression: a macOS or iOS volume without `RENAME_EXCL` answers the
+/// no-replace rename with `ENOTSUP`, not `EINVAL`, and no store could be made
+/// there. Either answer means a hard link instead; a store already at the
+/// name does not.
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+#[test]
+fn a_macos_volume_without_rename_excl_gets_a_hard_link_not_an_error() {
+    use rustix::io::Errno;
+    assert!(files::refuses_flag(Errno::NOTSUP));
+    assert!(files::refuses_flag(Errno::INVAL));
+    assert!(!files::refuses_flag(Errno::EXIST));
+    assert!(!files::refuses_flag(Errno::NOENT));
+}
+
+/// Regression: an opener that opened the store's journal or log as another
+/// process's SQLite removed it looked at a file with no name left, and
+/// refused the store as "not a file with one name" (six processes opening one
+/// fresh path, on macOS). Such a file is absent; one with its name is kept,
+/// and one with two names still refused.
+#[cfg(unix)]
+#[test]
+fn a_log_or_journal_removed_as_it_is_opened_is_absent_not_a_file_with_two_names() {
+    let dir = scratch("removed-as-opened");
+    let journal = beside(&dir.join("store"), "-journal");
+    fs::write(&journal, b"").unwrap();
+    let opened = fs::File::open(&journal).unwrap();
+    fs::remove_file(&journal).unwrap();
+    assert!(matches!(files::named(opened), Ok(None)));
+    fs::write(&journal, b"").unwrap();
+    let opened = fs::File::open(&journal).unwrap();
+    assert!(matches!(files::named(opened), Ok(Some(_))));
+    fs::hard_link(&journal, dir.join("second")).unwrap();
+    let opened = fs::File::open(&journal).unwrap();
+    assert_eq!(files::named(opened).err(), Some(OpenError::NotAFile));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Regression: openers of one path in several processes at once could each
+/// be refused, none opening it (six processes, on Linux): each one's SQLite
+/// took the shared lock before any took the exclusive one, which then none
+/// could. Every open, of an existing store too, now holds the open lock until
+/// SQLite holds the store, and lets it go then.
+#[test]
+fn openers_at_once_are_not_all_refused_since_each_open_holds_the_open_lock() {
+    let dir = scratch("open-lock");
+    let path = dir.join("store");
+    let lock = lock_of(&path);
+    drop(SqliteStorage::open(&path).unwrap());
+    fs::remove_file(&lock).unwrap();
+    let store = SqliteStorage::open(&path).unwrap();
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .expect("the open of an existing store took the open lock");
+    assert!(file.try_lock().is_ok(), "and let it go");
+    drop(file);
+    assert_eq!(SqliteStorage::open(&path).err(), Some(OpenError::Locked));
+    drop(store);
     fs::remove_dir_all(dir).unwrap();
 }
 

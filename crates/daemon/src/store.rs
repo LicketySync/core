@@ -35,22 +35,27 @@
 //! file's own log or journal by then: a file with this store's header and
 //! another schema ([`Foreign::OtherSchema`]) is judged after that.
 //!
-//! A new store never shows at the path half made. Creation holds an exclusive
-//! lock on a hidden `.<name>.lock` beside the store (a file of its own, so the
-//! database's POSIX locks are never touched; it stays), so openers create one
-//! at a time, and only one: a store another made meanwhile is opened instead.
-//! Under that lock: a `-wal` or `-journal` at the store's names is refused,
+//! Every open holds an exclusive lock on a hidden `.<name>.lock` beside the
+//! store (a file of its own, so the database's POSIX locks are never touched;
+//! it stays) until SQLite holds the store, so openers, in this process and
+//! others, open one at a time: one opens the store, and the rest are refused
+//! while it stays open. (Two SQLite connections that each took the shared lock
+//! before either took the exclusive one would both be refused.) A file already
+//! at the path is judged by its header first, so nothing is made beside a file
+//! refused. A new store never shows at the path half made, and only one is
+//! made: a store another made meanwhile is opened instead. When nothing
+//! is at the path: a `-wal` or `-journal` at the store's names is refused,
 //! named and untouched ([`OpenError::Leftover`]), since SQLite would read it
 //! into the new store, so starting over means removing them too; a temporary
 //! file a crash left (`.<name>.new`, empty or starting as an SQLite database
-//! does) is removed, and anything else there refused; the store is built
-//! under that name (created exclusively, mode 0600), closed so that its
-//! header carries the IDs, flushed, and renamed into place without replacing
-//! anything (`renameat2`'s `RENAME_NOREPLACE` on Linux and Android,
-//! `renameatx_np`'s `RENAME_EXCL` on macOS and iOS; a hard link, which fails
-//! rather than replace, on Windows and on file systems that refuse the flag),
-//! once its device and inode show it is still the file built; and the
-//! directory is flushed.
+//! does) is removed, and anything else there refused; the store is built under
+//! that name (created exclusively, mode 0600), closed so that its header
+//! carries the IDs, flushed, and renamed into place without replacing anything
+//! (`renameat2`'s `RENAME_NOREPLACE` on Linux and Android, `renameatx_np`'s
+//! `RENAME_EXCL` on macOS and iOS; a hard link, which fails rather than
+//! replace, on Windows and on file systems that refuse the flag: `EINVAL` on
+//! Linux, `ENOTSUP` on macOS), once its device and inode show it is still the
+//! file built; and the directory is flushed.
 //!
 //! The directories the caller gives may be reached through links: where they
 //! are is the person's or the platform's choice (iOS's `/var`, Fedora
@@ -73,9 +78,11 @@
 //! opened to read, so a device node is never opened. On Unix the database,
 //! `-wal` and `-journal`, when present, must be regular files of the user's
 //! with no other name; their group and other bits are taken away (mode
-//! 0600), and their owner bits left. On Windows, SQLite follows links and the
-//! store checks no owner and sets no access list (Windows comes with phase
-//! 3).
+//! 0600), and their owner bits left. A log or journal that has no name left
+//! once opened is absent: another process's SQLite removes them as it opens
+//! and closes the store. On Windows, SQLite follows links and the store
+//! checks no owner, sets no access list and compares no device and inode,
+//! which stable std does not give there (Windows comes with phase 3).
 //!
 //! The SQLite linked must be the bundled one, built to sync: a different
 //! runtime version, or a `NO_SYNC` or `DISABLE_DIRSYNC` build, fails the
@@ -114,12 +121,13 @@
 //! close its database or log through another handle, a file-ID check
 //! included, or the exclusive lock is silently lost. A second
 //! [`SqliteStorage::open`] of a store open in this process is refused by its
-//! device and inode before it opens any of the store's files. The daemon never
-//! reopens the store beneath a live engine: a failed commit's batch may be
-//! replayed by the reopening, under an engine that rolled it back. A corrupt
-//! page fails the read that meets it (`Io`), so the folder whose records lie
-//! there does not open: the engine's per-record check (TM-17's recovery) is
-//! never reached, and nothing here repairs the file.
+//! device and inode before it opens any of the store's files. (Windows's
+//! locks belong to the handle, and there SQLite refuses the second.) The
+//! daemon never reopens the store beneath a live engine: a failed commit's
+//! batch may be replayed by the reopening, under an engine that rolled it
+//! back. A corrupt page fails the read that meets it (`Io`), so the folder
+//! whose records lie there does not open: the engine's per-record check
+//! (TM-17's recovery) is never reached, and nothing here repairs the file.
 //!
 //! The format is read from the main file's header before SQLite opens it, and
 //! again through SQLite, the log included, after: a later format that changes
@@ -345,8 +353,21 @@ impl SqliteStorage {
         // takes the path for one: no absolute path starts with "file:".
         let names = Names::of(&std::path::absolute(path)?)?;
         files::directories(names.dir())?;
-        files::create(&names)?;
-        let registered = Registered::take(&names.path)?;
+        // A file already at the path is registered, then judged by its
+        // header, before anything is made beside it.
+        let found = if files::exists(&names.path)? {
+            let registered = Registered::take(&names.path)?;
+            files::glance(&names.path)?;
+            Some(registered)
+        } else {
+            None
+        };
+        let held = files::lock_open(&names.lock)?;
+        files::create(&names, &held)?;
+        let registered = match found {
+            Some(registered) => registered,
+            None => Registered::take(&names.path)?,
+        };
         files::judge(&names.path)?;
         for side in [&names.wal, &names.journal] {
             if let Some(file) = files::open_own(side)? {
@@ -354,6 +375,7 @@ impl SqliteStorage {
             }
         }
         let conn = connect(&names.path, registered.0)?;
+        drop(held);
         Ok(Self {
             conn,
             _registered: registered,

@@ -5,6 +5,28 @@ changed and why.
 
 ## Unreleased
 
+- Daemon: the store, as CI first ran it on macOS and Windows.
+  - Openers of one fresh path in six processes at once could fail
+    (`openers_in_other_processes_at_once_each_open_it_or_are_refused`): all refused as `Locked`,
+    none opening it (Linux, now and then), or one refused as "not a file with one name" (macOS).
+    Each opener's SQLite took the shared lock before any took the exclusive one, which then none
+    could; and an opener that opened the store's `-journal` or `-wal` as another process's SQLite
+    removed it (the `-journal` as it switches to the log, the `-wal` as it closes) looked at a file
+    with no name left, which counted as another name. Every open, of an existing store too, now
+    holds the lock that serialised creation (`.<name>.lock`) until SQLite holds the store (a file
+    already at the path is judged by its header first, so nothing is made beside a file refused),
+    and a file with no name left once opened is absent, as one removed before the open is.
+    Regression tests `openers_at_once_are_not_all_refused_since_each_open_holds_the_open_lock` and
+    `a_log_or_journal_removed_as_it_is_opened_is_absent_not_a_file_with_two_names`.
+  - macOS and iOS: a volume without `RENAME_EXCL` answers the no-replace rename with `ENOTSUP`, not
+    Linux's `EINVAL`, so no store could be made there; either answer now means the hard link.
+    Regression test `a_macos_volume_without_rename_excl_gets_a_hard_link_not_an_error`.
+  - Windows: the daemon did not compile (a `mut` that only Unix needs). Past that, no store could be
+    made there: the new file was flushed through a handle opened to read, which `FlushFileBuffers`
+    refuses. It is now flushed, on every platform, through the handle that created it. A directory
+    at the store's path is refused as `NotAFile` before it is opened, as on Unix, rather than
+    failing to open. Windows gives no device and inode here, so the check that the temporary file
+    was not replaced before placement is tested on Unix only.
 - Tests: `Suite::to_wire` is now checked on suites other than 1, so a replacement that always returns 1
   no longer passes the keys crate's mutation run. Two other survivors cannot change
   behaviour (`padme` at length 2, which pads to 2 either way; the separator before the first word in

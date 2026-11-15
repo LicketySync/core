@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! The store's files before SQLite opens them: its directories, the lock that
-//! serialises creation, leftovers, a new store built and placed, and the
+//! serialises opening, leftovers, a new store built and placed, and the
 //! header's verdict on an existing one (the module above says why).
 
 use std::ffi::OsString;
@@ -17,7 +17,7 @@ use super::{APPLICATION_ID, FORMAT, Foreign, MAGIC, OpenError, SCHEMA, defend, f
 
 /// The names a store at a path uses: the database and, beside it, SQLite's
 /// log and journal, the hidden name a new store is built under, and the
-/// hidden lock that serialises creation.
+/// hidden lock that serialises opening.
 #[derive(Debug)]
 pub(super) struct Names {
     pub(super) path: PathBuf,
@@ -59,7 +59,8 @@ impl Names {
     }
 }
 
-/// A file's device and inode; on Windows, nothing (not compared there).
+/// A file's device and inode. On Windows, where stable std gives no file ID,
+/// every file's is `(0, 0)`, so no check by it catches a file replaced there.
 pub(super) type FileId = (u64, u64);
 
 /// The device and inode of what is at `path`, not following a link there.
@@ -84,7 +85,7 @@ fn user() -> u32 {
 }
 
 /// Whether anything, a link included, is at `path`.
-fn exists(path: &Path) -> Result<bool, OpenError> {
+pub(super) fn exists(path: &Path) -> Result<bool, OpenError> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -153,6 +154,10 @@ fn trusted_link(path: &Path) -> Result<(), OpenError> {
 }
 
 /// The store's own directory: the user's, closed to group and others.
+#[cfg_attr(
+    not(unix),
+    allow(clippy::unnecessary_wraps, reason = "it checks only on Unix")
+)]
 fn private(meta: &fs::Metadata) -> Result<(), OpenError> {
     #[cfg(unix)]
     {
@@ -171,6 +176,10 @@ fn private(meta: &fs::Metadata) -> Result<(), OpenError> {
 
 /// A directory above the store's: the user's or root's, closed to group and
 /// others unless sticky (where none may rename or remove another's entry).
+#[cfg_attr(
+    not(unix),
+    allow(clippy::unnecessary_wraps, reason = "it checks only on Unix")
+)]
 fn shared(meta: &fs::Metadata) -> Result<(), OpenError> {
     #[cfg(unix)]
     {
@@ -192,12 +201,15 @@ fn shared(meta: &fs::Metadata) -> Result<(), OpenError> {
 /// must be a directory, not a link: its metadata, not following a link, for
 /// the caller's checks.
 pub(super) fn make_dir(dir: &Path) -> Result<fs::Metadata, OpenError> {
-    let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = fs::DirBuilder::new();
         builder.mode(0o700);
-    }
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = fs::DirBuilder::new();
     match builder.create(dir) {
         Ok(()) => sync_parent(dir)?,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
@@ -216,6 +228,10 @@ pub(super) fn make_dir(dir: &Path) -> Result<fs::Metadata, OpenError> {
 /// Makes `path`'s entry in its directory durable (`fsync` on the directory).
 /// Windows opens no directory as a file and its file systems journal names,
 /// so there it does nothing.
+#[cfg_attr(
+    not(unix),
+    allow(clippy::unnecessary_wraps, reason = "it checks only on Unix")
+)]
 pub(super) fn sync_parent(path: &Path) -> Result<(), OpenError> {
     #[cfg(unix)]
     if let Some(dir) = path.parent() {
@@ -230,8 +246,9 @@ pub(super) fn sync_parent(path: &Path) -> Result<(), OpenError> {
 /// FIFO: `None` when nothing is there. On Linux and Android the name is
 /// examined first (`O_PATH`, then `fstat`), so a device node or FIFO is never
 /// opened, and the file opened must be the one examined. Elsewhere on Unix
-/// the file is opened (`O_NONBLOCK`) and examined after; on Windows a link is
-/// refused by a look first, which a race can pass.
+/// the file is opened (`O_NONBLOCK`) and examined after; on Windows a link or
+/// anything but a regular file is refused by a look first, which a race can
+/// pass.
 #[cfg(unix)]
 fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
     use rustix::fs::{Mode, OFlags};
@@ -278,6 +295,8 @@ fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
 fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => return Err(OpenError::Symlink),
+        // Windows opens no directory as a file: refused as what it is.
+        Ok(meta) if !meta.is_file() => return Err(OpenError::NotAFile),
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -313,13 +332,33 @@ pub(super) fn open_own(path: &Path) -> Result<Option<File>, OpenError> {
     let Some(file) = open_nofollow(path)? else {
         return Ok(None);
     };
-    own(&file.metadata()?, true)?;
+    named(file)
+}
+
+/// `file`, just opened at one of the store's names, refused by [`own`] or
+/// kept; `None` when, on Unix, it has no name left: removed since it was
+/// opened, it is absent, as one removed before is. Another process's SQLite
+/// removes the store's journal and log as it opens and closes the store.
+pub(super) fn named(file: File) -> Result<Option<File>, OpenError> {
+    let meta = file.metadata()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.nlink() == 0 {
+            return Ok(None);
+        }
+    }
+    own(&meta, true)?;
     Ok(Some(file))
 }
 
 /// Takes the group and other bits from one of the store's own files: mode
 /// 0600. Owner bits are left: a store its owner made read-only stays so.
 /// Unix only.
+#[cfg_attr(
+    not(unix),
+    allow(clippy::unnecessary_wraps, reason = "it checks only on Unix")
+)]
 pub(super) fn tighten(file: &File) -> Result<(), OpenError> {
     #[cfg(unix)]
     {
@@ -342,10 +381,28 @@ pub(super) fn judge(path: &Path) -> Result<(), OpenError> {
     let Some(file) = open_own(path)? else {
         return Err(OpenError::Io("the store vanished as it was opened".into()));
     };
-    let mut header = Vec::with_capacity(100);
-    (&file).take(100).read_to_end(&mut header)?;
-    verdict(&header)?;
+    verdict(&header(&file)?)?;
     tighten(&file)
+}
+
+/// A first look at what is at `path`, before anything is made beside it:
+/// nothing, or a file with this store's header; anything else is refused as
+/// [`judge`] refuses it, so that nothing is made beside a file refused. A
+/// second name, which a placement cut short leaves, is left to [`judge`],
+/// once [`create`] has removed it.
+pub(super) fn glance(path: &Path) -> Result<(), OpenError> {
+    let Some(file) = open_nofollow(path)? else {
+        return Ok(());
+    };
+    own(&file.metadata()?, false)?;
+    verdict(&header(&file)?)
+}
+
+/// The first 100 bytes of `file`: the database header, or less.
+fn header(file: &File) -> Result<Vec<u8>, OpenError> {
+    let mut header = Vec::with_capacity(100);
+    file.take(100).read_to_end(&mut header)?;
+    Ok(header)
 }
 
 /// What a database header says: this store, or what the file is instead.
@@ -372,16 +429,17 @@ pub(super) fn verdict(header: &[u8]) -> Result<(), OpenError> {
     Ok(())
 }
 
-/// The creation lock, held until dropped: an exclusive lock on the hidden
+/// The open lock, held until dropped: an exclusive lock on the hidden
 /// `.<name>.lock` beside the store, a file of its own, so that the database's
 /// POSIX locks are never touched. It stays when released.
 #[derive(Debug)]
-pub(super) struct CreationLock(#[allow(dead_code, reason = "held for its lock")] File);
+pub(super) struct OpenLock(#[allow(dead_code, reason = "held for its lock")] File);
 
-/// Takes the creation lock at `lock`, waiting for another opener's creation
-/// to end. The name is opened without following a link, created mode 0600,
-/// and must be a regular file of the user's.
-pub(super) fn lock_creation(lock: &Path) -> Result<CreationLock, OpenError> {
+/// Takes the open lock at `lock`, waiting for another opener, in this process
+/// or another, to have opened the store or failed. The name is opened without
+/// following a link, created mode 0600, and must be a regular file of the
+/// user's.
+pub(super) fn lock_open(lock: &Path) -> Result<OpenLock, OpenError> {
     match fs::symlink_metadata(lock) {
         Ok(meta) if meta.file_type().is_symlink() => return Err(OpenError::Symlink),
         Ok(meta) => own(&meta, false)?,
@@ -391,7 +449,7 @@ pub(super) fn lock_creation(lock: &Path) -> Result<CreationLock, OpenError> {
     let file = open_lock(lock)?;
     own(&file.metadata()?, false)?;
     file.lock()?;
-    Ok(CreationLock(file))
+    Ok(OpenLock(file))
 }
 
 #[cfg(unix)]
@@ -415,20 +473,14 @@ fn open_lock(lock: &Path) -> Result<File, OpenError> {
         .open(lock)?)
 }
 
-/// Makes a new store at `names.path`, under the creation lock, unless one is
-/// there (module documentation, "Opening"); a store with nothing at the
-/// temporary name is left without taking the lock. A temporary name that is a second
-/// name of the store, which a placement by hard link can leave when it stops
-/// between the link and the removal, is removed. A `-wal` or `-journal`
-/// already at the path's names is refused, named and untouched: it belongs to
-/// a store or database that is gone, and SQLite would read it into the new
-/// one.
-pub(super) fn create(names: &Names) -> Result<(), OpenError> {
-    // The common case, a store and nothing beside it, needs no lock.
-    if exists(&names.path)? && !exists(&names.temp)? {
-        return Ok(());
-    }
-    let _lock = lock_creation(&names.lock)?;
+/// Makes a new store at `names.path` unless one is there (module
+/// documentation, "Opening"), under the open lock, `_held`. A temporary name
+/// that is a second name of the store, which a placement by hard link can
+/// leave when it stops between the link and the removal, is removed. A `-wal`
+/// or `-journal` already at the path's names is refused, named and untouched:
+/// it belongs to a store or database that is gone, and SQLite would read it
+/// into the new one.
+pub(super) fn create(names: &Names, _held: &OpenLock) -> Result<(), OpenError> {
     if exists(&names.path)? {
         if exists(&names.temp)? && file_id(&names.temp)? == file_id(&names.path)? {
             fs::remove_file(&names.temp)?;
@@ -441,9 +493,9 @@ pub(super) fn create(names: &Names) -> Result<(), OpenError> {
         }
     }
     remove_leftover(&names.temp)?;
-    let id = new_file(&names.temp)?;
+    let (file, id) = new_file(&names.temp)?;
     let made = build(&names.temp)
-        .and_then(|()| sync_file(&names.temp, id))
+        .and_then(|()| flush(file))
         .and_then(|()| place(&names.temp, id, &names.path));
     if made.is_err() {
         // Ours, under the lock; another program's file in its place is kept.
@@ -455,7 +507,7 @@ pub(super) fn create(names: &Names) -> Result<(), OpenError> {
     sync_parent(&names.path)
 }
 
-/// Removes, under the creation lock, a temporary file a crash left: a regular
+/// Removes, under the open lock, a temporary file a crash left: a regular
 /// file of the user's that is empty or starts as an SQLite database does.
 /// Anything else at that name is refused and left.
 fn remove_leftover(temp: &Path) -> Result<(), OpenError> {
@@ -480,8 +532,8 @@ fn remove_leftover(temp: &Path) -> Result<(), OpenError> {
 }
 
 /// Creates the temporary file, mode 0600, never through a link
-/// (`O_CREAT|O_EXCL`); returns its device and inode.
-fn new_file(temp: &Path) -> Result<FileId, OpenError> {
+/// (`O_CREAT|O_EXCL`); returns it, open to write, and its device and inode.
+fn new_file(temp: &Path) -> Result<(File, FileId), OpenError> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -496,8 +548,8 @@ fn new_file(temp: &Path) -> Result<FileId, OpenError> {
         // The mode exactly, whatever the umask.
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
-    drop(file);
-    file_id(temp)
+    let id = file_id(temp)?;
+    Ok((file, id))
 }
 
 /// The new store's table and IDs, written with the journal in memory (a
@@ -515,13 +567,12 @@ pub(super) fn build(temp: &Path) -> Result<(), OpenError> {
     conn.close().map_err(|(_, e)| open_error(&e))
 }
 
-/// Flushes the temporary file, which must still be the one created.
-fn sync_file(temp: &Path, id: FileId) -> Result<(), OpenError> {
-    let file = open_nofollow(temp)?.ok_or_else(|| replaced(temp))?;
-    if file_id(temp)? != id {
-        return Err(replaced(temp));
-    }
+/// Flushes the temporary file through the handle that created it, then
+/// closes it: Windows flushes only a file open to write (`FlushFileBuffers`).
+/// [`place`] then checks that the name still holds that file.
+fn flush(file: File) -> Result<(), OpenError> {
     file.sync_all()?;
+    drop(file);
     Ok(())
 }
 
@@ -551,16 +602,25 @@ pub(super) fn place(temp: &Path, id: FileId, path: &Path) -> Result<(), OpenErro
 
 /// Renames `from` to `to` unless something is at `to`: `renameat2`'s
 /// `RENAME_NOREPLACE` on Linux and Android, `renameatx_np`'s `RENAME_EXCL` on
-/// macOS and iOS. A file system that refuses the flag (`EINVAL`, some network
-/// and FUSE ones) gets a hard link instead.
+/// macOS and iOS. A file system that refuses the flag gets a hard link
+/// instead.
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
     use rustix::fs::{CWD, RenameFlags, renameat_with};
     match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
         Ok(()) => Ok(()),
-        Err(rustix::io::Errno::INVAL) => link_noreplace(from, to),
+        Err(e) if refuses_flag(e) => link_noreplace(from, to),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Whether a no-replace rename failed because the file system refuses the
+/// flag: `EINVAL` on Linux and Android (some network and FUSE file systems),
+/// `ENOTSUP` on macOS and iOS (a volume without `VOL_CAP_INT_RENAME_EXCL`).
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+pub(super) fn refuses_flag(e: rustix::io::Errno) -> bool {
+    use rustix::io::Errno;
+    matches!(e, Errno::INVAL | Errno::NOTSUP)
 }
 
 /// A hard link, then the old name removed: Windows, whose non-replacing
