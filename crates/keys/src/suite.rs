@@ -205,6 +205,15 @@ mod tests {
     }
 
     #[test]
+    fn suite_wire_form_is_the_number_it_was_read_from() {
+        for n in [1u32, 2, 255, 256, 65_535] {
+            let suite = Suite::from_wire(n).unwrap();
+            assert_eq!(suite.to_wire(), n);
+            assert_eq!(u32::from(suite.as_u16()), n);
+        }
+    }
+
+    #[test]
     fn tiers() {
         assert_eq!(Tier::from_wire(0), None);
         assert_eq!(Tier::from_wire(1), Some(Tier::Write));

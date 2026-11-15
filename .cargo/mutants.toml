@@ -23,3 +23,12 @@
 # processes cargo-mutants starts are capped; cargo never reads this file, so
 # gate.sh and CI still deny the lints.
 cap_lints = true
+
+# Mutants that cannot change behaviour (each tested by a run of the crate).
+exclude_re = [
+  # padme(2): the formula gives mask 0 and returns 2, as the early return does.
+  'crates/keys/src/chunk\.rs:53:12: replace < with <= in padme$',
+  # A leading space in from_words' private buffer: bip39 splits on whitespace.
+  # The line and column keep the length check at words.rs:123, which is tested, in scope.
+  'crates/keys/src/words\.rs:134:18: replace > with >= in WriteKey::from_words$',
+]

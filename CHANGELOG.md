@@ -5,6 +5,11 @@ changed and why.
 
 ## Unreleased
 
+- Tests: `Suite::to_wire` is now checked on suites other than 1, so a replacement that always returns 1
+  no longer passes the keys crate's mutation run. Two other survivors cannot change
+  behaviour (`padme` at length 2, which pads to 2 either way; the separator before the first word in
+  `WriteKey::from_words`, which the BIP-39 parser skips as whitespace) and are skipped in
+  `.cargo/mutants.toml`.
 - Protocol, index, engine, simulator: deletions are forgotten by a signed watermark, and the clock
   rule and expiry by the folder's own time are gone (`protocol.md` §4.4 "Expiry by the watermark"
   and "Cleanup" case (d), §4.5 "Round owed", §5; `threat-model.md` TM-17, TM-22, TM-40, TM-41,
