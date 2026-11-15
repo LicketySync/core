@@ -25,27 +25,24 @@
 //!
 //! Then: one issue for what the open found (records dropped, entries that
 //! did not decode, a corrupt high-water mark, records numbered afresh,
-//! misplaced bases), with the counts and at most 16 record hashes;
+//! misplaced bases), with the counts and at most 16 record hashes; and
 //! **Misconfigured** when the store returned something and nothing passed,
 //! in which case the folder is never proven to a peer and an error issue is
 //! raised, so the engine never fills an empty index from a store of another
-//! folder or key; and **Closed** while the records stored lie more than a
-//! year ahead of this device's clock (the clock rule, 4.4 "A clock set
-//! back"): not proven to peers, with the clock-rule issue
-//! (`IssueKind::KeptClosed`), the open report saying so
-//! (`OpenCounts::kept_closed`).
+//! folder or key. No folder is kept closed for its clock: a store far ahead
+//! of the clock opens like any other. At a write holder, once the open is
+//! done, the folder owes a check for a watermark (4.4, "When a write holder
+//! signs one"), which on-start's commit makes.
 
 use licketysync_index::Index;
-use licketysync_keys::FolderId;
 use licketysync_keys::FolderKey;
-use licketysync_protocol::connection::{Keys, ProveError};
 use licketysync_protocol::proof::FolderCredential;
 
 use crate::chunks::ChunkBook;
 use crate::engine::Engine;
 use crate::folder::{Folder, FolderState, Health, OpenCounts, Transitions};
 use crate::issues::{Issue, IssueKind, Subject, open_subject};
-use crate::runtime::{Context, PeerId};
+use crate::runtime::Context;
 use crate::store::{Loaded, load, load_stored_chunks};
 use crate::work::Work;
 
@@ -58,7 +55,7 @@ impl Engine {
         }
         self.refresh_credentials();
         work.passes.extend(self.folders.keys().copied());
-        self.arm_opens_at(cx);
+        self.arm_watermark_checks(cx);
     }
 
     /// The credentials of every folder that may be proven now
@@ -71,47 +68,6 @@ impl Engine {
             .filter(|f| f.credentialed())
             .map(|f| FolderCredential::new(f.index.key()))
             .collect();
-    }
-
-    /// Proves `folder` on every connection the engine still acts on: a
-    /// folder that could not be proven before (kept closed by the clock rule)
-    /// and now may be. A peer whose own folder was kept closed too, and opens
-    /// later, proves nothing on its own, so without this the folder would
-    /// open on no connection that was there while both were closed. Where the
-    /// peer proved it earlier and this side answered REJECTED, the peer does
-    /// not prove it again on that connection (3.5), so the folder opens there
-    /// only on the next connection.
-    pub(crate) fn prove_everywhere(
-        &mut self,
-        cx: &mut dyn Context,
-        work: &mut Work,
-        folder: FolderId,
-    ) {
-        let peers: Vec<PeerId> = self
-            .conns
-            .iter()
-            .filter(|(_, c)| c.reacts())
-            .map(|(p, _)| *p)
-            .collect();
-        for peer in peers {
-            let t = crate::engine::tick(cx, peer);
-            let Some(c) = self.conns.get_mut(&peer) else {
-                continue;
-            };
-            let keys = Keys {
-                device: &self.device,
-                folders: &self.credentials,
-            };
-            let proved = c
-                .protocol
-                .prove(&keys, &mut |b: &mut [u8]| cx.fill_random(b), t, folder);
-            match proved {
-                Ok(out) => self.apply(cx, work, peer, out),
-                // At the bound of proofs on that connection, or closing.
-                Err(ProveError::TooMany | ProveError::Closed) => {}
-                Err(_) => self.counters.bug(),
-            }
-        }
     }
 
     fn open_one(&mut self, cx: &mut dyn Context, key: FolderKey) {
@@ -132,7 +88,6 @@ impl Engine {
         let returned =
             loaded.stored.records.len() + loaded.stored.base_only.len() + loaded.stored.undecodable;
         let mut open = OpenCounts::default();
-        let mut closed_until = None;
         let pending_free = loaded.pending_free;
         let fill = &mut |b: &mut [u8]| cx.fill_random(b);
         let (index, changes) = if loaded.existed {
@@ -143,7 +98,6 @@ impl Engine {
                 hw_corrupt: report.hw_corrupt,
                 renumbered: report.renumbered,
                 misplaced_bases: report.misplaced_bases.len() as u64,
-                kept_closed: report.opens_at.is_some(),
             };
             if let Some(subject) = open_subject(&report) {
                 self.issues.raise(Issue {
@@ -152,7 +106,6 @@ impl Engine {
                     subject,
                 });
             }
-            closed_until = report.opens_at;
             (index, report.changes)
         } else {
             Index::create(key, self.own, fill)
@@ -166,15 +119,7 @@ impl Engine {
         match health {
             Health::Misconfigured { .. } => self.raise_error(id, IssueKind::Misconfigured),
             Health::Unreadable => self.raise_error(id, IssueKind::Unreadable),
-            Health::Usable => {
-                if closed_until.is_some() {
-                    self.issues.raise(Issue {
-                        folder: Some(id),
-                        kind: IssueKind::KeptClosed,
-                        subject: Subject::None,
-                    });
-                }
-            }
+            Health::Usable => {}
         }
         let unapplied = index.paths().map(str::to_owned).collect();
         let open_changes = (health == Health::Usable
@@ -191,7 +136,6 @@ impl Engine {
                 book: ChunkBook::new(stored_chunks),
                 health,
                 paused: None,
-                closed_until,
                 open,
                 state: FolderState::Checking,
                 transitions,
@@ -200,6 +144,8 @@ impl Engine {
                 pending_free,
                 recheck_disk: true,
                 open_changes,
+                check_due: tier == licketysync_keys::Tier::Write && health == Health::Usable,
+                signed_at: None,
             },
         );
     }

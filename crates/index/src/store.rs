@@ -20,16 +20,19 @@
 //! # What is persisted
 //!
 //! - every record held, its envelope exactly as received, with its local
-//!   sequence number;
+//!   sequence number, and, at a write holder, each applied tombstone's, tree
+//!   delete's and cleanup's arrival (`protocol.md` 4.4, "Arrival"), outside
+//!   its envelope;
 //! - every record kept only as a base (its envelope), and the base slots: per
 //!   file ID and place (the path itself or one of its conflict copies on the
 //!   disk), the record that is the base there;
 //! - the folder's metadata: the high-water mark, the next local sequence
-//!   number and the index epoch;
+//!   number, the index epoch and, at a write holder that has signed a
+//!   watermark in the folder, the wall clock's reading when it last did;
 //! - the per-peer state.
 //!
 //! Everything else (the live sets, the names and groups, heads, set digests,
-//! chunk counts, the folder's own time) is a function of the records held
+//! chunk counts, the greatest watermark held) is a function of the records held
 //! and is rebuilt from them at open, after every stored record has passed
 //! step 1 and its signature again (`protocol.md` 4.4, "Opening a folder";
 //! TM-9). The store is trusted to keep what it is given, not for its
@@ -102,6 +105,11 @@ pub struct StoredMeta {
     pub next_seq: u64,
     /// The index epoch, never 0.
     pub epoch: u64,
+    /// At a write holder, the wall clock's reading, in microseconds since the
+    /// epoch, when it last signed a watermark in the folder: across openings,
+    /// `WATERMARK_INTERVAL` counts from it (4.4, "When a write holder signs
+    /// one"). `None` before its first.
+    pub last_signed_us: Option<u64>,
 }
 
 /// What this device keeps for one peer of a folder (`protocol.md` 4.5,
@@ -133,6 +141,8 @@ pub struct Stored {
     pub records: Vec<(SignedRecord, u64)>,
     /// Every record kept only as a base.
     pub base_only: Vec<SignedRecord>,
+    /// The arrivals a write holder stored with its records, by record hash.
+    pub arrivals: Vec<(RecordHash, u64)>,
     /// The base slots.
     pub bases: Vec<(BaseSlot, RecordHash)>,
     /// The metadata, if any was stored.
@@ -148,14 +158,19 @@ pub struct Stored {
 /// (`protocol.md` 4.7 item 1): the records it came to hold (their envelopes
 /// and local sequence numbers), the records it dropped, the records kept only
 /// as bases that came or went, the base slots set or cleared, the folder's
-/// metadata, the per-peer state set or dropped, and the chunk hashes whose
-/// count of held records naming them fell to zero, for the engine's
-/// pending-free list. A removal is never staged without the record that
-/// replaces it, which is in `put`.
+/// metadata, the per-peer state set or dropped, the arrivals to keep with
+/// records held, and the chunk hashes whose count of held records naming them
+/// fell to zero, for the engine's pending-free list. A removal is never staged
+/// without the record that replaces it, which is in `put`; a record removed
+/// takes its arrival with it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChangeSet {
     /// Records now held, with their local sequence numbers, in that order.
     pub put: Vec<(SignedRecord, u64)>,
+    /// The arrival of each record in `put` that keeps one, and, at open, of
+    /// each record held whose arrival the store lacked: kept beside the
+    /// record until it is removed.
+    pub arrivals: Vec<(RecordHash, u64)>,
     /// Records no longer held.
     pub remove: Vec<RecordHash>,
     /// Records now kept only as bases.
@@ -177,6 +192,7 @@ impl ChangeSet {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.put.is_empty()
+            && self.arrivals.is_empty()
             && self.remove.is_empty()
             && self.base_only_put.is_empty()
             && self.base_only_remove.is_empty()
@@ -226,6 +242,7 @@ pub enum Commit {
 #[derive(Clone, Debug, Default)]
 pub struct MemoryStore {
     records: BTreeMap<RecordHash, (SignedRecord, u64)>,
+    arrivals: BTreeMap<RecordHash, u64>,
     base_only: BTreeMap<RecordHash, SignedRecord>,
     bases: BTreeMap<BaseSlot, RecordHash>,
     meta: Option<StoredMeta>,
@@ -272,9 +289,33 @@ impl MemoryStore {
         self.meta = Some(meta);
     }
 
+    /// The stored arrival of `hash`.
+    #[must_use]
+    pub fn arrival(&self, hash: &RecordHash) -> Option<u64> {
+        self.arrivals.get(hash).copied()
+    }
+
+    /// Sets, or with `None` loses, the stored arrival of `hash`, as damage
+    /// at rest would.
+    pub fn set_arrival(&mut self, hash: RecordHash, arrival: Option<u64>) {
+        match arrival {
+            Some(a) => self.arrivals.insert(hash, a),
+            None => self.arrivals.remove(&hash),
+        };
+    }
+
+    /// Loses the stored record `hash`, as damage at rest would.
+    pub fn lose(&mut self, hash: &RecordHash) {
+        self.records.remove(hash);
+        self.arrivals.remove(hash);
+    }
+
     fn put(&mut self, changes: &ChangeSet) {
         for (record, seq) in &changes.put {
             self.records.insert(record.hash(), (record.clone(), *seq));
+        }
+        for (hash, arrival) in &changes.arrivals {
+            self.arrivals.insert(*hash, *arrival);
         }
         for record in &changes.base_only_put {
             self.base_only.insert(record.hash(), record.clone());
@@ -299,6 +340,7 @@ impl MemoryStore {
     fn removals(&mut self, changes: &ChangeSet) {
         for hash in &changes.remove {
             self.records.remove(hash);
+            self.arrivals.remove(hash);
         }
         for hash in &changes.base_only_remove {
             self.base_only.remove(hash);
@@ -311,6 +353,7 @@ impl Store for MemoryStore {
         Ok(Stored {
             records: self.records.values().cloned().collect(),
             base_only: self.base_only.values().cloned().collect(),
+            arrivals: self.arrivals.iter().map(|(h, a)| (*h, *a)).collect(),
             bases: self.bases.iter().map(|(s, h)| (s.clone(), *h)).collect(),
             meta: self.meta,
             peers: self.peers.iter().map(|(d, s)| (*d, *s)).collect(),

@@ -12,7 +12,8 @@
 //! without a walk and keep the digests (`structures`); the regressions,
 //! each named after the bug it pins; and the tests of concurrent heads with
 //! identical content, twins, under a write (`identical`, the identical-heads
-//! bug of 2026-11-08; item 7's vector of twins is theirs).
+//! bug of 2026-11-08; item 7's vector of twins is theirs); and expiry by the
+//! watermark, the candidate, the arrivals and property (p) (`watermark`).
 
 #![allow(
     clippy::unwrap_used,
@@ -43,6 +44,7 @@ mod rules;
 mod structures;
 mod vectors;
 mod views;
+mod watermark;
 
 /// The fixed seed every property test of this crate runs from in the gate,
 /// so that the gate is deterministic; the keys and protocol crates' tests

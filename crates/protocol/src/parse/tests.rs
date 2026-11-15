@@ -40,7 +40,6 @@ fn hello() -> Hello {
         max_requests_in_flight: 64,
         nonce: vec![9; 32],
         libp2p_identity: vec![8; 32],
-        clock_days: 20_000,
     }
 }
 
@@ -160,6 +159,7 @@ fn every_message_round_trips() {
     round_trip(&CleanupMeta {
         device_id: vec![2; 32],
         counter: 9,
+        forget_before: 8,
     });
     round_trip(&request());
     round_trip(&reconcile());
@@ -341,21 +341,13 @@ fn hello_lists_and_grammar() {
     ] {
         assert_eq!(Hello::parse(&h.encode_to_vec()), Err(what));
     }
-    // clock_days: 2 097 151 is the bound, one more is malformed.
-    round_trip(&Hello {
-        clock_days: MAX_CLOCK_DAYS,
-        ..hello()
-    });
-    assert_eq!(
-        Hello::parse(
-            &Hello {
-                clock_days: MAX_CLOCK_DAYS + 1,
-                ..hello()
-            }
-            .encode_to_vec()
-        ),
-        Err(WireError::OutOfRange { what: "clock_days" })
-    );
+    // Field 11, the removed `clock_days`, is skipped as unknown at any
+    // value, the old bound's one more and a field that occurs twice
+    // included.
+    let mut with_clock = hello().encode_to_vec();
+    varint(&mut with_clock, 11, 2_097_152);
+    varint(&mut with_clock, 11, u64::from(u32::MAX) + 1);
+    assert_eq!(Hello::parse(&with_clock), Ok(hello()));
     let long = Hello {
         compressions: vec!["c".repeat(21)],
         ..hello()
@@ -751,13 +743,6 @@ fn cleanup_record_step_one() {
         ),
         (
             CleanupRecord {
-                groups: vec![],
-                ..cleanup()
-            },
-            "no group",
-        ),
-        (
-            CleanupRecord {
                 groups: groups(MAX_CLEANUP_GROUPS + 1, 1),
                 ..cleanup()
             },
@@ -851,6 +836,11 @@ fn cleanup_record_step_one() {
     for (bad, why) in cases {
         assert!(CleanupRecord::parse(&bad.encode_to_vec()).is_err(), "{why}");
     }
+    // A cleanup with no group carries only a watermark (case (d)): accepted.
+    round_trip(&CleanupRecord {
+        groups: vec![],
+        ..cleanup()
+    });
     // A group and a vector entry on their own (the fuzz target's entries).
     round_trip(&group(32, &[1, 2]));
     round_trip(&group(0, &[1]));
@@ -1276,10 +1266,16 @@ fn sealed_meta_is_lax_where_step_seven_judges() {
     round_trip(&CleanupMeta {
         device_id: vec![1; 5],
         counter: 0,
+        forget_before: 7,
     });
     let mut body = Vec::new();
     varint(&mut body, 2, 1);
     varint(&mut body, 2, 1);
+    assert!(CleanupMeta::parse(&body).is_err());
+    // The watermark, field 3, once.
+    let mut body = Vec::new();
+    varint(&mut body, 3, 1);
+    varint(&mut body, 3, 1);
     assert!(CleanupMeta::parse(&body).is_err());
 }
 

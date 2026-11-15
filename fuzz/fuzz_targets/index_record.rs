@@ -66,9 +66,10 @@ fuzz_target!(|data: &[u8]| {
             assert!(!m.deleted || record.chunks().is_empty());
             assert_eq!(m.plain_hashes.len(), record.chunks().len());
         }
-        Ok(Applied::Cleanup(dot)) => {
+        Ok(Applied::Cleanup(seal)) => {
             assert!(record.is_cleanup());
-            assert!((1..=MAX_COUNTER).contains(&dot.counter));
+            assert!((1..=MAX_COUNTER).contains(&seal.dot.counter));
+            assert!(seal.forget_before < seal.dot.counter, "a watermark below its counter");
         }
         Err(fault) => {
             assert_ne!(fault.to_string(), "");

@@ -1,8 +1,9 @@
 #![no_main]
 //! A peer's Hello body: the bounded decoder, then every check of
 //! `protocol.md` 3.2 against a side that implements suite 1, without and
-//! with a transport-authenticated identity; what passes carries a
-//! `clock_days` within its bound.
+//! with a transport-authenticated identity. Field 11, the removed
+//! `clock_days`, is skipped as unknown: a Hello that carries it parses to the
+//! same value as one without it.
 use libfuzzer_sys::fuzz_target;
 use licketysync_keys::Suite;
 use licketysync_protocol::hello::check_peer_hello;
@@ -13,6 +14,10 @@ fuzz_target!(|data: &[u8]| {
     let Ok(hello) = Hello::parse(data) else {
         return;
     };
+    // Field 11 (tag 0x58, a varint) appended is skipped as unknown.
+    let mut with_clock = data.to_vec();
+    with_clock.extend_from_slice(&[0x58, 0x80, 0x80, 0x80, 0x01]);
+    assert_eq!(Hello::parse(&with_clock).as_ref(), Ok(&hello));
     let Ok(frame) = Frame::new(MessageType::Hello.as_u16(), data.to_vec()) else {
         return;
     };
@@ -20,7 +25,6 @@ fuzz_target!(|data: &[u8]| {
         if let Ok(peer) = check_peer_hello(hello.clone(), &frame, &[Suite::ONE], identity.as_ref()) {
             assert_eq!(peer.device_id, peer.device.device_id());
             assert!(peer.max_message_size <= licketysync_protocol::limits::MAX_MESSAGE_SIZE);
-            assert!(peer.hello.clock_days <= licketysync_protocol::limits::MAX_CLOCK_DAYS);
         }
     }
 });

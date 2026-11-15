@@ -7,7 +7,7 @@
 //! subtrees a `RECORDS` reply ends with (the module documentation of
 //! `super`).
 
-use licketysync_keys::{DeviceId, FolderId, RecordHash};
+use licketysync_keys::{FolderId, RecordHash};
 use licketysync_protocol::Cause;
 use licketysync_protocol::connection::{Event, Page, SendError};
 use licketysync_protocol::exchange::Prefix;
@@ -15,7 +15,7 @@ use licketysync_protocol::record::Record;
 
 use super::{Judged, Op, ToPush};
 use crate::engine::{Engine, tick};
-use crate::issues::{Issue, IssueKind, Subject, bump};
+use crate::issues::bump;
 use crate::runtime::{Context, PeerId};
 use crate::work::{Work, pop};
 
@@ -68,15 +68,6 @@ impl Engine {
                 }
             }
             Event::EmptyPush { .. } => self.counters.log(Cause::EmptyPush),
-            Event::ClockOutOfRange {
-                folder,
-                peer: device,
-                ours,
-                theirs,
-            } => self.clock_out_of_range(folder, device, ours, theirs),
-            Event::StrangerClockOutOfRange { .. } => {
-                bump(&mut self.counters.stranger_clocks);
-            }
             other => return Some(other),
         }
         None
@@ -86,21 +77,6 @@ impl Engine {
     /// a handler of its own makes at once (`Purpose::Deferred`).
     pub(crate) fn defer_op(&mut self, folder: FolderId, op: Op) {
         self.deferred.entry(folder).or_default().push(op);
-    }
-
-    /// The clock rule at the handshake (3.2): the connection closes, and the
-    /// folder's issue names the peer and both readings.
-    fn clock_out_of_range(&mut self, folder: FolderId, device: DeviceId, ours: u32, theirs: u32) {
-        self.counters.log(Cause::ClockOutOfRange);
-        self.issues.raise(Issue {
-            folder: Some(folder),
-            kind: IssueKind::ClockOutOfRange,
-            subject: Subject::Clock {
-                device,
-                ours,
-                theirs,
-            },
-        });
     }
 
     /// A round of this side's ended (4.5, "Rounds"): whether it ended caught
@@ -214,8 +190,9 @@ impl Engine {
         }
     }
 
-    /// Phase C: one request due, one round owed, or one subtree to push;
-    /// whether there was one.
+    /// Phase C: one request due, one round owed, a committed change of a
+    /// folder's greatest watermark (`crate::watermark`), or one subtree to
+    /// push; whether there was one.
     pub(crate) fn send_next_sync(&mut self, cx: &mut dyn Context, work: &mut Work) -> bool {
         if let Some((peer, folder)) = pop(&mut work.sync.requests) {
             self.send_request(cx, work, peer, folder);
@@ -223,6 +200,10 @@ impl Engine {
         }
         if let Some((folder, peer)) = pop(&mut work.sync.owe) {
             self.owe_rounds(cx, work, folder, peer);
+            return true;
+        }
+        if let Some(folder) = pop(&mut work.sync.moved) {
+            self.watermark_moved(cx, work, folder);
             return true;
         }
         if let Some((peer, folder, prefix, carried)) = work.sync.subtrees.pop() {

@@ -10,7 +10,8 @@
 //! tier, broken stored local sequence numbers and metadata, a base at another
 //! path, tree deletes over records beneath them, cleanup groups that wait
 //! and apply, forged and garbage signatures, a store that crashes between a
-//! change's records and its removals, and a clock set back.
+//! change's records and its removals, a watermark signed and delivered, and
+//! a clock set back.
 //!
 //! Regenerate with
 //! `LICKETYSYNC_REGENERATE_VECTORS=1 cargo test -p licketysync-index vector_`;
@@ -34,7 +35,8 @@ mod op {
     pub(super) const ROUND_ENDED: u8 = 12;
     pub(super) const CLOCK: u8 = 13;
     pub(super) const CRASH: u8 = 14;
-    pub(super) const REOPEN: u8 = 15;
+    pub(super) const CHECK: u8 = 15;
+    pub(super) const REOPEN: u8 = 16;
 }
 
 /// The target's path pool: "a", "b", "d", "d/x", "d/y", "d/x/z", "d-x", "e".
@@ -111,12 +113,14 @@ fn index(r: &Rec) -> Vec<u8> {
     out
 }
 
-/// A cleanup: per group, its `because` (0 for none, else a pool index) and
-/// its names (pool indexes).
-fn cleanup(device: u8, secs: u16, groups: &[(u8, &[u8])]) -> Vec<u8> {
+/// A cleanup: its watermark (0 none, 1 a microsecond below its counter, 2
+/// at it, 3 half of it), then per group, its `because` (0 for none, else a
+/// pool index) and its names (pool indexes).
+fn cleanup(device: u8, secs: u16, watermark: u8, groups: &[(u8, &[u8])]) -> Vec<u8> {
     let mut out = vec![op::CLEANUP, device];
     out.extend(at(secs));
-    out.push(u8::try_from(groups.len() - 1).unwrap());
+    out.push(watermark);
+    out.push(u8::try_from(groups.len()).unwrap());
     for (because, names) in groups {
         out.push(*because);
         out.push(u8::try_from(names.len() - 1).unwrap());
@@ -216,7 +220,7 @@ fn seeds() -> Vec<(&'static str, Vec<u8>)> {
     let mut s = vec![SEALED, DEV1];
     s.extend(index(&file(path::A, DEV2, 1)));
     s.extend(index(&file(path::B, DEV2, 2)));
-    s.extend(cleanup(DEV2, 3, &[(1, &[0])]));
+    s.extend(cleanup(DEV2, 3, 0, &[(1, &[0])]));
     s.extend([op::OPEN]);
     for r in [0, 2, 1, 2, 0] {
         s.extend(deliver(r, DEV3));
@@ -244,22 +248,26 @@ fn seeds() -> Vec<(&'static str, Vec<u8>)> {
     s.extend([op::CRASH, op::WRITE, 0, path::A, path::A, 2, 1]);
     s.extend([op::CRASH, op::WRITE, 2, path::A, path::A, 0, 1, op::REOPEN]);
     out.push(("a-crash-between-records-and-removals", s));
-    // Deletions forgotten by the folder's time, then a clock set back.
-    let mut s = vec![READ, DEV1];
+    // Expiry by the watermark: a write holder holds a tombstone a year and
+    // signs; a watermark-only cleanup from a peer, one at its own counter (a
+    // writer fault) and one with no watermark; the tombstone offered again;
+    // then a clock set back.
+    let mut s = vec![WRITE, DEV1];
     let mut tomb = file(path::B, DEV2, 1);
     tomb.deleted = true;
     tomb.chunks = 0;
     s.extend(index(&tomb));
-    let mut late = file(path::A, DEV3, 1);
-    late.counter = vec![3];
-    s.extend(index(&late));
+    s.extend(cleanup(DEV3, 9, 1, &[]));
+    s.extend(cleanup(DEV3, 10, 2, &[]));
+    s.extend(cleanup(DEV3, 11, 0, &[]));
     s.extend([op::OPEN]);
     s.extend(deliver(0, DEV2));
-    s.extend([op::CLOCK, 0]);
-    s.extend(deliver(1, DEV3));
-    s.extend(deliver(0, DEV2));
-    s.extend([op::CLOCK, 1, op::REOPEN]);
-    out.push(("expiry-and-a-clock-set-back", s));
+    s.extend([op::CLOCK, 0, op::CHECK, 0, 1, op::CHECK, 1, 1]);
+    for r in [1, 2, 3, 0] {
+        s.extend(deliver(r, DEV3));
+    }
+    s.extend([op::END_ROUND, 1, op::CLOCK, 1, op::CHECK, 2, 1, op::REOPEN]);
+    out.push(("expiry-by-the-watermark-and-a-clock-set-back", s));
     out
 }
 

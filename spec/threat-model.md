@@ -291,8 +291,10 @@ only link (and so can a holder of the read key, section 3.2), by releasing the f
 to it slowly, each young when it arrives, in any order (it need read no counter for that), so that
 its candidate never passes them and forgetting is delayed without bound where no other write
 holder signs: the owner's decision of 2026-11-12 on a slow release, "Accept, documented", which
-costs storage and never a file (`protocol.md` §4.4, "What holds forgetting back"). It reads no
-watermark and cannot sign one.
+costs storage and never a file (`protocol.md` §4.4, "What holds forgetting back"); and so, by
+offering again a tombstone or tree delete it kept, above `H`, that pruning left uncovered, which a
+write holder then holds again with a fresh arrival, a year's more delay of the same kind. It reads
+no watermark and cannot sign one.
 
 Cannot: see a path, a directory's contents, a kind, a true size, a time, a mode, a device ID inside
 a record, a counter, a vector, or whether a record is a tombstone, short of the old deletions and
@@ -589,12 +591,14 @@ These are stated so that nobody mistakes silence for a promise.
   and nothing more: every record in it is verified again when the folder opens, and one that fails
   is dropped and reported (TM-9), so corruption or tampering at rest cannot make the device apply or
   serve a change no write holder signed. What a store changed at rest can still do is lose or
-  withhold records, as an older backup would, and, on a write holder, change the arrivals it keeps,
-  which no signature covers: earlier arrivals make the device sign a watermark early, so that
-  deletions are forgotten early and files come back, never lost (`protocol.md` §4.4, "Expiry by the
-  watermark"). No stored record keeps a folder closed for its counter. The device fetches the
-  records again from its peers, with these stated residuals: a record that no peer holds stays
-  missing; a record that a missing
+  withhold records, as an older backup would, and, on a write holder, change the arrivals it keeps
+  and the stored reading of its last signing, which no signature covers: earlier arrivals make the
+  device sign a watermark early, so that deletions are forgotten early and files come back, never
+  lost, and a changed last signing lets it sign once more per open, sooner than
+  `WATERMARK_INTERVAL` after the last, still only a candidate that conditions (1) and (2) allow
+  (`protocol.md` §4.4, "Expiry by the watermark"). No stored record keeps a folder closed for its
+  counter. The device fetches the records again from its peers, with these stated residuals: a
+  record that no peer holds stays missing; a record that a missing
   one covered may be live here again until the missing one returns; withholding this device's own
   records lowers its high-water mark only to its clock floor, so its next counters stay above those
   it used unless its clock reads earlier than its last write (`protocol.md` §4.4, "Why it is safe",
@@ -785,10 +789,11 @@ high-water mark is accepted only up to `MARK_SLACK`, a day of counters, above wh
 and the clock floor justify, so that a mark changed at rest can neither lock the folder nor push the
 device's counters far ahead. No stored record is dropped for its counter, and no clock keeps the
 folder closed: a store whose records lie far ahead of the clock, after the clock was set back, opens
-like any other, and the next write takes a counter above them. A write holder's arrivals, the local
-notes by which it decides when to sign a watermark, are read back as stored and checked against
-nothing, since no signature covers them: a store changed at rest can make the device sign early,
-which forgets deletions early and loses nothing (`protocol.md` §4.4, "Opening a folder", "Expiry by
+like any other, and the next write takes a counter above them. A write holder's arrivals and the
+reading of its last signing, the local notes by which it decides when to sign a watermark, are read
+back as stored and checked against nothing, since no signature covers them: a store changed at rest
+can make the device sign early, or once more per open, which forgets deletions early and loses
+nothing (`protocol.md` §4.4, "Opening a folder", "Expiry by
 the watermark"). The live records, tree deletes and set digests are rebuilt from the records held,
 and the device draws a new index epoch, so index sync fetches every genuine record dropped or
 missing again from the peers that hold it. A store changed at rest can therefore at worst lose or
@@ -1157,8 +1162,9 @@ record it passes, which its watermark then expires, or, when it signs nothing be
 cleanups without a `because`, which it passes again at its next check (`protocol.md` §4.4, "Finding
 what expires", "How many"); a commit that raises it and expires a record, or lowers it, owes one
 round on each connection where the folder is open, at once toward a peer that reports the read or
-write tier and at most once a day toward one that reports the sealed tier, through one more bit and
-one monotonic time per folder per connection; a reconcile pass sends at most
+write tier and at most once a day toward one that reports the sealed tier, through two more bits
+(the peer reports the sealed tier; a change waits) and one monotonic time per folder per
+connection; a reconcile pass sends at most
 `MAX_PASS_REQUESTS` requests, whatever the responder answers; chunk requests are bounded by
 `max_requests_in_flight`, a queued request holds only its hash and the chunk is read from storage
 only as it is sent, a requester keeps one `CHUNK_BUSY` backoff timer per connection and no state per
@@ -2075,8 +2081,8 @@ person's mistake or an outsider's faked time can set it a year or more ahead, so
 in the folder is forgotten at once and deleted files come back, never a version lost (the stated
 worst case above, which the owner accepted on 2026-11-12). Enforced by `index` (expiry by
 the watermark, the index by counter, arrivals and the candidate, the counter ceiling) and `engine`
-(when a write holder checks and signs, and the rounds a change of the greatest watermark owes); the
-clock rule's checks leave `protocol` and `engine`.
+(when a write holder checks and signs, and the rounds a change of the greatest watermark owes); no
+clock check remains in `protocol` or `engine`.
 
 **TM-41. Concurrent versions are kept, peers that exchange converge, and sealed peers lose
 nothing.** At a read or write holder every validly signed index record is kept until a held record,

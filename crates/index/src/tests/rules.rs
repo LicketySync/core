@@ -58,14 +58,12 @@ fn held_record(d: &Dev, hash: &RecordHash) -> Record {
 fn dry_accept(w: &mut Dev, peer: licketysync_keys::DeviceId, signed: &SignedRecord) {
     let record = Record::parse(signed.clone(), w.ix.key().verifier()).unwrap();
     let mut rng = w.rng.clone();
-    let mut memory = w.memory.clone();
     // A budget of the dry run's own: the device's stays unspent.
     let mut notes = licketysync_protocol::connection::NoteBudget::for_tests();
     let mut txn = w.ix.begin();
     let mut fill = |b: &mut [u8]| rng.fill(b);
     let mut arrival = crate::Arrival {
         peer,
-        memory: &mut memory,
         notes: &mut notes,
         clock_us: w.clock,
         rng: &mut fill,
@@ -469,7 +467,9 @@ fn notes_beyond_max_replaces_wait_for_the_rounds_cleanup() {
 // IR-1: expiry.
 
 /// Expiry drops a deletion that is its path's base with its base slot, so
-/// the path has no base and no record kept only as a base is left.
+/// the path has no base and no record kept only as a base is left: here by
+/// the watermark the write holder signs once it has held the tombstone a
+/// year.
 #[test]
 fn expiry_drops_the_deletions_base_with_it() {
     let mut w = Dev::writer(0xa0);
@@ -481,7 +481,9 @@ fn expiry_drops_the_deletions_base_with_it() {
         "the tombstone is the base"
     );
     w.clock += TOMBSTONE_HORIZON + 2 * SEC;
-    w.put("g", 2);
+    let (signed, moved) = w.check(None);
+    assert_eq!(signed.watermark, Some(w.counter(&t)));
+    assert!(moved);
     assert!(!w.holds(&t), "expired");
     assert!(w.ix.bases("f").is_empty(), "its base slot with it");
     assert!(!w.ix.s.base_only.contains_key(&t), "not kept as a base");
@@ -812,13 +814,13 @@ fn a_pruned_tree_delete_over_two_kinds_of_base_at_one_path_is_written_ir3() {
     );
 }
 
-/// An expired tree delete is judged by the folder's time alone, before
-/// anything it may replace is looked at, so that a peer cannot make a key
-/// holder search beneath a directory for each replayed old tree delete (the
-/// index security review's IS-1(a): 24 to 48 ms each at 20 000 files, before).
+/// An expired tree delete is judged by the greatest watermark held alone,
+/// by its counter, before anything it may replace is looked at, so that a
+/// peer cannot make a key holder search beneath a directory for each
+/// replayed old tree delete (the index security review's IS-1(a): 24 to 48
+/// ms each at 20 000 files, before).
 #[test]
 fn an_expired_tree_delete_is_judged_before_what_it_replaces_is1() {
-    use licketysync_protocol::limits::TOMBSTONE_HORIZON;
     let mut d = Dev::writer(0xd0);
     let files: Vec<RecordHash> = (0..20u8).map(|i| d.put(&format!("d/{i:02}"), i)).collect();
     d.apply_all();
@@ -828,12 +830,15 @@ fn an_expired_tree_delete_is_judged_before_what_it_replaces_is1() {
     // what it replaces would query the index by path.
     let mut r = Dev::reader(0xa1);
     r.take(&d, &files);
-    // The folder's time a horizon past the tree delete.
-    let mut late = Dev::writer(0xe1);
-    late.clock = T0 + TOMBSTONE_HORIZON + 10 * SEC;
-    let raise = late.put("z", 1);
-    r.clock = late.clock;
-    r.take(&late, &[raise]);
+    // A watermark at the tree delete's counter.
+    let counter = d.counter(&old.hash());
+    r.accept(&super::kit::watermarked(
+        dev(0xe1),
+        counter + 10,
+        counter,
+        &[],
+    ))
+    .unwrap();
     r.ix.s.by_path.queries.set(0);
     let a = r.accept(&old).unwrap();
     assert_eq!(

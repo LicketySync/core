@@ -16,11 +16,12 @@ use std::collections::BTreeSet;
 
 use licketysync_keys::RecordHash;
 use licketysync_protocol::connection::Judgement;
-use licketysync_protocol::limits::{CLEANUP_HORIZON, MAX_CLEANUP_ENTRIES, TOMBSTONE_HORIZON};
+use licketysync_protocol::limits::{MAX_CLEANUP_ENTRIES, TOMBSTONE_HORIZON};
 use serde_json::{Value, json};
 
 use super::kit::{
-    DAY, Dev, SEC, T0, chunk, cleanup, dev, forge, forged, garbage, round, sealed_file, write_key,
+    DAY, Dev, SEC, T0, chunk, cleanup, dev, forge, forged, garbage, round, sealed_file,
+    watermarked, write_key,
 };
 use super::vectors::{check, h};
 
@@ -295,6 +296,7 @@ fn paging_at_the_real_bound() {
             device: dev(0xd0),
             counter: T0,
         },
+        forget_before: 0,
         groups: vec![licketysync_protocol::record::Group {
             because: Some(RecordHash([1; 32])),
             forget: pages[0].clone(),
@@ -395,22 +397,12 @@ pub(crate) fn cleanup_group_acts_only_while_its_because_is_held() -> Value {
     let f1 = d.put("x", 1);
     d.apply("x");
     let t = d.delete("x");
-    // The cleanup names the version because the tombstone; issued late
-    // enough that it outlives the tombstone (CLEANUP_HORIZON is shorter).
-    let c = cleanup(
-        dev(0xd0),
-        T0 + TOMBSTONE_HORIZON - 10 * super::kit::DAY,
-        &[(Some(t), vec![f1])],
-    );
-    let raise = forge(
-        "y",
-        &[chunk(3)],
-        &sealed_file("y", dev(0xd1), T0 + TOMBSTONE_HORIZON + 20 * SEC),
-        &[],
-    );
+    // The cleanup names the version because the tombstone; it lies above the
+    // watermark that expires the tombstone, so it outlives it.
+    let c = cleanup(dev(0xd0), T0 + 100 * SEC, &[(Some(t), vec![f1])]);
+    let raise = watermarked(dev(0xd1), T0 + 200 * SEC, d.counter(&t), &[]);
     // One held the because and the group, then the because expired.
     let mut one = Dev::reader(0xa1);
-    one.clock = T0 + TOMBSTONE_HORIZON + 30 * SEC;
     one.take(&d, &[t]);
     one.accept(&c).unwrap();
     one.accept(&raise).unwrap();
@@ -418,7 +410,6 @@ pub(crate) fn cleanup_group_acts_only_while_its_because_is_held() -> Value {
     assert!(one.holds(&c.hash()), "the cleanup has not");
     // The other received the cleanup after the because had expired.
     let mut other = Dev::reader(0xa2);
-    other.clock = one.clock;
     other.accept(&raise).unwrap();
     other.accept(&c).unwrap();
     let a = one.take(&d, &[f1]);
@@ -457,14 +448,14 @@ fn the_replayed_old_tombstone() -> Value {
         !r.holds(&v),
         "the version dropped where the tombstone came back"
     );
-    // A write holder whose folder's time has passed the tombstone by its
-    // horizon, holding the version that came back, meets the sealed holder:
-    // offered the tombstone, it finds it forgotten, notes it, and names it
-    // again at the round's end, `because` empty (case (c)); the sealed
-    // holder drops it, and the next round brings the version back.
+    // A write holder that holds a watermark past the tombstone, and the
+    // version that came back, meets the sealed holder: offered the
+    // tombstone, it finds it forgotten, notes it, and names it again at the
+    // round's end, `because` empty (case (c)), under that watermark; the
+    // sealed holder drops it, and the next round brings the version back.
     let mut w = Dev::writer(0xb0);
-    w.clock = T0 + TOMBSTONE_HORIZON + 10 * SEC;
-    w.put("later", 2);
+    w.accept(&watermarked(dev(0xd1), T0 + 200 * SEC, d.counter(&t), &[]))
+        .unwrap();
     w.take(&d, &[v]);
     let first = round(&mut w, &mut s);
     assert!(first.cleanup, "the case-(c) cleanup at the round's end");
@@ -584,7 +575,6 @@ fn vector_cleanups() {
             "replayed_old_tombstone": the_replayed_old_tombstone(),
             "write_holder_notes": a_write_holders_notes(),
             "file_ids": file_ids(),
-            "cleanup_horizon_days": CLEANUP_HORIZON / super::kit::DAY,
         }),
     );
 }
@@ -594,18 +584,17 @@ fn cleanup_group_acts_only_while_its_because_is_held_r1_b1() {
     cleanup_group_acts_only_while_its_because_is_held();
 }
 
-/// A round's end whose cleanup raises the folder's time past a tree
-/// delete's horizon expires it, and reports its path with what it dropped,
-/// as accepting a record that expires it does, so that the engine names that
-/// path's disk again (the engine port's round-3 security review, S3-C; the
-/// engine's test is
-/// `rules::a_rounds_end_cleanup_that_expires_the_greater_tree_delete_leaves_the_other_as_the_base`).
+/// A watermark that expires a tree delete reports its path with what it
+/// dropped, as accepting a record that expires it does, so that the engine
+/// names that path's disk again (S3-C of the engine port's round-3 security
+/// review; the engine's test is
+/// `rules::a_watermark_that_expires_the_greater_tree_delete_leaves_the_other_as_the_base`).
+/// Two tree deletes of `t` arrive 200 days apart; 400 days after the first
+/// the check signs a watermark that passes it and stops at the second, still
+/// young.
 #[test]
-fn a_rounds_end_reports_the_paths_of_what_its_cleanup_expires_s3_c() {
-    let (d, [v1, _, v3]) = three_versions();
+fn a_signed_watermark_reports_the_paths_of_what_it_expires_s3_c() {
     let mut w = Dev::writer(0xb0);
-    w.take(&d, &[v3]);
-    // Two tree deletes of `t`, 200 days apart.
     let tree = |device: u8, counter: u64| {
         let mut m = sealed_file("t", dev(device), counter);
         m.kind = 2;
@@ -618,15 +607,14 @@ fn a_rounds_end_reports_the_paths_of_what_its_cleanup_expires_s3_c() {
     let old = tree(0x61, T0 + 2 * SEC);
     let new = tree(0x62, T0 + 200 * DAY);
     assert_eq!(w.accept(&old).unwrap().judgement, Judgement::Held);
+    w.clock = T0 + 200 * DAY;
     assert_eq!(w.accept(&new).unwrap().judgement, Judgement::Held);
-    // 400 days on, V1 is offered: a stale copy, noted, named at the
-    // round's end by a cleanup whose counter expires the older delete.
     w.clock = T0 + 400 * DAY;
-    assert!(w.accept(d.signed(&v1)).unwrap().noted);
-    let written = w.end_round();
-    assert!(written.cleanup);
+    let (written, moved) = w.check(None);
+    assert_eq!(written.watermark, Some(T0 + 2 * SEC));
+    assert!(moved, "the commit owes rounds");
     assert!(written.dropped.contains(&old.hash()), "expired");
-    assert!(w.holds(&new.hash()), "within its horizon");
+    assert!(w.holds(&new.hash()), "younger than the horizon");
     assert_eq!(
         written.paths,
         vec!["t".to_owned()],

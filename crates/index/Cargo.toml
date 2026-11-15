@@ -1,6 +1,6 @@
 [package]
 name = "licketysync-index"
-description = "The per-folder index: the latest versions of each path by version vectors and names, tree deletes, cleanups, expiry by the folder's own time, set digests and serving, and transactions undone exactly; in memory behind a storage trait until SQLite lands in phase 1."
+description = "The per-folder index: the latest versions of each path by version vectors and names, tree deletes, cleanups, expiry by a signed watermark, set digests and serving, and transactions undone exactly; in memory behind a storage trait until SQLite lands in phase 1."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

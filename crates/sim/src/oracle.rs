@@ -149,9 +149,6 @@ pub struct Expect {
     pub own_counter_ahead: bool,
     /// A store failure is expected.
     pub store_failure: bool,
-    /// The warning that the folder's time is more than a day ahead of a
-    /// device's clock is expected.
-    pub clock_ahead: bool,
     /// How many writes the engine refuses ([`Ledger::refused`]): exactly
     /// these, so that fewer writes never pass for convergence.
     pub refused: u64,
@@ -162,7 +159,6 @@ impl Expect {
         match issue.kind {
             IssueKind::OwnCounterAhead => self.own_counter_ahead,
             IssueKind::StoreFailure(_) => self.store_failure,
-            IssueKind::ClockAhead => self.clock_ahead,
             _ => false,
         }
     }

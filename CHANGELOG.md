@@ -5,6 +5,63 @@ changed and why.
 
 ## Unreleased
 
+- Protocol, index, engine, simulator: deletions are forgotten by a signed watermark, and the clock
+  rule and expiry by the folder's own time are gone (`protocol.md` §4.4 "Expiry by the watermark"
+  and "Cleanup" case (d), §4.5 "Round owed", §5; `threat-model.md` TM-17, TM-22, TM-40, TM-41,
+  TM-43). Until now the code refused a peer whose Hello's clock was a year from this device's,
+  refused records dated a year ahead, kept a folder closed whose store lay a year ahead of the
+  clock, warned of a fast clock, and forgot a deletion once a later counter passed it by 365 days
+  (a cleanup by 30): a clock decided what a device kept. Now only a write holder's signed decision
+  forgets a deletion, and no peer, record or folder is refused for a clock.
+  - Index: the greatest watermark held, `H`, is the greatest `forget_before` of the applied
+    cleanups held. Every tombstone, tree delete and cleanup at or below it is dropped in the commit
+    that raises it, at open once every stored record is in (so that what the open keeps does not
+    depend on the stored order), and on arrival, unverified. A write holder keeps each such
+    record's arrival, its wall clock's reading when it was first held, beside the record in the
+    store, and `Txn::check_watermark` signs the greatest counter of the records held a year below
+    every younger one ("Wait, never early") when it lies above `H`, passes a deletion or a cleanup
+    with a `because`, and a day has passed since its last signing (by the monotonic clock within an
+    opening, by the stored wall-clock reading across openings). Every cleanup carries `H`; a
+    case-(c) cleanup names a forgotten record only at or below it. `Txn::watermark_moved` says when
+    a commit raised `H` and expired a record, or lowered it. The stored high-water mark is checked
+    against `MARK_SLACK`.
+  - Where a watermark goes when its commit writes another cleanup: in a cleanup of its own (case
+    (d)), the check waiting for a commit of its own, made at once, rather than in that other
+    cleanup as the spec said. Carrying it on the other cleanup would mean computing the candidate
+    before the commit's received records are held, so that a late deletion arriving in that commit
+    would not hold it back, or signing cleanups again; the cost is at most one more small cleanup
+    per write holder per day. The spec now says so (§4.4, §4.7 item 6, §8 item 13).
+  - Protocol: `CleanupMeta.forget_before` (field 3), which step 7 requires below the cleanup's
+    counter (`WriterFault::Watermark`); a cleanup may have no group. `MAX_COUNTER` is a fixed
+    ceiling, 10 000 years in microseconds, and `CLOCK_FLOOR_MAX` half of it; `MARK_SLACK`,
+    `PEER_NAMES_WINDOW`, `WATERMARK_CHECK_INTERVAL` and `WATERMARK_INTERVAL` are new. Hello's field
+    11 and `CloseReason` 13 are reserved; a Hello that still carries field 11 is accepted.
+    `Connection::watermark_moved` owes the round a change of `H` owes: at once toward a peer that
+    reports the read or write tier, and toward one that reports the sealed tier at most once per
+    `WATERMARK_INTERVAL` (two bits and one time per folder per connection). Removed: the clock rule
+    in the handshake, `MAX_FUTURE_KNOWN` with its per-connection memory, `CLOCK_AHEAD_WARNING`,
+    `CLEANUP_HORIZON` and their causes.
+  - Engine: a write holder checks for a watermark when a folder opens, when the device resumes from
+    sleep (`Peer::on_resumed`, a new handler) and every `WATERMARK_CHECK_INTERVAL`, last in the
+    folder's transaction, and pushes what it signs; a committed change of `H` owes rounds on every
+    connection where the folder is open. The store keeps the arrivals and the last signing. The
+    daemon (phase 1) must hand the engine a monotonic clock that counts time asleep
+    (`CLOCK_BOOTTIME` or its equivalent; `Clock::now`), and call `Peer::on_resumed` when the device
+    resumes. Removed: the clock rule's issues, `FolderState::Closed` and the timer that reopened such
+    a folder. New: the counters `watermarks_signed` and `watermark_rounds`, and the views'
+    watermarks.
+  - Simulator: `Fault::Resume`; `engine-expiry` forgets by a watermark; `engine-clock-ahead` runs a
+    clock two years ahead with no issue; five new gate scenarios: a write holder offline most of
+    the year, a late deletion that holds signing back, two write holders that sign different
+    watermarks, a replay below `H`, and a sealed peer that keeps the deletion until the round owed
+    toward it names it.
+  - Spec: "What holds forgetting back" adds a tombstone or tree delete that pruning left uncovered,
+    which any peer that kept it can offer again, held anew and young; `threat-model.md` §3.12 adds
+    the stored reading of the last signing, which a store changed at rest can move to allow one more
+    signing per open; section 2 gives the largest Hello as it is, 2 583 bytes.
+  - Test vectors and fuzz seeds are regenerated; the fuzz targets cover field 11, the watermark
+    below the counter, and checks for a watermark.
+
 - Docs: phase 0 is complete; the addendum in `gates/phase-0.md` records the phone shell's evidence.
   The README describes phase 1. Code comments, READMEs, CONTRIBUTING and CI names no longer call
   current code a spike.

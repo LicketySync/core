@@ -20,10 +20,11 @@
 //!   end of a round are noted for phase C or the next commit.
 //! - **B, commit** (`commit`). One [`Txn`](licketysync_index::Txn) per folder
 //!   that has work: local writes, the records of each queued page (steps 2 to
-//!   9 of 4.4, with the connection's own memories and verification budget,
-//!   `Connection::memories_mut`), the ends of rounds with their cleanups, the
-//!   cursors, an epoch drawn for a reset, the chunk frees due, and the bases
-//!   of every path whose content is now on the (simulated) disk (`disk`).
+//!   9 of 4.4, with the connection's own verification budget,
+//!   `Connection::notes_mut`), the ends of rounds with their cleanups, the
+//!   cursors, an epoch drawn for a reset, the chunk frees due, a write
+//!   holder's check for a watermark (`crate::watermark`), and the bases of
+//!   every path whose content is now on the (simulated) disk (`disk`).
 //!   Each transaction's change set is staged with the handler's chunk blobs,
 //!   then one storage commit; the transactions are then committed, or, if the
 //!   commit failed, dropped, which undoes them exactly with nothing rebuilt.
@@ -43,8 +44,8 @@
 //! # The rules kept (4.7 items 2 to 4)
 //!
 //! - **Skipped records.** A record that this side received and could not
-//!   judge (its folder paused for a store failure, kept closed by the clock
-//!   rule, or its handler's commit failed) is reported
+//!   judge (its folder paused for a store failure, or its handler's commit
+//!   failed) is reported
 //!   `Judgement::Skipped`: the connection then moves no cursor past it, its
 //!   round is never caught up and owes another, and pushes stop being
 //!   counted (4.5, "Cursors").
@@ -160,6 +161,10 @@ pub(crate) struct SyncWork {
     /// Rounds owed: on one connection, or on every connection where the
     /// folder is open (`None`).
     pub(crate) owe: BTreeSet<(FolderId, Option<PeerId>)>,
+    /// Folders whose greatest watermark this handler's commit raised so as
+    /// to expire a record, or lowered: each owes a round on every connection
+    /// where it is open (`crate::watermark`).
+    pub(crate) moved: BTreeSet<FolderId>,
     /// The subtrees to push after a `RECORDS` reply ended.
     pub(crate) subtrees: Vec<(PeerId, FolderId, Prefix, Option<Vec<RecordHash>>)>,
     /// What the handler's local write made.

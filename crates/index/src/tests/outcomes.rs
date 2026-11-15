@@ -3,24 +3,26 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! `protocol.md` section 8 item 6, the index's part: each record's outcome
-//! (duplicate, expired, obsolete, held, replacing, opaque, from the future,
-//! a record under the device's own ID), with the section 5 row of each, on a
-//! write holder and, where the tier changes nothing, on a read holder given
-//! the same records (`outcomes.json`); then expiry on arrival at its horizon,
-//! and step 3's obsolete records: ignored unverified when they replace
-//! nothing held, verified and dropping what they replace otherwise.
+//! (duplicate, expired, obsolete, held, replacing, opaque, a record under
+//! the device's own ID, records far from the clock, cleanups that carry a
+//! watermark or none), with the section 5 row of each, on a write holder
+//! and, where the tier changes nothing, on a read holder given the same
+//! records (`outcomes.json`); then expiry on arrival at the greatest
+//! watermark held, and step 3's obsolete records: ignored unverified when
+//! they replace nothing held, verified and dropping what they replace
+//! otherwise.
 
 use licketysync_keys::RecordHash;
 use licketysync_protocol::Cause;
 use licketysync_protocol::connection::Judgement;
-use licketysync_protocol::limits::{CLOCK_AHEAD_WARNING, CLOCK_RULE_LIMIT, TOMBSTONE_HORIZON};
+use licketysync_protocol::limits::{MAX_COUNTER, TOMBSTONE_HORIZON};
 use licketysync_protocol::record::{Kind, WriterFault};
 use prost::Message as _;
 use serde_json::{Value, json};
 
 use super::kit::{
-    DAY, Dev, SEC, T0, chunk, cleanup, dev, entry, forge, forged, garbage, judgement, row,
-    sealed_file,
+    Dev, SEC, T0, chunk, cleanup, dev, entry, forge, forged, garbage, judgement, row, sealed_file,
+    watermarked,
 };
 use super::vectors::{check, h};
 use crate::{Accepted, Change};
@@ -32,9 +34,7 @@ fn accepted(a: &Accepted) -> Value {
         "rows": a.rows.iter().map(|c| row(*c)).collect::<Vec<_>>(),
         "dropped": a.dropped.iter().map(|d| h(&d.0)).collect::<Vec<_>>(),
         "own_counter_ahead": a.own_ahead,
-        "clock_ahead_us": a.clock_ahead.map(|(n, _)| n),
         "writer_fault": a.writer_fault.as_ref().map(ToString::to_string),
-        "from_the_future": a.from_future.is_some(),
     })
 }
 
@@ -108,21 +108,23 @@ fn vector_outcomes() {
         }
     }
 
-    // Expired: a tombstone the folder's own time has passed by more than
-    // TOMBSTONE_HORIZON is dropped, and ignored when it arrives again with a
-    // forged signature at a read holder; a write holder that would note it as
-    // a forgotten record verifies it first.
+    // Expired: a tombstone that a watermark passes is dropped when the
+    // watermark arrives, and ignored when it arrives again with a forged
+    // signature at a read holder; a write holder that would note it as a
+    // forgotten record verifies it first. D holds its tombstone a year and
+    // signs the watermark, in a cleanup with no group (case (d)).
     {
         let mut d = Dev::writer(0xd0);
         d.put("docs/gone", 1);
         let t = d.delete("docs/gone");
         d.clock = T0 + TOMBSTONE_HORIZON + 2 * SEC;
-        let later = d.put("docs/later", 2);
+        let (signed, _) = d.check(None);
+        let later = signed.records[0].0;
         for (mut x, holder) in [(Dev::reader(0xa1), "read"), (Dev::writer(0xa0), "write")] {
             x.accept(d.signed(&t)).unwrap();
             x.clock = d.clock;
             let raised = x.accept(d.signed(&later)).unwrap();
-            assert_eq!(raised.dropped, vec![t], "expired by the folder's own time");
+            assert_eq!(raised.dropped, vec![t], "expired by the watermark");
             let again = x.accept(&forged(d.signed(&t)));
             if holder == "read" {
                 assert_eq!(again.as_ref().map(|a| a.judgement), Ok(Judgement::Expired));
@@ -131,7 +133,7 @@ fn vector_outcomes() {
             }
             case(
                 &format!("expired-tombstone-forged-{holder}-holder"),
-                "a tombstone, then a record a horizon and a second later: the tombstone expires; offered again forged",
+                "a tombstone, then the watermark its writer signed a horizon and two seconds later: the tombstone expires; offered again forged",
                 vec![accepted(&raised), outcome(again)],
             );
         }
@@ -200,86 +202,88 @@ fn vector_outcomes() {
         );
     }
 
-    // A counter a day and a microsecond ahead of the receiver's clock: held,
-    // the warning naming its device; exactly a day ahead: no warning; the
-    // first again forged and obsolete: ignored, no warning.
+    // Records far ahead of or behind the clock are judged as any record: no
+    // record is refused, kept or forgotten for its counter against a clock
+    // (4.4, "Dots and counters"). A counter of 1, one a year and a
+    // microsecond ahead, and the counter ceiling itself: all held.
     {
         let mut w = Dev::writer(0xa0);
-        let fast = dev(0xf0);
-        let over = forge(
-            "docs/fast",
-            &[chunk(1)],
-            &sealed_file("docs/fast", fast, T0 + CLOCK_AHEAD_WARNING + 1),
-            &[],
-        );
-        let at = forge(
-            "docs/at",
-            &[chunk(2)],
-            &sealed_file("docs/at", fast, T0 + CLOCK_AHEAD_WARNING),
-            &[],
-        );
-        let a = w.accept(&over).unwrap();
-        assert_eq!(a.clock_ahead, Some((DAY + 1, fast)));
-        assert!(a.rows.contains(&Cause::ClockAhead));
-        let b = w.accept(&at).unwrap();
-        assert_eq!(b.clock_ahead, None);
-        // A version over the fast one, then the fast one again forged.
-        let mut m = sealed_file("docs/fast", fast, T0 + CLOCK_AHEAD_WARNING + 2);
-        m.vector = vec![entry(fast, T0 + CLOCK_AHEAD_WARNING + 1)];
-        let newer = forge("docs/fast", &[chunk(3)], &m, &[a.hash]);
-        w.accept(&newer).unwrap();
-        let mut r = Dev::reader(0xa1);
-        r.accept(&newer).unwrap();
-        let c = r.accept(&forged(&over)).unwrap();
-        assert_eq!(c.judgement, Judgement::Obsolete);
-        assert_eq!(c.clock_ahead, None);
+        let far = dev(0xf1);
+        let steps: Vec<Value> = [
+            ("docs/behind", 1),
+            ("docs/ahead", T0 + TOMBSTONE_HORIZON + 1),
+            ("docs/ceiling", MAX_COUNTER),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, (path, counter))| {
+            let r = forge(
+                path,
+                &[chunk(u8::try_from(i).unwrap() + 1)],
+                &sealed_file(path, far, *counter),
+                &[],
+            );
+            let a = w.accept(&r).unwrap();
+            assert_eq!(a.judgement, Judgement::Held, "{path}");
+            assert!(!a.own_ahead && a.writer_fault.is_none());
+            accepted(&a)
+        })
+        .collect();
+        assert_eq!(w.ix.hw(), MAX_COUNTER, "the mark rose to the ceiling");
         case(
-            "counter-ahead-of-the-clock",
-            "a day and a microsecond ahead (warned), exactly a day (not), and the first forged once something replaces it (ignored, read holder)",
-            vec![accepted(&a), accepted(&b), accepted(&c)],
+            "far-from-the-clock",
+            "counters of 1, a year and a microsecond ahead of T0, and MAX_COUNTER: each held, as any record",
+            steps,
         );
     }
 
-    // From the future: more than CLOCK_RULE_LIMIT ahead, verified and refused,
-    // not held; again on the same connection, ignored unverified; forged, the
-    // first time, closed; exactly at the limit: held.
+    // Cleanups and the watermark (4.4, "Cleanup", case (d)): one with no
+    // group that carries a watermark is accepted on every tier and, at a key
+    // holder, raises the greatest watermark held; one with no group and no
+    // watermark is accepted and held, changing nothing until a watermark
+    // passes it; one whose watermark equals its counter is a writer fault,
+    // held opaque, its watermark counting for nothing.
     {
-        let mut w = Dev::writer(0xa0);
-        let far = forge(
-            "docs/far",
-            &[chunk(1)],
-            &sealed_file("docs/far", dev(0xf1), T0 + CLOCK_RULE_LIMIT + 1),
-            &[],
-        );
-        let edge = forge(
-            "docs/edge",
-            &[chunk(2)],
-            &sealed_file("docs/edge", dev(0xf1), T0 + CLOCK_RULE_LIMIT),
-            &[],
-        );
-        let mut fresh = Dev::writer(0xa2);
-        assert_eq!(fresh.accept(&forged(&far)), Err(Cause::Forged), "verified");
-        let a = w.accept(&far).unwrap();
-        assert_eq!(a.judgement, Judgement::FromTheFuture);
-        assert_eq!(a.from_future, Some(dev(0xf1)));
-        assert!(!w.holds(&a.hash), "neither held nor relayed");
-        let again = w.accept(&garbage(&far)).unwrap();
-        assert_eq!(again.judgement, Judgement::FromTheFuture);
-        assert_eq!(
-            again.from_future, None,
-            "known on this connection: not verified"
-        );
-        let b = w.accept(&edge).unwrap();
-        assert_eq!(b.judgement, Judgement::Held);
+        let only = watermarked(dev(0xd2), T0 + 20, T0 + 10, &[]);
+        let none = watermarked(dev(0xd2), T0 + 5, 0, &[]);
+        let fault = watermarked(dev(0xd2), T0 + 30, T0 + 30, &[]);
+        let mut steps = Vec::new();
+        for mut x in [Dev::writer(0xa0), Dev::reader(0xa1), Dev::sealed(0xa2)] {
+            let key_holder = x.ix.tier() != licketysync_keys::Tier::Sealed;
+            let n = x.accept(&none).unwrap();
+            assert_eq!(n.judgement, Judgement::Held);
+            assert_eq!(x.ix.watermark(), 0);
+            let f = x.accept(&fault).unwrap();
+            if key_holder {
+                assert_eq!(f.judgement, Judgement::HeldOpaque);
+                assert_eq!(
+                    f.writer_fault,
+                    Some(WriterFault::Watermark {
+                        forget_before: T0 + 30,
+                        counter: T0 + 30
+                    })
+                );
+            } else {
+                assert_eq!(f.judgement, Judgement::Held, "a sealed peer reads no seal");
+            }
+            assert_eq!(x.ix.watermark(), 0, "an opaque cleanup counts for nothing");
+            let o = x.accept(&only).unwrap();
+            assert_eq!(o.judgement, Judgement::Held);
+            if key_holder {
+                assert_eq!(x.ix.watermark(), T0 + 10);
+                assert_eq!(o.dropped, vec![none.hash()], "the watermark passes it");
+            } else {
+                assert_eq!(x.ix.watermark(), 0, "a sealed peer reads no watermark");
+                assert!(o.dropped.is_empty() && x.holds(&none.hash()));
+            }
+            if x.ix.key().write_key().is_some() {
+                steps = vec![accepted(&n), accepted(&f), accepted(&o)];
+            }
+        }
         case(
-            "from-the-future",
-            "a year and a microsecond ahead (refused, verified, remembered on the connection), again with a garbage signature (ignored), forged on a fresh connection (closed), exactly a year (held)",
-            vec![
-                accepted(&a),
-                accepted(&again),
-                refused(Cause::Forged),
-                accepted(&b),
-            ],
+            "cleanups-with-no-group",
+            "a cleanup with no group and no watermark (held, changing nothing), one whose watermark equals its counter (a writer fault, counting for nothing), and one with no group carrying the watermark T0 + 10, which expires the first",
+            steps,
         );
     }
 
@@ -493,24 +497,34 @@ fn vector_outcomes() {
 }
 
 #[test]
-fn an_opaque_record_moves_neither_the_mark_nor_the_folders_time() {
-    // An opaque record covers nothing and counts for nothing: its counter,
-    // were it read past a failed check, would expire the tombstone and
-    // raise the mark (4.4 step 6).
+fn an_opaque_record_moves_neither_the_mark_nor_the_greatest_watermark() {
+    // An opaque record covers nothing and counts for nothing (4.4 step 6):
+    // an index record whose seal fails a check raises no mark, and a cleanup
+    // whose watermark is not below its counter raises no watermark, so the
+    // tombstone it would pass stays held.
     let mut w = Dev::writer(0xa0);
     w.put("t", 1);
     w.apply("t");
     let t = w.delete("t");
-    let (g, hw) = (w.ix.folder_time(), w.ix.hw());
-    let mut m = sealed_file("x", w.id(), T0 + TOMBSTONE_HORIZON + 10 * SEC);
+    let t_counter = w.counter(&t);
+    let hw = w.ix.hw();
+    let mut m = sealed_file("x", w.id(), hw + 10);
     m.tree = true;
     let bad = forge("x", &[chunk(1)], &m, &[]);
-    w.clock = T0 + TOMBSTONE_HORIZON + 20 * SEC;
     let a = w.accept(&bad).unwrap();
     assert_eq!(a.judgement, Judgement::HeldOpaque);
     assert!(!a.own_ahead);
-    assert_eq!((w.ix.folder_time(), w.ix.hw()), (g, hw));
+    assert_eq!(w.ix.hw(), hw);
+    let c = watermarked(dev(0xd2), t_counter, t_counter, &[]);
+    let a = w.accept(&c).unwrap();
+    assert_eq!(a.judgement, Judgement::HeldOpaque);
+    assert_eq!((w.ix.hw(), w.ix.watermark()), (hw, 0));
     assert!(w.holds(&t), "the tombstone not expired");
+    // The same watermark one below its own counter passes the tombstone.
+    let c = watermarked(dev(0xd2), t_counter + 1, t_counter, &[]);
+    let a = w.accept(&c).unwrap();
+    assert_eq!(a.judgement, Judgement::Held);
+    assert_eq!(a.dropped, vec![t]);
 }
 
 #[test]
@@ -544,51 +558,58 @@ fn a_stale_copy_is_verified_before_it_is_noted_c1_sc1() {
     assert!(!again.noted);
 }
 
-/// Phase 0's expiry by the folder's own time `G` on arrival (step 3, as the
-/// CHANGELOG's index entry of phase 0 has it: expired once `G` has passed
-/// the record's counter by strictly more than its horizon, 365 days for a
-/// tombstone or tree delete, 30 for a cleanup): one exactly its horizon
-/// behind `G` is held, one a microsecond older is expired. The signed
-/// watermark (`protocol.md` 4.4, "Expiry by the watermark", spec 59783b1)
-/// replaces this rule in phase 1, and this test with it.
+/// Expiry on arrival (4.4, "Expiry by the watermark"; step 3): at a read
+/// or write holder whose greatest watermark is `H`, a tombstone, tree delete
+/// or cleanup whose counter is `H` is expired, ignored unverified (a read
+/// holder) and one at `H + 1` is held; a version at or below `H` is held,
+/// since no version expires.
 #[test]
-fn a_deletion_or_cleanup_exactly_its_horizon_behind_the_folders_time_is_not_expired() {
-    use licketysync_protocol::limits::CLEANUP_HORIZON;
-    let g = T0 + TOMBSTONE_HORIZON + 10 * SEC;
-    let tombstone = |path: &str, counter: u64| {
+fn a_deletion_or_cleanup_at_the_greatest_watermark_expires_and_one_above_it_does_not() {
+    let h = T0 + 100;
+    let deletion = |path: &str, counter: u64, tree: bool| {
         let mut m = sealed_file(path, dev(2), counter);
         m.deleted = true;
         m.size = 0;
         m.plain_hashes.clear();
+        if tree {
+            m.kind = 2;
+            m.tree = true;
+        }
         forge(path, &[], &m, &[])
     };
     for mut x in [Dev::reader(0xa1), Dev::writer(0xa0)] {
-        x.clock = g;
-        let late = forge("late", &[chunk(1)], &sealed_file("late", dev(1), g), &[]);
-        assert_eq!(x.judge(&late), Ok(Judgement::Held));
-        assert_eq!(x.ix.folder_time(), g);
-        let at = tombstone("at", g - TOMBSTONE_HORIZON);
-        assert_eq!(x.judge(&at), Ok(Judgement::Held), "a tombstone at it");
-        assert!(x.holds(&at.hash()), "and kept");
-        let past = tombstone("past", g - TOMBSTONE_HORIZON - 1);
-        assert_eq!(
-            x.judge(&past),
-            Ok(Judgement::Expired),
-            "a tombstone past it"
-        );
-        let at = cleanup(
-            dev(3),
-            g - CLEANUP_HORIZON,
-            &[(None, vec![RecordHash([7; 32])])],
-        );
-        assert_eq!(x.judge(&at), Ok(Judgement::Held), "a cleanup at it");
-        assert!(x.holds(&at.hash()), "and kept");
-        let past = cleanup(
-            dev(3),
-            g - CLEANUP_HORIZON - 1,
-            &[(None, vec![RecordHash([8; 32])])],
-        );
-        assert_eq!(x.judge(&past), Ok(Judgement::Expired), "a cleanup past it");
+        let w = watermarked(dev(1), h + 50, h, &[]);
+        assert_eq!(x.judge(&w), Ok(Judgement::Held));
+        assert_eq!(x.ix.watermark(), h);
+        for (name, at, above) in [
+            (
+                "tombstone",
+                deletion("t-at", h, false),
+                deletion("t-above", h + 1, false),
+            ),
+            (
+                "tree delete",
+                deletion("d-at", h, true),
+                deletion("d-above", h + 1, true),
+            ),
+            (
+                "cleanup",
+                cleanup(dev(3), h, &[(None, vec![RecordHash([7; 32])])]),
+                cleanup(dev(3), h + 1, &[(None, vec![RecordHash([8; 32])])]),
+            ),
+        ] {
+            let judged = if x.ix.key().write_key().is_some() {
+                x.judge(&at)
+            } else {
+                x.accept(&garbage(&at)).map(|a| a.judgement)
+            };
+            assert_eq!(judged, Ok(Judgement::Expired), "a {name} at H");
+            assert!(!x.holds(&at.hash()));
+            assert_eq!(x.judge(&above), Ok(Judgement::Held), "a {name} above H");
+            assert!(x.holds(&above.hash()), "and kept");
+        }
+        let version = forge("v", &[chunk(1)], &sealed_file("v", dev(4), h - 1), &[]);
+        assert_eq!(x.judge(&version), Ok(Judgement::Held), "a version below H");
     }
 }
 

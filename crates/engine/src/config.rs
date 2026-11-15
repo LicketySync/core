@@ -133,7 +133,9 @@ pub enum ConfigError {
     TooManyFolders(usize),
     /// `chunk_size` outside `1 ..= MAX_CHUNK_PLAINTEXT`.
     ChunkSize(usize),
-    /// `send_budget` is 0, or `send_poll` or `resume_probe` is zero.
+    /// `send_budget` is 0, or `send_poll`, `resume_probe` or the timing's
+    /// `watermark_check` is zero (a check re-armed at once would never let
+    /// time pass).
     Pacing,
     /// `max_message_size` or `max_requests_in_flight` outside its range.
     Limits,
@@ -150,7 +152,7 @@ impl fmt::Display for ConfigError {
                 f,
                 "a chunk size of {n} bytes is outside 1..={MAX_CHUNK_PLAINTEXT}"
             ),
-            Self::Pacing => f.write_str("the send budget and both intervals must be above zero"),
+            Self::Pacing => f.write_str("the send budget and every interval must be above zero"),
             Self::Limits => f.write_str("a Hello limit is out of range"),
             Self::DeviceName => f.write_str("the device name breaks the Status grammar"),
         }
@@ -192,7 +194,11 @@ pub(crate) fn check(config: &EngineConfig) -> Result<Settings, ConfigError> {
     if !(1..=MAX_CHUNK_PLAINTEXT).contains(&config.chunk_size) {
         return Err(ConfigError::ChunkSize(config.chunk_size));
     }
-    if config.send_budget == 0 || config.send_poll.is_zero() || config.resume_probe.is_zero() {
+    if config.send_budget == 0
+        || config.send_poll.is_zero()
+        || config.resume_probe.is_zero()
+        || config.timing.watermark_check.is_zero()
+    {
         return Err(ConfigError::Pacing);
     }
     if !(MIN_MESSAGE_SIZE..=MAX_MESSAGE_SIZE).contains(&config.max_message_size)
@@ -284,6 +290,9 @@ mod tests {
         assert_eq!(check(&c), Err(ConfigError::Pacing));
         let mut c = config();
         c.resume_probe = Duration::ZERO;
+        assert_eq!(check(&c), Err(ConfigError::Pacing));
+        let mut c = config();
+        c.timing.watermark_check = Duration::ZERO;
         assert_eq!(check(&c), Err(ConfigError::Pacing));
         let mut c = config();
         c.max_message_size = MIN_MESSAGE_SIZE - 1;

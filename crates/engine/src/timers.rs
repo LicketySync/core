@@ -4,7 +4,7 @@
 
 //! The engine's timers: one id per purpose (a connection's wake-up, its send
 //! poll, the resume probe, the chunk patience, the deferred commit, the
-//! clock rule's opening, the free tick), allocated from a counter that never
+//! watermark check, the free tick), allocated from a counter that never
 //! repeats within an instance, and every id below [`HARNESS_TIMERS`].
 //!
 //! Ids of 2^63 and up belong to whatever wraps the engine (the simulator's
@@ -38,8 +38,10 @@ pub(crate) enum Purpose {
     /// Index work that phase C brought waits for a commit: make it now, in
     /// a handler of its own (`crate::sync`).
     Deferred,
-    /// A folder kept closed by the clock rule may open: check the clock.
-    OpensAt,
+    /// At least once per `WATERMARK_CHECK_INTERVAL` of monotonic time while
+    /// a folder this device writes is open: check for a watermark
+    /// (`protocol.md` 4.4, "When a write holder signs one").
+    WatermarkCheck,
     /// Once a minute: the chunk frees of folders open on no connection
     /// (`protocol.md` 4.7 item 1).
     FreeTick,
@@ -52,7 +54,7 @@ impl Purpose {
             Self::ResumeProbe
             | Self::ChunkPatience
             | Self::Deferred
-            | Self::OpensAt
+            | Self::WatermarkCheck
             | Self::FreeTick => None,
         }
     }

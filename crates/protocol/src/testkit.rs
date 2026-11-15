@@ -193,6 +193,7 @@ pub(crate) fn cleanup(
             device: DeviceId([writer; 32]),
             counter,
         },
+        forget_before: 0,
         groups,
     }
     .sign(key, &key.record_keys(), &mut |b: &mut [u8]| b.fill(7))
@@ -507,7 +508,7 @@ impl Side {
     fn new(seed: u8, folders: &[FolderKey], config: impl FnOnce(&mut Config)) -> (Self, Output) {
         let (key, libp2p) = device(seed);
         // 2026-10-25, the day these vectors were made.
-        let mut cfg = Config::new(libp2p, 20_751);
+        let mut cfg = Config::new(libp2p);
         cfg.device_name = format!("device-{seed:02x}");
         config(&mut cfg);
         let mut rng = Rng(u64::from(seed));
@@ -917,8 +918,11 @@ impl Pair {
     }
 
     /// Advances the clock to `t`, firing each side's wake-up in time order
-    /// and settling after each.
+    /// and settling after each. A wake-up that never clears (the connection
+    /// asks to be woken again at an instant already passed, for ever) fails
+    /// the test instead of hanging it.
     pub(crate) fn advance_to(&mut self, t: Duration) {
+        let mut stuck = 0_u32;
         loop {
             let next = [self.a.wake, self.b.wake]
                 .into_iter()
@@ -928,6 +932,8 @@ impl Pair {
             let Some(w) = next else {
                 break;
             };
+            stuck = if w > self.now { 0 } else { stuck + 1 };
+            assert!(stuck < 10_000, "a wake-up at {w:?} that never clears");
             self.now = self.now.max(w);
             let now = self.now;
             for side in [&mut self.a, &mut self.b] {

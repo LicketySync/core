@@ -21,7 +21,7 @@ use licketysync_keys::{
     CipherHash, DeviceId, FolderKey, PathTag, RecordHash, SetDigest, Suite, Tier, WriteKey,
 };
 use licketysync_protocol::Cause;
-use licketysync_protocol::connection::{FolderMemory, Judgement, NoteBudget, ReconcileServe};
+use licketysync_protocol::connection::{Judgement, NoteBudget, ReconcileServe};
 use licketysync_protocol::exchange::Prefix;
 use licketysync_protocol::limits::{DAY_US, DEFAULT_MESSAGE_SIZE, MAX_RECONCILE_PASSES};
 use licketysync_protocol::messages::{
@@ -132,14 +132,13 @@ pub(crate) fn tombstone(path: &str, kind: Kind, mtime_ns: i64) -> Put {
 }
 
 /// A device: one folder's index at a tier, over a memory store, with its own
-/// wall clock (microseconds), randomness, connection memories and the
+/// wall clock (microseconds), randomness, a connection's note budget and the
 /// `mtime_ns` its next fixture write takes.
 pub(crate) struct Dev {
     pub(crate) ix: Index,
     pub(crate) store: MemoryStore,
     pub(crate) rng: Rng,
     pub(crate) clock: u64,
-    pub(crate) memory: FolderMemory,
     /// The connection's note budget; the tests give each round a new one.
     pub(crate) notes: NoteBudget,
     pub(crate) mtime: i64,
@@ -160,7 +159,6 @@ impl Dev {
             store,
             rng,
             clock: T0,
-            memory: FolderMemory::default(),
             notes: NoteBudget::for_tests(),
             mtime: 1_000,
             archive: std::collections::BTreeMap::new(),
@@ -260,6 +258,44 @@ impl Dev {
         .unwrap()
     }
 
+    /// A check for a watermark (4.4, "When a write holder signs one") at this
+    /// device's clock, in a commit of its own, `since_signed` the monotonic
+    /// time since it last signed one in this opening (`None`: none), the
+    /// interval `WATERMARK_INTERVAL`; what it signed, and whether the commit
+    /// moved the greatest watermark held so as to owe rounds.
+    pub(crate) fn check(&mut self, since_signed: Option<core::time::Duration>) -> (Written, bool) {
+        let Self {
+            ix,
+            store,
+            rng,
+            clock,
+            archive,
+            ..
+        } = self;
+        let mut txn = ix.begin();
+        let written = txn
+            .check_watermark(
+                *clock,
+                since_signed,
+                licketysync_protocol::limits::WATERMARK_INTERVAL,
+                &mut |b| rng.fill(b),
+            )
+            .unwrap();
+        for (h, _) in &written.records {
+            if let Some(r) = txn.index().s.base_record(h) {
+                archive.insert(*h, r.signed().clone());
+            }
+        }
+        let moved = txn.watermark_moved();
+        let (changes, pending) = txn.finish();
+        store.commit(&changes).unwrap();
+        pending.commit();
+        check_own_held(&self.ix, &written, false);
+        let recs = records_of(archive, &written.records);
+        check_drops(&self.ix, &self.archive, &recs, &written.dropped, "check");
+        (written, moved)
+    }
+
     /// A tree delete of `path`, with its tombstones and cleanup.
     pub(crate) fn tree_delete(&mut self, path: &str) -> Written {
         let m = self.next_mtime();
@@ -284,7 +320,6 @@ impl Dev {
             store,
             rng,
             clock,
-            memory,
             notes,
             ..
         } = self;
@@ -292,7 +327,6 @@ impl Dev {
         let mut fill = |b: &mut [u8]| rng.fill(b);
         let mut arrival = crate::Arrival {
             peer,
-            memory,
             notes,
             clock_us: *clock,
             rng: &mut fill,
@@ -339,6 +373,13 @@ impl Dev {
             .signed(hash)
             .or_else(|| self.archive.get(hash))
             .unwrap()
+    }
+
+    /// The counter of a record this device signed or accepted, from its
+    /// seal.
+    pub(crate) fn counter(&self, hash: &RecordHash) -> u64 {
+        let r = Record::parse(self.signed(hash).clone(), write_key().verifier()).unwrap();
+        r.open(&write_key().record_keys()).unwrap().dot().counter
     }
 
     /// Every record held.
@@ -415,7 +456,6 @@ impl Dev {
             store,
             rng,
             clock,
-            memory,
             notes,
             archive,
             ..
@@ -430,7 +470,6 @@ impl Dev {
         let (changes, pending) = txn.finish();
         store.commit(&changes).unwrap();
         pending.commit();
-        *memory = FolderMemory::default();
         *notes = NoteBudget::for_tests();
         check_own_held(&self.ix, &w, true);
         let recs = records_of(archive, &w.records);
@@ -546,10 +585,22 @@ pub(crate) fn chunk(n: u8) -> Chunk {
     }
 }
 
-/// A cleanup signed by the folder key: `device` at `counter`, these groups.
+/// A cleanup signed by the folder key: `device` at `counter`, these groups,
+/// no watermark.
 pub(crate) fn cleanup(
     device: DeviceId,
     counter: u64,
+    groups: &[(Option<RecordHash>, Vec<RecordHash>)],
+) -> SignedRecord {
+    watermarked(device, counter, 0, groups)
+}
+
+/// A cleanup signed by the folder key: `device` at `counter`, carrying the
+/// watermark `forget_before`, these groups (none: case (d)).
+pub(crate) fn watermarked(
+    device: DeviceId,
+    counter: u64,
+    forget_before: u64,
     groups: &[(Option<RecordHash>, Vec<RecordHash>)],
 ) -> SignedRecord {
     let w = write_key();
@@ -557,6 +608,7 @@ pub(crate) fn cleanup(
     let meta = CleanupMeta {
         device_id: device.0.to_vec(),
         counter,
+        forget_before,
     }
     .encode_to_vec();
     let sealed = keys
@@ -743,11 +795,9 @@ pub(crate) fn row(c: Cause) -> &'static str {
         Cause::Obsolete => "Obsolete",
         Cause::ReplacesHeld => "Replaces held records",
         Cause::CleanupGroupWaiting => "Cleanup group waiting",
-        Cause::FromTheFuture => "From the future",
         Cause::Forged => "Forged",
         Cause::WriterFault => "Writer fault",
         Cause::OwnCounterAhead => "Own counter ahead",
-        Cause::ClockAhead => "Counter ahead of the clock",
         Cause::CounterExhausted => "Counter exhausted",
         _ => "other",
     }
@@ -759,7 +809,6 @@ pub(crate) fn judgement(j: Judgement) -> &'static str {
         Judgement::Duplicate => "duplicate",
         Judgement::Expired => "expired",
         Judgement::Obsolete => "obsolete",
-        Judgement::FromTheFuture => "from the future",
         Judgement::Held => "held",
         Judgement::HeldOpaque => "held opaque",
         Judgement::DroppedBeneath => "dropped beneath a tree delete",
@@ -841,11 +890,9 @@ fn records_of(
 /// name at its tag, coverage at its tag or beneath a tree delete (at a read
 /// or write holder), a group of the change's own cleanups or of a held
 /// cleanup that applies, a group whose `because` is one of the change's
-/// records, or, at a key holder, expiry of a deletion or cleanup: the
-/// folder's time after the change past its counter by more than its horizon
-/// (that time only grows within a change, so one dropped early in a change
-/// that ends past the horizon passes too). Anything else would be a silent
-/// loss, and is recorded.
+/// records, or, at a key holder, expiry of a tombstone, tree delete or
+/// cleanup: its counter at most the greatest watermark held after the change.
+/// Anything else would be a silent loss, and is recorded.
 pub(crate) fn check_drops(
     ix: &Index,
     archive: &std::collections::BTreeMap<RecordHash, SignedRecord>,
@@ -853,7 +900,6 @@ pub(crate) fn check_drops(
     dropped: &[RecordHash],
     what: &str,
 ) {
-    use licketysync_protocol::limits::{CLEANUP_HORIZON, TOMBSTONE_HORIZON};
     use licketysync_protocol::record::{Applied, at_or_beneath};
     let keys = write_key().record_keys();
     let key_holder = ix.tier() != Tier::Sealed;
@@ -880,16 +926,8 @@ pub(crate) fn check_drops(
         let ur = Record::parse(us.clone(), write_key().verifier()).unwrap();
         let uv = ur.open(&keys);
         let um = uv.as_ref().ok();
-        if key_holder {
-            let horizon = match um {
-                Some(Applied::Cleanup(_)) => Some(CLEANUP_HORIZON),
-                Some(Applied::Index(m)) if m.deleted => Some(TOMBSTONE_HORIZON),
-                _ => None,
-            };
-            let age = um.map_or(0, |a| ix.s.folder_time().saturating_sub(a.dot().counter));
-            if horizon.is_some_and(|h| age > h) {
-                continue;
-            }
+        if key_holder && um.is_some_and(|a| a.expirable() && a.dot().counter <= ix.watermark()) {
+            continue;
         }
         let mut ok = ix.s.forgotten_by_group(u);
         for (r, ra, because) in &by_info {

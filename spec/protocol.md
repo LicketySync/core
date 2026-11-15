@@ -178,7 +178,7 @@ Limits:
 
 | Name | Value | Meaning |
 | --- | --- | --- |
-| `PRE_HELLO_LIMIT` | 65 536 | Applies to every frame received on a connection until the peer's DeviceProof has verified (its Hello, its DeviceProof or a Close), and to anything sent before the peer's Hello has arrived. The largest Hello a release of major 1 sends is a frame of 2 664 bytes (length field included, 2 668) and a DeviceProof one of 68 (72), so both fit |
+| `PRE_HELLO_LIMIT` | 65 536 | Applies to every frame received on a connection until the peer's DeviceProof has verified (its Hello, its DeviceProof or a Close), and to anything sent before the peer's Hello has arrived. The largest Hello a release of major 1 sends is a frame of 2 583 bytes (length field included, 2 587) and a DeviceProof one of 68 (72), so both fit |
 | `MIN_MESSAGE_SIZE` | 8 388 608 (8 MiB) | The smallest `max_message_size` a Hello may advertise; a smaller one is `Close(LIMIT_TOO_SMALL)` |
 | `DEFAULT_MESSAGE_SIZE` | 16 777 216 (16 MiB) | What a device advertises unless configured otherwise |
 | `MAX_MESSAGE_SIZE` | 67 108 864 (64 MiB) | The largest value a Hello may advertise; larger is treated as this value |
@@ -1200,10 +1200,11 @@ message CleanupMeta {
   when its counter is at most that watermark; a note above it, noted under a watermark whose cleanup
   a dishonest write holder's cleanup has named away since, is dropped, unnamed. So every record a
   case-(c) group names lies at or below the watermark of the cleanup that names it. (d) When it
-  signs a watermark (expiry, below) and writes no other cleanup in that commit: a cleanup with no
-  group, which carries only the watermark (the spec author's choice, for the owner's review, over a
-  record type of its own: a cleanup already has a sealed part that only read and write holders open,
-  a counter, a signature that every tier checks and a place in the set digests). A cleanup with no
+  signs a watermark (expiry, below), which it does only in a commit that writes no other cleanup: a
+  cleanup with no group, which carries only the watermark (the spec author's choice, for the
+  owner's review, over a record type of its own: a cleanup already has a sealed part that only read
+  and write holders open, a counter, a signature that every tier checks and a place in the set
+  digests). A cleanup with no
   group and no watermark (`forget_before` 0) is valid and changes nothing: it is held, served and
   counted in the set digests like any cleanup until a watermark passes its counter or, at a sealed
   peer, a case-(c) cleanup names it, and no honest write holder writes one (the spec author's
@@ -1342,9 +1343,9 @@ decides only when it signs; no rule that judges a record or a peer reads a clock
   cleanup carries its writer's greatest watermark, below, are the spec author's choices, for the
   owner's review). Sealed peers verify a cleanup's signature as for any cleanup, and cannot read its
   watermark. Every cleanup a write holder writes carries the greatest watermark the writer holds
-  then, or the greater one it signs then; one that carries a new watermark and nothing else has no
-  group (case (d), above). The field, and cleanups with no group, were added within major 1 on
-  2026-11-12, before any release, so every release of major 1 reads them (section 6).
+  then; a new watermark goes only in a cleanup with no group (case (d), above). The field, and
+  cleanups with no group, were added within major 1 on 2026-11-12, before any release, so every
+  release of major 1 reads them (section 6).
 - **The greatest watermark** a device holds, `H`, is the greatest `forget_before` of the applied
   cleanups it holds, 0 when none. An opaque cleanup (step 7) counts for nothing, whatever its seal
   may carry: every release of major 1 judges a seal by the same checks (section 6), so every release
@@ -1424,9 +1425,12 @@ decides only when it signs; no rule that judges a record or a peer reads a clock
   with no group (case (d), or the one with no watermark either), or whose groups all have an empty
   `because` (case (c)); and (3) at least `WATERMARK_INTERVAL`, a day, has passed since the last
   watermark this write holder signed in the folder, so that it signs at most once per
-  `WATERMARK_INTERVAL`. It signs in the commit in which it computed the candidate, so that the two
-  see the same records: it writes it as the watermark of a cleanup, with any other cleanup written
-  in that commit, or of one of its own (case (d)), and the cleanup is pushed like any record.
+  `WATERMARK_INTERVAL`. It checks last in a commit, after every record that commit holds, and signs
+  in that commit, so that the candidate and the watermark see the same records, in a cleanup with no
+  group (case (d)), pushed like any record. A commit that writes another cleanup makes no check: the
+  check waits for a commit of its own, made at once, since putting the watermark in that other
+  cleanup would mean computing the candidate before the commit's records are held, or signing that
+  cleanup again.
   Without (2), each watermark-only cleanup, once old, would be the next candidate, so that a write
   holder that had signed daily would go on signing daily for ever after the deletions stopped; and
   each case-(c) cleanup, once old, would be signed past and forgotten at read and write holders
@@ -1468,10 +1472,13 @@ decides only when it signs; no rule that judges a record or a peer reads a clock
   link, a sealed peer or a holder of the read key, can release the folder's deletions to it slowly,
   each young when it arrives, in any order, since it need read no counter for that
   (`threat-model.md` §3.3); (c) a network attacker can cut a write holder off and later let
-  through, together, the deletions it missed (`threat-model.md` §3.1). (b) and (c) delay forgetting
-  where no other write holder signs. Each costs storage, deletions kept that could have been
-  forgotten and a verification each at every open, and never a file: a deletion forgotten late has
-  dropped nothing more.
+  through, together, the deletions it missed (`threat-model.md` §3.1); (d) any peer that kept a
+  copy of a tombstone or tree delete above `H` that the records held no longer cover, since pruning
+  left it out of their vectors, can offer it again: it is held again with a fresh arrival, young,
+  and holds back forgetting above it for another year. (b), (c) and (d) delay forgetting where no
+  other write holder signs. Each costs storage, deletions kept that could have been forgotten and a
+  verification each at every open, and never a file: a deletion forgotten late has dropped nothing
+  more.
 - **Two watermarks** signed apart, by write holders that had not seen each other's, are both held,
   and the greater counts; the lesser expires once the greater, or a later one, passes its counter. A
   write holder whose candidate is at most `H` signs nothing, so a watermark that reaches the other
@@ -2974,12 +2981,13 @@ not the only way to build it.
      opens, once the open is done, when the device resumes from sleep, and at least once per
      `WATERMARK_CHECK_INTERVAL` of monotonic time while it stays open, the engine asks the index to
      check, handing it the wall clock's reading and, when it signed since the folder opened, the
-     monotonic time since then: in one commit the index computes the candidate and, when it is above
-     the greatest watermark held, passes a tombstone, tree delete or cleanup with a `because`, and
-     the interval since the last signing has passed (counted as 4.4 says), writes the cleanup that
-     carries it, with no group unless another cleanup goes in the same commit; the engine commits it
-     and pushes it like any record (4.4, "When a write holder signs one"). The index fills every
-     cleanup's `forget_before` with the greatest watermark it holds, or the one being signed. No
+     monotonic time since then: last in a commit that writes no other cleanup (one that does makes
+     no check, which waits for a commit of its own, made at once), the index computes the candidate
+     and, when it is above the greatest watermark held, passes a tombstone, tree delete or cleanup
+     with a `because`, and the interval since the last signing has passed (counted as 4.4 says),
+     writes a cleanup with no group that carries it; the engine commits it and pushes it like any
+     record (4.4, "When a write holder signs one"). The index fills every cleanup's
+     `forget_before` with the greatest watermark it holds, or the one being signed. No
      Hello carries a clock, no peer or record is refused for one, and no folder is kept closed for
      one. Wherever a key holder's views show when a version was written, they show its `written_at`,
      never its counter.
@@ -3233,10 +3241,9 @@ cryptography:
   tier, the uniform rejection.
 - Index records with file IDs, names and sealed counters, vectors and pruning, coverage, latest only
   on read and write holders and the sealed-peer rule on sealed ones, bases, tombstones, tree
-  deletes, cleanups, stale copies, expiry by the folder's own time and the clock rule as phase 0
-  built them (the simulator's per-peer wall clocks with injectable skew; the watermark that replaces
-  both since 2026-11-12, 4.4, lands with phase 1's index and engine changes); heads (a conflict is
-  two heads; the conflict copies on disk are phase 1's); sealed metadata.
+  deletes, cleanups, stale copies, expiry by the signed watermark (4.4; the simulator's per-peer
+  wall clocks with injectable skew and steps, and resumes from sleep); heads (a conflict is two
+  heads; the conflict copies on disk are phase 1's); sealed metadata.
 - `IndexRequest`, `IndexRecords`, `ReconcileRequest` and `ReconcileReply` with rounds,
   epochs, cursors and their counting, set digests and their cache, reconciliation passes, pages,
   pushes from open, empty pushes and the round owed; duplicates, expired and obsolete records
@@ -3297,7 +3304,7 @@ interval in section 5's constants is a vector.
    carrying a reserved field number (read as an unknown field: skipped, and kept in a signed body);
    two frames of one unknown non-critical type (one `Unsupported`, the second ignored).
 2. **Hello** (decoder; protocol): canonical bytes of two fixed Hellos (A and B by the role rule,
-   including one pair where the dialer is B), the largest Hello (2 664-byte frame), a Hello that
+   including one pair where the dialer is B), the largest Hello (2 583-byte frame), a Hello that
    carries field 11, the removed `clock_days` (accepted, the field skipped as unknown, its bytes in
    the transcript as sent), and each failing variant (a device key of 1 986 bytes,
    the drafts' hybrid form, and of 33 bytes; a device key that is a non-canonical encoding of a
@@ -3745,9 +3752,10 @@ interval in section 5's constants is a vector.
     a new path each time (no candidate above `H` on any write holder for as long as it goes on; no
     version dropped); a candidate above `H` (a cleanup with no group signed, its `forget_before` the
     candidate, computed in the commit that writes it, pushed on every connection where the folder is
-    open), at `H` (nothing signed), and above `H` in a commit that writes a round's case-(c) cleanup
-    (that cleanup carries it, and no second one is written); **no echo** (the coordinator's ruling
-    of 2026-11-12): a candidate above `H` that passes only cleanups without a `because`, one with no
+    open), at `H` (nothing signed), and due in a commit that writes a round's case-(c) cleanup (no
+    check there, that cleanup carrying `H`; the check, made at once in a commit of its own, signs
+    the candidate in a cleanup with no group); **no echo** (the coordinator's ruling of 2026-11-12):
+    a candidate above `H` that passes only cleanups without a `because`, one with no
     group carrying a watermark, one with no group and no watermark, and a case-(c) cleanup whose one
     group has an empty `because` (nothing signed), and the same with a tombstone among them, or a
     case-(b) cleanup (signed); a write holder that runs a round every day with a sealed holder,

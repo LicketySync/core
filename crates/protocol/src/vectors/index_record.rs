@@ -20,7 +20,7 @@ use crate::limits::{
     MAX_SEALED_BYTES,
 };
 use crate::messages::{
-    ChunkRef, CleanupGroup, CleanupRecord, IndexRecord, SealedMeta, VectorEntry,
+    ChunkRef, CleanupGroup, CleanupMeta, CleanupRecord, IndexRecord, SealedMeta, VectorEntry,
 };
 use crate::parse::Parse;
 use crate::record::{
@@ -96,7 +96,10 @@ fn record_json(r: &SignedRecord) -> Value {
 fn verdict(v: &Result<Applied, WriterFault>) -> String {
     match v {
         Ok(Applied::Index(m)) => format!("applied: {}", m.path),
-        Ok(Applied::Cleanup(d)) => format!("applied: cleanup at counter {}", d.counter),
+        Ok(Applied::Cleanup(c)) => format!(
+            "applied: cleanup at counter {}, watermark {}",
+            c.dot.counter, c.forget_before
+        ),
         Err(f) if f.is_shared() => format!("writer fault, shared ({f:?})"),
         Err(f) => format!("writer fault, not shared ({f:?})"),
     }
@@ -224,6 +227,7 @@ fn vector_index_record() {
     );
     let cleanup = CleanupDraft {
         dot: dot(C + 10),
+        forget_before: C + 4,
         groups: vec![
             Group {
                 because: Some(edit.hash()),
@@ -236,6 +240,22 @@ fn vector_index_record() {
         ],
     }
     .sign(&key, &keys, &mut |b: &mut [u8]| nonce_of(b, 0x3b))
+    .unwrap();
+    // Case (d): a cleanup with no group that carries only a watermark, and
+    // one with no group and no watermark (valid, and it changes nothing).
+    let watermark_only = CleanupDraft {
+        dot: dot(C + 11),
+        forget_before: C + 10,
+        groups: vec![],
+    }
+    .sign(&key, &keys, &mut |b: &mut [u8]| nonce_of(b, 0x3c))
+    .unwrap();
+    let no_group_no_watermark = CleanupDraft {
+        dot: dot(C + 12),
+        forget_before: 0,
+        groups: vec![],
+    }
+    .sign(&key, &keys, &mut |b: &mut [u8]| nonce_of(b, 0x3d))
     .unwrap();
     let mut canonical = Vec::new();
     for (name, r) in [
@@ -250,6 +270,11 @@ fn vector_index_record() {
         ("32-vector-entries", &wide),
         ("64-names", &many),
         ("cleanup-of-two-groups", &cleanup),
+        ("cleanup-with-only-a-watermark", &watermark_only),
+        (
+            "cleanup-with-no-group-and-no-watermark",
+            &no_group_no_watermark,
+        ),
     ] {
         let parsed = Record::parse(r.clone(), &v).unwrap();
         parsed.verify(&v).unwrap();
@@ -274,6 +299,19 @@ fn vector_index_record() {
         };
         if parsed.path_tag().is_some() {
             seed("sealed_meta", name, &plain);
+        } else {
+            // The message_parse target's selector 20 is `CleanupMeta`.
+            seed(
+                "message_parse",
+                &format!("cleanup-meta-{name}"),
+                &[&[20], &plain[..]].concat(),
+            );
+            let body = CleanupRecord::parse(r.body()).unwrap();
+            seed(
+                "message_parse",
+                &format!("cleanup-record-{name}"),
+                &[&[18], &body.encode_to_vec()[..]].concat(),
+            );
         }
         canonical.push(json!({
             "name": name,
@@ -398,9 +436,21 @@ fn vector_index_record() {
         x
     };
     let cleanup_variants: Vec<Variant<'_, CleanupRecord>> = vec![
+        // A cleanup with no group carries only a watermark (case (d)): no
+        // longer malformed; one group with no name still is.
         (
             "cleanup-with-no-group",
             Box::new(|b| b.groups.clear()),
+            true,
+        ),
+        (
+            "cleanup-with-one-group-and-no-name",
+            Box::new(|b| {
+                b.groups = vec![CleanupGroup {
+                    because: vec![],
+                    forget: vec![],
+                }];
+            }),
             false,
         ),
         (
@@ -580,6 +630,20 @@ fn vector_index_record() {
             &one_chunk,
             None,
         ),
+        // The ceiling's former values, 2^62 and its floor cap 2^61, now
+        // above the ceiling.
+        (
+            "counter-2-to-the-62",
+            sm(&|m| m.counter = 1 << 62),
+            &one_chunk,
+            Some(WriterFault::Counter(1 << 62)),
+        ),
+        (
+            "counter-2-to-the-61",
+            sm(&|m| m.counter = 1 << 61),
+            &one_chunk,
+            Some(WriterFault::Counter(1 << 61)),
+        ),
         (
             "device-id-31-bytes",
             sm(&|m| m.device_id.truncate(31)),
@@ -700,6 +764,53 @@ fn vector_index_record() {
         seed("index_record", name, &r.to_bytes());
         faults.push(json!({ "name": name, "record": record_json(&r), "outcome": verdict(&got) }));
     }
+    // A cleanup's watermark at its counter (a writer fault, its watermark
+    // counting for nothing) and one just below it (accepted), sealed and
+    // signed as a writer would not.
+    let forge_cleanup = |m: &CleanupMeta| {
+        let sealed = keys
+            .seal_cleanup_meta(&m.encode_to_vec(), &mut |b: &mut [u8]| nonce_of(b, 0x45))
+            .unwrap();
+        let body = CleanupRecord {
+            suite: 1,
+            record_type: 17,
+            folder_id: key.verifier().folder_id().0.to_vec(),
+            groups: vec![],
+            sealed,
+        };
+        key.sign_cleanup_record(body.encode_to_vec()).unwrap()
+    };
+    for (name, forget_before, want) in [
+        (
+            "cleanup-watermark-equal-to-its-counter",
+            C,
+            Some(WriterFault::Watermark {
+                forget_before: C,
+                counter: C,
+            }),
+        ),
+        (
+            "cleanup-watermark-above-its-counter",
+            C + 1,
+            Some(WriterFault::Watermark {
+                forget_before: C + 1,
+                counter: C,
+            }),
+        ),
+        ("cleanup-watermark-one-below-its-counter", C - 1, None),
+    ] {
+        let r = forge_cleanup(&CleanupMeta {
+            device_id: writer().0.to_vec(),
+            counter: C,
+            forget_before,
+        });
+        let parsed = Record::parse(r.clone(), &v).unwrap();
+        parsed.verify(&v).unwrap();
+        let got = parsed.open(&keys);
+        assert_eq!(got.as_ref().err(), want.as_ref(), "{name}");
+        seed("index_record", name, &r.to_bytes());
+        faults.push(json!({ "name": name, "record": record_json(&r), "outcome": verdict(&got) }));
+    }
     // A path whose tag is not `path_tag`; a seal moved from another record
     // (its aad differs); a seal padded one power of two past the least (the
     // keys crate's case, at its fixed path).
@@ -769,7 +880,7 @@ fn vector_index_record() {
     ));
 
     let value: Value = json!({
-        "description": "protocol.md 8 items 6 and 12, the protocol's part: canonical records of device a0 in the fixed folder (seal nonces a zero byte, then 31 to 3b repeated; the cleanup's groups name the new file because the edit, and the tombstone with because empty), the decoder variants of step 1 re-signed so that only the variant differs (another record type with a zero signature by hand), the step-7 verdicts of writer faults inside the seal and of the edges beside them, and forged records (step 5). What each record does to an index is the index crate's vector.",
+        "description": "protocol.md 8 items 6 and 12, the protocol's part: canonical records of device a0 in the fixed folder (seal nonces a zero byte, then 31 to 3d repeated; the cleanup's groups name the new file because the edit, and the tombstone with because empty, under the watermark of the tombstone's counter; a cleanup with no group carrying only a watermark, and one with no group and no watermark), the decoder variants of step 1 re-signed so that only the variant differs (another record type with a zero signature by hand), the step-7 verdicts of writer faults inside the seal and of the edges beside them, and forged records (step 5). What each record does to an index is the index crate's vector.",
         "first_counter": C,
         "writer": h(&writer().0),
         "records": canonical,

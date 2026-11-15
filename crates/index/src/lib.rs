@@ -5,9 +5,9 @@
 //! The index of one folder (`spec/protocol.md` 4.4 to 4.7): the latest
 //! versions of each path, ordered by the version vectors inside their seals
 //! at a read or write holder and by the names in their clear fields at a
-//! sealed holder; tree deletes and signed cleanups; expiry by the folder's own
-//! time; the set digests that reconcile two devices' records; and what it
-//! serves to a peer that asks.
+//! sealed holder; tree deletes and signed cleanups; expiry by the watermark a
+//! write holder signs; the set digests that reconcile two devices' records;
+//! and what it serves to a peer that asks.
 //!
 //! - [`Index`]: one folder's committed state. It changes only through a
 //!   [`Txn`] ([`Index::begin`]), which stages every change of one engine
@@ -17,20 +17,28 @@
 //! - Arrival, steps 2 to 9 of 4.4's verification ([`Txn::accept`]): a
 //!   duplicate, an obsolete or an expired record is ignored without its
 //!   signature being verified (unless a write holder notes it as a stale copy
-//!   or forgotten record, which verifies it first); a record more than a year
-//!   ahead of the clock is refused; everything else is verified, then held, or
-//!   held opaque, or dropped at once beneath a tree delete, dropping what it
-//!   replaces.
+//!   or forgotten record, which verifies it first); everything else is
+//!   verified, then held, or held opaque, or dropped at once beneath a tree
+//!   delete, dropping what it replaces; no record is judged by a clock.
 //! - Writing ([`Txn::write`], [`Change`]): `S` from the path's bases and
 //!   their twins (the heads of a base's content concurrent with it and, at
 //!   the path, after it in display order, never the first head), the vector
 //!   its join pruned to 32, the names, tree deletes with their tombstones
 //!   and cleanup, conflict copies made ordinary files, one batch one commit;
-//!   and the cleanups of a round's end ([`Txn::end_round`]).
+//!   the cleanups of a round's end ([`Txn::end_round`]); and a write holder's
+//!   check for a watermark ([`Txn::check_watermark`]).
+//! - Expiry by the watermark (`protocol.md` 4.4): the greatest watermark the
+//!   applied cleanups held carry, `H`; every tombstone, tree delete and
+//!   cleanup at or below it forgotten in the commit that raises it, at open
+//!   and on arrival; a write holder's arrivals of them, by its wall clock,
+//!   kept and persisted with them; its candidate, the greatest counter of
+//!   one held a year below every one held less, found by walking the index
+//!   by counter from its low end; and whether a commit moved `H` so as to owe
+//!   rounds ([`Txn::watermark_moved`]).
 //! - Opening ([`Index::open`]): every stored record and base checked again on
 //!   every core (TM-9), held again in its stored order, the high-water mark
-//!   checked, a folder whose records lie more than a year ahead of the clock
-//!   kept closed ([`OpenReport::opens_at`]).
+//!   checked, the arrivals read back, expiry by the greatest watermark held;
+//!   no record is judged by its counter against the clock.
 //! - Serving ([`serve`]) and the views ([`views`]): Since replies, reconcile
 //!   replies and `RECORDS` pages lazily from committed state (a page in key
 //!   order from the last key sent), pushes, the heads of each path in display
@@ -48,9 +56,10 @@
 //! records held (TM-22). Ordering follows the vectors and the names alone,
 //! never a clock (TM-40); what a device holds, refuses and shows is a
 //! function of the records it holds, in any arrival order, whatever it held
-//! and dropped before and whatever its clock within the clock rule (TM-17,
-//! TM-41). Randomness comes only through the caller's `RandomFill`, and every
-//! clock is a parameter.
+//! and dropped before and whatever its clock (TM-17, TM-41); a write
+//! holder's clock decides only when it signs a watermark (TM-40).
+//! Randomness comes only through the caller's `RandomFill`, and every clock
+//! is a parameter.
 
 mod bypath;
 mod dirs;

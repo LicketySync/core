@@ -16,9 +16,10 @@
 //! | Key | Value |
 //! | --- | --- |
 //! | `e/r/<f>/<record hash>` | a record held: its local sequence number (8 bytes), then its envelope exactly as received |
+//! | `e/a/<f>/<record hash>` | at a write holder, the arrival of a tombstone, tree delete or cleanup held (8 bytes, microseconds since the Unix epoch), outside its envelope (`protocol.md` 4.4, "Arrival"); removed with its record |
 //! | `e/b/<f>/<record hash>` | a record kept only as a base: its envelope |
 //! | `e/s/<f>/<path tag><place>` | a base slot: the record hash there; `<place>` is `0` for the path itself, or `1` and the copy's name |
-//! | `e/m/<f>` | the folder's metadata: high-water mark, next local sequence number, index epoch (8 bytes each) |
+//! | `e/m/<f>` | the folder's metadata: high-water mark, next local sequence number, index epoch (8 bytes each), then, once this device has signed a watermark in the folder, the wall clock's reading when it last did (8 bytes) |
 //! | `e/p/<f>/<device ID>` | the per-peer state: epoch, cursor, when the last round ended, the names window and its count (8 bytes each), caught up (1 byte) |
 //! | `e/c/<f>/<cipher hash>` | a stored chunk blob (`nonce \|\| ciphertext`) |
 //! | `e/h/<f>/<cipher hash>` | empty: marks a stored chunk, so a start scans these keys and not the blobs |
@@ -50,6 +51,8 @@ use crate::runtime::{Storage, StorageError};
 
 /// The prefix of every record held.
 const RECORDS: &[u8] = b"e/r/";
+/// The prefix of every arrival kept.
+const ARRIVALS: &[u8] = b"e/a/";
 /// The prefix of every record kept only as a base.
 const BASE_ONLY: &[u8] = b"e/b/";
 /// The prefix of every base slot.
@@ -127,16 +130,22 @@ fn u64_at(bytes: &[u8], i: usize) -> Option<u64> {
 fn encode_meta(m: &StoredMeta) -> Vec<u8> {
     [m.hw, m.next_seq, m.epoch]
         .iter()
+        .chain(m.last_signed_us.as_ref())
         .flat_map(|n| n.to_be_bytes())
         .collect()
 }
 
 fn decode_meta(bytes: &[u8]) -> Option<StoredMeta> {
-    (bytes.len() == 24).then_some(())?;
+    let last_signed_us = match bytes.len() {
+        24 => None,
+        32 => Some(u64_at(bytes, 3)?),
+        _ => return None,
+    };
     Some(StoredMeta {
         hw: u64_at(bytes, 0)?,
         next_seq: u64_at(bytes, 1)?,
         epoch: u64_at(bytes, 2)?,
+        last_signed_us,
     })
 }
 
@@ -205,6 +214,18 @@ pub(crate) fn load(storage: &dyn Storage, folder: &FolderId) -> Result<Loaded, S
             .filter(|r| suffix(&key, &start) == Some(r.hash().as_bytes().as_slice()));
         match (record, u64_at(&value, 0)) {
             (Some(r), Some(seq)) => out.stored.records.push((r, seq)),
+            _ => bad += 1,
+        }
+    }
+    let start = prefix(ARRIVALS, folder);
+    for (key, value) in storage.scan(&start)? {
+        out.existed = true;
+        let hash = suffix(&key, &start).and_then(RecordHash::from_slice);
+        match (
+            hash,
+            (value.len() == 8).then(|| u64_at(&value, 0)).flatten(),
+        ) {
+            (Some(h), Some(a)) => out.stored.arrivals.push((h, a)),
             _ => bad += 1,
         }
     }
@@ -302,6 +323,12 @@ pub(crate) fn stage_changes(
         value.extend_from_slice(&record.to_bytes());
         storage.put(&record_key(folder, &record.hash()), &value)?;
     }
+    for (hash, arrival) in &changes.arrivals {
+        storage.put(
+            &key_of(ARRIVALS, folder, hash.as_bytes()),
+            &arrival.to_be_bytes(),
+        )?;
+    }
     for record in &changes.base_only_put {
         storage.put(
             &key_of(BASE_ONLY, folder, record.hash().as_bytes()),
@@ -330,6 +357,7 @@ pub(crate) fn stage_changes(
     }
     for hash in &changes.remove {
         storage.delete(&record_key(folder, hash))?;
+        storage.delete(&key_of(ARRIVALS, folder, hash.as_bytes()))?;
     }
     for hash in &changes.base_only_remove {
         storage.delete(&key_of(BASE_ONLY, folder, hash.as_bytes()))?;
@@ -382,6 +410,7 @@ mod tests {
         let tag = PathTag([4; 32]);
         ChangeSet {
             put: vec![(r1.clone(), 1), (r2.clone(), 2)],
+            arrivals: vec![(r1.hash(), 11)],
             base_only_put: vec![signed_record(3)],
             bases: vec![
                 ((tag, Place::Path), Some(r1.hash())),
@@ -391,6 +420,7 @@ mod tests {
                 hw: 7,
                 next_seq: 3,
                 epoch: 9,
+                last_signed_us: Some(12),
             }),
             peers: vec![(
                 DeviceId([5; 32]),
@@ -431,6 +461,7 @@ mod tests {
         want.sort();
         assert_eq!(bases, want);
         assert_eq!(loaded.stored.meta, c.meta);
+        assert_eq!(loaded.stored.arrivals, c.arrivals);
         assert_eq!(
             loaded.stored.peers,
             vec![(c.peers[0].0, c.peers[0].1.unwrap())]
@@ -464,6 +495,7 @@ mod tests {
         s.commit().unwrap();
         let loaded = load(&s, &f).unwrap();
         assert_eq!(loaded.stored.records.len(), 1);
+        assert!(loaded.stored.arrivals.is_empty(), "removed with its record");
         assert!(loaded.stored.base_only.is_empty());
         assert_eq!(loaded.stored.bases.len(), 1);
         assert!(loaded.stored.peers.is_empty());
@@ -517,6 +549,8 @@ mod tests {
             (key_of(BASE_ONLY, &f, &[2; 32]), signed_record(1).to_bytes()),
             (key_of(SLOTS, &f, &slot), [3; 32].to_vec()),
             (meta_key(&f), b"short".to_vec()),
+            (key_of(ARRIVALS, &f, &[6; 32]), b"short".to_vec()),
+            (key_of(ARRIVALS, &f, b"short"), [0u8; 8].to_vec()),
             (key_of(PEERS, &f, &[5; 32]), peer),
             (key_of(FREES, &f, b"short"), Vec::new()),
         ];
@@ -536,6 +570,13 @@ mod tests {
             assert!(loaded.stored.meta.is_none() && loaded.pending_free.is_empty());
         }
         assert_eq!(load_of(&bad).stored.undecodable, bad.len());
+        // Metadata of 24 bytes (no watermark signed yet) and 32 (the last
+        // signing's reading) decode; any other length does not.
+        for (len, decodes) in [(24, true), (32, true), (33, false), (31, false)] {
+            let loaded = load_of(&[(meta_key(&f), vec![0u8; len])]);
+            assert_eq!(loaded.stored.meta.is_some(), decodes, "{len}");
+            assert_eq!(loaded.stored.undecodable, usize::from(!decodes), "{len}");
+        }
     }
 
     #[test]

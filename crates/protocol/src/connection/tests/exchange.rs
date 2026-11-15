@@ -1492,7 +1492,6 @@ fn judged_closes_on_the_first_refusal_that_closes() {
         Judgement::Duplicate,
         Judgement::Expired,
         Judgement::Obsolete,
-        Judgement::FromTheFuture,
         Judgement::Held,
         Judgement::HeldOpaque,
         Judgement::DroppedBeneath,
@@ -1683,7 +1682,7 @@ fn owe_round_leaves_a_folder_not_open_and_a_closed_connection_as_they_are() {
     assert!(out.events.is_empty() && out.frames.is_empty(), "closed");
     assert!(!p.b.conn.round_owed(&fid));
     assert_eq!(
-        p.b.conn.memories_mut(p.b.tick(p.now), &fid).map(|_| ()),
+        p.b.conn.notes_mut(p.b.tick(p.now), &fid).map(|_| ()),
         None,
         "freed"
     );
@@ -2438,28 +2437,71 @@ fn sending_rules() {
     q.settle();
 }
 
+/// A change of the greatest watermark owes a round at once toward a peer
+/// that reports the read or write tier, every time; toward one that reports
+/// the sealed tier at most once per `WATERMARK_INTERVAL`, a later change
+/// waiting until that interval has passed (`protocol.md` 4.5, "Round owed").
 #[test]
-fn the_memories_of_a_connection_are_bounded() {
-    let mut p = pair_with(&[], &[]);
-    let f = p.b.folder_id();
-    let tick = p.b.tick(p.now);
-    let (m, _) = p.b.conn.memories_mut(tick, &f).unwrap();
-    for i in 0..=crate::limits::MAX_FUTURE_KNOWN {
-        let mut h = [0u8; 32];
-        h[..8].copy_from_slice(&(i as u64).to_be_bytes());
-        m.remember_future(licketysync_keys::RecordHash(h));
+fn a_change_of_the_greatest_watermark_owes_a_round_daily_toward_a_sealed_peer() {
+    let write = licketysync_keys::folder::FolderKey::from(folder(0x10));
+    let sealed = write.lowered(licketysync_keys::Tier::Sealed).unwrap();
+    let interval = crate::limits::WATERMARK_INTERVAL;
+    let write_again = || licketysync_keys::folder::FolderKey::from(folder(0x10));
+    for (peer_key, sealed_peer) in [(write_again(), false), (sealed, true)] {
+        let mut p = Pair::new(0xa0, 0xb0, &[write_again()], &[peer_key]);
+        p.settle();
+        p.a.prove_all(p.now);
+        p.b.prove_all(p.now);
+        p.settle();
+        let f = p.a.folder_id();
+        assert!(p.a.conn.is_open(&f));
+        p.advance(s(60));
+        let owes = |p: &mut Pair| {
+            let out = p.a.conn.watermark_moved(p.a.tick(p.now), f);
+            let due = out.events.contains(&Event::RequestDue { folder: f });
+            p.a.apply(p.now, out);
+            due
+        };
+        assert!(owes(&mut p), "the first change owes a round at once");
+        p.settle();
+        p.advance(s(60));
+        assert_eq!(
+            owes(&mut p),
+            !sealed_peer,
+            "a second change within the interval, sealed peer {sealed_peer}"
+        );
+        p.settle();
+        if sealed_peer {
+            assert!(!p.a.conn.round_owed(&f), "it waits");
+            assert!(p.a.conn.watermark_waiting(&f));
+            // A second before the interval has passed since the first, it
+            // still waits, whatever wake-ups came in between.
+            p.advance(interval - s(61));
+            assert!(p.a.conn.watermark_waiting(&f), "still within the interval");
+            // Once the interval has passed since the first, the change that
+            // waited owes its round, through the connection's own wake-up.
+            p.advance(s(1));
+            assert!(!p.a.conn.watermark_waiting(&f), "owed at the interval");
+            p.advance(interval);
+            assert!(
+                p.a.events
+                    .iter()
+                    .filter(|e| **e == Event::RequestDue { folder: f })
+                    .count()
+                    >= 3,
+                "the round on open, the first change's, the one that waited"
+            );
+            // And the next change is owed at once again.
+            p.advance(interval);
+            assert!(owes(&mut p));
+        }
     }
-    assert_eq!(m.future().count(), crate::limits::MAX_FUTURE_KNOWN);
-    assert!(
-        !m.knows_future(&licketysync_keys::RecordHash([0; 32])),
-        "the oldest forgotten"
-    );
-    let mut h1 = [0u8; 32];
-    h1[..8].copy_from_slice(&1u64.to_be_bytes());
-    assert!(m.knows_future(&licketysync_keys::RecordHash(h1)));
-    m.remember_future(licketysync_keys::RecordHash(h1));
-    assert_eq!(m.future().count(), crate::limits::MAX_FUTURE_KNOWN, "once");
-    assert!(p.b.conn.peer_device().is_some());
+    // A folder not open here: nothing.
+    let mut p = Pair::open();
+    let other = FolderId([9; 32]);
+    let out = p.a.conn.watermark_moved(p.a.tick(p.now), other);
+    assert!(out.events.is_empty() && out.frames.is_empty());
+    p.settle();
 }
 
 /// The note-verification budget is one per connection, shared by every
@@ -2484,13 +2526,13 @@ fn one_note_budget_per_connection_ps1() {
     let start = p.now;
     let half = crate::limits::MAX_NOTE_VERIFICATIONS / 2;
     for (folder, n) in [(f, half), (g, crate::limits::MAX_NOTE_VERIFICATIONS - half)] {
-        let (_, notes) = p.b.conn.memories_mut(Tick::at(start), &folder).unwrap();
+        let notes = p.b.conn.notes_mut(Tick::at(start), &folder).unwrap();
         for _ in 0..n {
             assert!(notes.may_verify());
             notes.verified();
         }
     }
-    let (_, notes) = p.b.conn.memories_mut(Tick::at(start), &f).unwrap();
+    let notes = p.b.conn.notes_mut(Tick::at(start), &f).unwrap();
     assert!(!notes.may_verify(), "both folders spent the one budget");
     // A round's end does not refill it; the window's end does.
     let out = p.b.conn.owe_round(p.b.tick(p.now), f);
@@ -2498,10 +2540,10 @@ fn one_note_budget_per_connection_ps1() {
     p.b.pump(p.now);
     p.advance(s(5));
     let late = start + crate::limits::INDEX_RESYNC_INTERVAL - Duration::from_millis(1);
-    let (_, notes) = p.b.conn.memories_mut(Tick::at(late), &g).unwrap();
+    let notes = p.b.conn.notes_mut(Tick::at(late), &g).unwrap();
     assert!(!notes.may_verify(), "still the window's budget");
     let next = start + crate::limits::INDEX_RESYNC_INTERVAL;
-    let (_, notes) = p.b.conn.memories_mut(Tick::at(next), &g).unwrap();
+    let notes = p.b.conn.notes_mut(Tick::at(next), &g).unwrap();
     assert!(notes.may_verify(), "a new window, a new budget");
 }
 

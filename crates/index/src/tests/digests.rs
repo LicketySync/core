@@ -204,6 +204,7 @@ fn digests() -> Value {
                 record,
                 seq: i as u64 + 1,
                 verdict: None,
+                arrival: None,
             },
             None,
         );
@@ -662,11 +663,10 @@ proptest! {
         {
             let mut txn = x.ix.begin();
             let mut fill = |b: &mut [u8]| b.fill(1);
-            let mut mem = licketysync_protocol::connection::FolderMemory::default();
             let r = spread(1).pop().unwrap();
             let rec = Record::parse(r, super::kit::write_key().verifier()).unwrap();
             let mut notes = licketysync_protocol::connection::NoteBudget::for_tests();
-            let mut arrival = crate::Arrival { peer: dev(1), memory: &mut mem, notes: &mut notes, clock_us: T0, rng: &mut fill };
+            let mut arrival = crate::Arrival { peer: dev(1), notes: &mut notes, clock_us: T0, rng: &mut fill };
             let _ = txn.accept(rec, &mut arrival);
             // Dropped: undone.
         }
@@ -700,6 +700,7 @@ fn held_unsigned(d: &mut Dev, n: u32) -> Vec<RecordHash> {
                 record,
                 seq: u64::from(i) + 1,
                 verdict: None,
+                arrival: None,
             },
             None,
         );
@@ -856,6 +857,7 @@ fn records_by_key_over_shared_tags_cleanups_and_changes_fc2() {
                 record,
                 seq: u64::from(i) + 1,
                 verdict: None,
+                arrival: None,
             },
             None,
         );
@@ -885,6 +887,7 @@ fn records_by_key_over_shared_tags_cleanups_and_changes_fc2() {
                 record,
                 seq: 10_000 + u64::from(i),
                 verdict: None,
+                arrival: None,
             },
             None,
         );
@@ -1043,6 +1046,7 @@ fn held_at_one_tag(d: &mut Dev, tag: [u8; 32], n: u32) -> Vec<RecordHash> {
                 record,
                 seq: u64::from(i) + 1,
                 verdict: None,
+                arrival: None,
             },
             None,
         );

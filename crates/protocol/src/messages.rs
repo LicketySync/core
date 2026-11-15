@@ -24,7 +24,9 @@ use crate::wire::WireError;
 
 /// Identity, capabilities and limits; the first frame of a connection (4.2).
 /// Field 2 is reserved (it was `device_name`, which now travels in Status
-/// once a folder is open).
+/// once a folder is open), and so is field 11 (it was `clock_days`, the clock
+/// rule's reading, removed with the clock rule: 4.4, "Expiry by the
+/// watermark"); a receiver skips either as unknown.
 #[derive(Clone, PartialEq, Eq, ::prost::Message)]
 pub struct Hello {
     /// `be16(suite) || Ed25519 public key`, canonical and not of small order;
@@ -57,12 +59,6 @@ pub struct Hello {
     /// 32 bytes: the Ed25519 public key of the libp2p identity (`keys.md` 8.1).
     #[prost(bytes = "vec", tag = "10")]
     pub libp2p_identity: Vec<u8>,
-    /// The sender's wall clock in whole days since the Unix epoch, 0 to
-    /// `MAX_CLOCK_DAYS` (0 for a clock before 1970); for the clock rule (3.2,
-    /// 4.4). Whole days, so that the Hello gives no finer clock reading to
-    /// anyone who connects.
-    #[prost(uint32, tag = "11")]
-    pub clock_days: u32,
 }
 
 /// Why a side is closing; the last frame (4.2).
@@ -79,8 +75,10 @@ pub struct Close {
 
 /// The `CloseReason` enum of 4.2. Numbers this release does not define are
 /// kept as [`CloseReason::Other`] so that a newer peer's reason is reported,
-/// not refused; 12 was the drafts' `FEATURE_REQUIRED` and reads as `Other(12)`.
-/// [`CloseReason::ALL`] lists every defined reason in wire order.
+/// not refused; 12 was the drafts' `FEATURE_REQUIRED` and 13 the clock rule's
+/// `CLOCK_OUT_OF_RANGE`, both reserved, and read as `Other(12)` and
+/// `Other(13)`. [`CloseReason::ALL`] lists every defined reason in wire
+/// order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CloseReason {
     /// 0: no reason given.
@@ -109,17 +107,13 @@ pub enum CloseReason {
     /// 11: `HELLO_TIMEOUT`, `IDLE_TIMEOUT` or `REPLY_PAGE_TIMEOUT` elapsed, or
     /// no unsent byte was delivered for `IDLE_TIMEOUT`.
     Timeout,
-    /// 13: the clock rule (3.2, 4.4): the two Hellos' `clock_days` differ by
-    /// more than `CLOCK_RULE_LIMIT`; sent only when the first folder opens on
-    /// the connection.
-    ClockOutOfRange,
     /// A number this release does not define.
     Other(u32),
 }
 
 impl CloseReason {
     /// Every reason this release defines, in wire order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 12] = [
         Self::Unspecified,
         Self::Shutdown,
         Self::ProtocolError,
@@ -132,7 +126,6 @@ impl CloseReason {
         Self::VerificationFailed,
         Self::TooManyConnections,
         Self::Timeout,
-        Self::ClockOutOfRange,
     ];
 
     /// The reason for a wire number.
@@ -151,7 +144,6 @@ impl CloseReason {
             9 => Self::VerificationFailed,
             10 => Self::TooManyConnections,
             11 => Self::Timeout,
-            13 => Self::ClockOutOfRange,
             other => Self::Other(other),
         }
     }
@@ -172,7 +164,6 @@ impl CloseReason {
             Self::VerificationFailed => 9,
             Self::TooManyConnections => 10,
             Self::Timeout => 11,
-            Self::ClockOutOfRange => 13,
             Self::Other(n) => n,
         }
     }
@@ -193,7 +184,6 @@ impl CloseReason {
             Self::VerificationFailed => "VERIFICATION_FAILED",
             Self::TooManyConnections => "TOO_MANY_CONNECTIONS",
             Self::Timeout => "TIMEOUT",
-            Self::ClockOutOfRange => "CLOCK_OUT_OF_RANGE",
             Self::Other(_) => "UNKNOWN",
         }
     }
@@ -398,7 +388,8 @@ pub struct CleanupRecord {
     /// 32 bytes.
     #[prost(bytes = "vec", tag = "3")]
     pub folder_id: Vec<u8>,
-    /// 1 to `MAX_CLEANUP_GROUPS` (1 024).
+    /// 0 to `MAX_CLEANUP_GROUPS` (1 024); none in a cleanup that only carries
+    /// a watermark (4.4, "Cleanup", case (d)).
     #[prost(message, repeated, tag = "4")]
     pub groups: Vec<CleanupGroup>,
     /// `nonce (24) || XChaCha(rk, nonce, aad = folder_id, padded CleanupMeta)`;
@@ -429,6 +420,10 @@ pub struct CleanupMeta {
     /// The issuer's counter, by the writer's rule.
     #[prost(uint64, tag = "2")]
     pub counter: u64,
+    /// The watermark it carries (4.4, "Expiry by the watermark"): 0 for none,
+    /// else below `counter`.
+    #[prost(uint64, tag = "3")]
+    pub forget_before: u64,
 }
 
 /// "Send what you came to hold since" (4.5). Fields 2, 5, 6 and 7 are reserved
@@ -795,9 +790,10 @@ mod tests {
         }
         // 12 was FEATURE_REQUIRED in the drafts: reserved, reported as other.
         assert_eq!(CloseReason::from_u32(12), CloseReason::Other(12));
-        assert_eq!(CloseReason::ClockOutOfRange.as_u32(), 13);
-        assert_eq!(CloseReason::from_u32(13), CloseReason::ClockOutOfRange);
-        assert_eq!(CloseReason::ClockOutOfRange.name(), "CLOCK_OUT_OF_RANGE");
+        // 13 was CLOCK_OUT_OF_RANGE, with the clock rule: reserved, reported
+        // as other.
+        assert_eq!(CloseReason::from_u32(13), CloseReason::Other(13));
+        assert_eq!(CloseReason::Other(13).name(), "UNKNOWN");
         assert_eq!(CloseReason::Other(99).as_u32(), 99);
         assert_eq!(CloseReason::Other(99).name(), "UNKNOWN");
         assert_eq!(CloseReason::ProtocolError.name(), "PROTOCOL_ERROR");

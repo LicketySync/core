@@ -16,11 +16,12 @@
 //! | [`Event::RequestDue`] | [`Connection::send_request`] with the index's [`IndexView`] |
 //! | [`Event::ServeIndex`], then [`Event::Room`] | [`Connection::send_page`], page by page, or [`Connection::send_reset`] |
 //! | [`Event::ServeReconcile`] | [`Connection::send_reconcile_reply`], then, after `RECORDS`, [`Connection::send_page`] |
-//! | [`Event::Records`], once the index has judged each record (with [`Connection::memories_mut`]) | [`Connection::judged`] |
+//! | [`Event::Records`], once the index has judged each record (with [`Connection::notes_mut`]) | [`Connection::judged`] |
 //! | [`Event::PushSubtree`] | [`Connection::push`] of the subtree's records the reply did not carry, `through` 0 |
 //! | [`Event::RoundCompleted`], [`Event::CursorAdvanced`] | persist the peer's epoch and cursor; [`Connection::owe_round`] after a cleanup at a round's end |
 //! | the index came to hold records | [`Connection::push`] to every connection but the one they came on |
 //! | the folder's store refuses changes, or takes them again | [`Connection::set_paused`] on every connection |
+//! | a commit raised the greatest watermark and expired a record, or lowered it | [`Connection::watermark_moved`] on every connection where the folder is open |
 //! | the engine lacks chunks the peer may hold | [`Connection::chunk_position`], [`Connection::request_chunk`], and [`Connection::pass_done`] when no lacking hash lies above the position |
 //! | [`Event::ChunkRequested`] | [`Connection::reply_chunk`] |
 //! | the engine stored a chunk of an open folder | [`Connection::chunk_stored`] |
@@ -65,8 +66,7 @@
 //! both ways; the `FolderProof` steps with the uniform REJECTED, the proof and
 //! open-folder bounds, the `ProofResult` rules; `HELLO_TIMEOUT`,
 //! `PROOF_TIMEOUT`, `IDLE_TIMEOUT` and the delivery stall; unknown types and
-//! `Unsupported` once per type; messages only for open folders; the clock rule
-//! when the first folder opens; request IDs, one request per folder each way
+//! `Unsupported` once per type; messages only for open folders; request IDs, one request per folder each way
 //! across `IndexRequest`s and `ReconcileRequest`s, rounds (Since, the Check and
 //! the passes, with their work list and `MAX_PASS_REQUESTS`), quiet and caught
 //! up, the cursor a round sets and the counting of pushes, the round owed, the
@@ -99,12 +99,12 @@ use crate::features::{COMPRESSION_NONE, HASH_BLAKE3};
 use crate::frame::{Frame, FrameDecoder, FrameError, FrameKind, MessageType};
 use crate::hello::{PeerHello, TranscriptHash, check_peer_hello};
 use crate::limits::{
-    CHUNK_BUSY_BACKOFF, CLOCK_RULE_LIMIT_DAYS, CLOSE_FLUSH, DEFAULT_MESSAGE_SIZE,
-    DEFAULT_REQUESTS_IN_FLIGHT, HELLO_NONCE_LEN, HELLO_TIMEOUT, IDLE_TIMEOUT,
-    INDEX_REQUEST_MIN_INTERVAL, INDEX_RESYNC_INTERVAL, MAX_CHUNK_BUSY_BACKOFF, MAX_CLOCK_DAYS,
-    MAX_MESSAGE_SIZE, MAX_REQUESTS_IN_FLIGHT, MAX_SEND_QUEUE, MAX_UNSUPPORTED_TYPES,
-    MIN_MESSAGE_SIZE, PRE_HELLO_LIMIT, PROOF_TIMEOUT, REPLY_PAGE_TIMEOUT, SEND_POLL_INTERVAL,
-    STATUS_CHUNKS_INTERVAL, STATUS_INTERVAL,
+    CHUNK_BUSY_BACKOFF, CLOSE_FLUSH, DEFAULT_MESSAGE_SIZE, DEFAULT_REQUESTS_IN_FLIGHT,
+    HELLO_NONCE_LEN, HELLO_TIMEOUT, IDLE_TIMEOUT, INDEX_REQUEST_MIN_INTERVAL,
+    INDEX_RESYNC_INTERVAL, MAX_CHUNK_BUSY_BACKOFF, MAX_MESSAGE_SIZE, MAX_REQUESTS_IN_FLIGHT,
+    MAX_SEND_QUEUE, MAX_UNSUPPORTED_TYPES, MIN_MESSAGE_SIZE, PRE_HELLO_LIMIT, PROOF_TIMEOUT,
+    REPLY_PAGE_TIMEOUT, SEND_POLL_INTERVAL, STATUS_CHUNKS_INTERVAL, STATUS_INTERVAL,
+    WATERMARK_CHECK_INTERVAL, WATERMARK_INTERVAL,
 };
 use crate::messages::{
     ChunkReply, ChunkRequest, Close, CloseReason, DeviceProof, FolderProof, FolderStatus, Hello,
@@ -115,7 +115,7 @@ use crate::proof::FolderCredential;
 use crate::record::Record;
 use crate::rules::{Cause, Outcome};
 
-pub use index::{FolderMemory, IndexServe, Judgement, NoteBudget, Page, ReconcileServe};
+pub use index::{IndexServe, Judgement, NoteBudget, Page, ReconcileServe};
 
 /// The intervals and timeouts a connection keeps. They are the spec's
 /// constants ([`Timing::SPEC`]); the simulator may scale them, both sides
@@ -148,6 +148,14 @@ pub struct Timing {
     pub close_flush: Duration,
     /// `SEND_POLL_INTERVAL`.
     pub send_poll: Duration,
+    /// `WATERMARK_CHECK_INTERVAL`: the longest a write holder's engine goes
+    /// between two checks for a watermark while a folder is open (4.4).
+    pub watermark_check: Duration,
+    /// `WATERMARK_INTERVAL`: the least monotonic time between two watermarks
+    /// a write holder signs within one opening of a folder (4.4), and
+    /// between two rounds a change of the greatest watermark owes toward a
+    /// peer that reports the sealed tier (4.5, "Round owed").
+    pub watermark_interval: Duration,
 }
 
 impl Timing {
@@ -165,6 +173,8 @@ impl Timing {
         max_busy_backoff: MAX_CHUNK_BUSY_BACKOFF,
         close_flush: CLOSE_FLUSH,
         send_poll: SEND_POLL_INTERVAL,
+        watermark_check: WATERMARK_CHECK_INTERVAL,
+        watermark_interval: WATERMARK_INTERVAL,
     };
 }
 
@@ -193,23 +203,15 @@ pub struct Config {
     /// Self-reported, at most 64 bytes, no control characters; sent in the
     /// first Status after the first folder opens.
     pub device_name: String,
-    /// This device's wall clock in whole days since the Unix epoch, 0 before
-    /// 1970 and at most `MAX_CLOCK_DAYS` (a later clock is sent as the
-    /// bound), for the clock rule (3.2). The protocol reads no clock: the
-    /// engine sets it from the runtime's wall clock.
-    pub clock_days: u32,
     /// The intervals and timeouts.
     pub timing: Timing,
 }
 
 impl Config {
     /// The defaults of major 1 for a device whose libp2p identity key is
-    /// `libp2p_identity` and whose wall clock reads `clock_days` whole days
-    /// since the Unix epoch (0 before 1970). The clock is an argument, not a
-    /// default, so that an engine cannot forget it and refuse every peer
-    /// under the clock rule.
+    /// `libp2p_identity`. No Hello carries a clock (4.2).
     #[must_use]
-    pub fn new(libp2p_identity: [u8; 32], clock_days: u32) -> Self {
+    pub fn new(libp2p_identity: [u8; 32]) -> Self {
         Self {
             suites: vec![Suite::ONE],
             compressions: vec![COMPRESSION_NONE.to_owned()],
@@ -221,7 +223,6 @@ impl Config {
             libp2p_identity,
             transport_identity: None,
             device_name: String::new(),
-            clock_days,
             timing: Timing::SPEC,
         }
     }
@@ -405,31 +406,6 @@ pub enum Event {
         prefix: Prefix,
         /// The record hashes the reply carried.
         carried: Option<Vec<licketysync_keys::RecordHash>>,
-    },
-    /// The clock rule (3.2; TM-40): when the first folder opened, the two
-    /// Hellos' `clock_days` differed by more than `CLOCK_RULE_LIMIT`, and the
-    /// connection closes with `CLOCK_OUT_OF_RANGE` before anything of the
-    /// folder crossed. The clock-rule issue for the folder names the peer's
-    /// proven device ID and both readings.
-    ClockOutOfRange {
-        /// The folder that opened.
-        folder: FolderId,
-        /// The peer's proven device ID.
-        peer: DeviceId,
-        /// This side's `clock_days`.
-        ours: u32,
-        /// The peer's `clock_days`.
-        theirs: u32,
-    },
-    /// The connection ended with no folder opened, by a Close either way or
-    /// by the transport dropping ([`Connection::disconnected`]), and the two
-    /// Hellos' `clock_days` differed by more than `CLOCK_RULE_LIMIT`: only
-    /// counted, in a log line, never an issue (3.2; TM-40).
-    StrangerClockOutOfRange {
-        /// This side's `clock_days`.
-        ours: u32,
-        /// The peer's `clock_days`.
-        theirs: u32,
     },
     /// An empty push arrived: the peer dropped pushes for the folder, and
     /// this side owes itself a round.
@@ -712,8 +688,6 @@ pub struct Connection {
     proofs_sent: usize,
     accepted: usize,
     opened_any: bool,
-    /// The clock rule closed the connection when the first folder opened.
-    clock_refused: bool,
     /// Non-critical types answered with Unsupported: a 4 KiB bitset.
     unsupported: Box<[u64; MAX_UNSUPPORTED_TYPES / 64]>,
     // Index exchange, connection-wide.
@@ -789,7 +763,6 @@ impl Connection {
             max_requests_in_flight: config.max_requests_in_flight,
             nonce: nonce.to_vec(),
             libp2p_identity: config.libp2p_identity.to_vec(),
-            clock_days: config.clock_days.min(MAX_CLOCK_DAYS),
         };
         let hello_frame = Message::Hello(Box::new(hello.clone()))
             .to_frame()
@@ -819,7 +792,6 @@ impl Connection {
             proofs_sent: 0,
             accepted: 0,
             opened_any: false,
-            clock_refused: false,
             unsupported: Box::new([0; MAX_UNSUPPORTED_TYPES / 64]),
             notes: index::NoteBudget::new(),
             next_request_id: 0,
@@ -1306,31 +1278,10 @@ impl Connection {
         self.close_with(close_reason(cause), Some(cause), out);
     }
 
-    /// The clock readings of the two Hellos when they differ by more than
-    /// `CLOCK_RULE_LIMIT` (3.2): this side's and the peer's.
-    pub(super) fn clocks_out_of_range(&self) -> Option<(u32, u32)> {
-        let ours = self.hello.clock_days;
-        let theirs = self.peer.as_ref()?.hello.clock_days;
-        (ours.abs_diff(theirs) > CLOCK_RULE_LIMIT_DAYS).then_some((ours, theirs))
-    }
-
-    /// A connection that ends with no folder opened and clocks out of range
-    /// is only counted (3.2).
-    fn count_stranger_clock(&self, out: &mut Output) {
-        if !self.opened_any
-            && !self.clock_refused
-            && let Some((ours, theirs)) = self.clocks_out_of_range()
-        {
-            out.events
-                .push(Event::StrangerClockOutOfRange { ours, theirs });
-        }
-    }
-
     fn close_with(&mut self, reason: CloseReason, cause: Option<Cause>, out: &mut Output) {
         if self.state == State::Closed {
             return;
         }
-        self.count_stranger_clock(out);
         let close = Message::Close(Close {
             reason: reason.as_u32(),
             detail: String::new(),
@@ -1350,21 +1301,17 @@ impl Connection {
     }
 
     /// The transport dropped without a Close (the runtime's
-    /// `on_disconnected`): a stranger out of clock range is counted, as when
-    /// a Close ends the connection, and every table is freed. Nothing is
-    /// sent; the engine then drops the connection.
+    /// `on_disconnected`): every table is freed. Nothing is sent; the engine
+    /// then drops the connection.
     pub fn disconnected(&mut self, tick: Tick) -> Output {
-        let mut out = Output::default();
         self.now = self.now.max(tick.now);
         if self.state != State::Closed {
-            self.count_stranger_clock(&mut out);
             self.finish_tables();
         }
-        out
+        Output::default()
     }
 
     fn on_close(&mut self, close: Close, out: &mut Output) {
-        self.count_stranger_clock(out);
         self.finish_tables();
         out.close = true;
         out.events.push(Event::Closed {

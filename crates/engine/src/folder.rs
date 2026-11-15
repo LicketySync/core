@@ -3,7 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! One folder as the engine keeps it: its index, its chunks, whether it is
-//! usable, paused, kept closed or misconfigured, and its state words.
+//! usable, paused or misconfigured, its state words, and a write holder's
+//! watermark checks (`protocol.md` 4.4, "When a write holder signs one").
 //!
 //! # Folder state (the engine's own; the Status message does not carry it)
 //!
@@ -20,15 +21,6 @@
 //!   engine never fills an empty index from such a store.
 //! - **Unreadable** when the store could not be read at the open; never
 //!   retried within an instance.
-//! - **Closed** while the records stored lie more than a year ahead of this
-//!   device's clock (4.4, "A clock set back"; the clock rule): it counts as
-//!   a paused folder for folder proofs (3.5 step 2), so it is not proven to
-//!   peers and their proofs for it are answered REJECTED; it judges nothing,
-//!   refuses writes and raises the clock-rule issue (`IssueKind::KeptClosed`).
-//!   Every handler compares the time the open gave with the wall clock, and
-//!   a timer looks at least once a minute, so the folder opens, its
-//!   credential back, once the clock passes that time, however the clock got
-//!   there.
 //! - **Paused** from a store failure until a resume probe commits (section 5,
 //!   "Store failure"). The folder stays proven (decision for gap G4): only
 //!   accepting records and writing stop. A pause also ends every round
@@ -74,13 +66,6 @@ pub enum FolderState {
     },
     /// The store could not be read; the folder is not used.
     Unreadable,
-    /// The records stored lie more than a year ahead of this device's
-    /// clock: the folder stays closed until the clock reaches this, in
-    /// microseconds since the Unix epoch.
-    Closed {
-        /// When the folder opens.
-        opens_at_us: u64,
-    },
     /// A store failure paused the folder.
     Paused(StoreFailureCause),
     /// Not up to date, and why.
@@ -133,8 +118,6 @@ pub struct OpenCounts {
     pub renumbered: bool,
     /// Stored base slots dropped because their record lies at another path.
     pub misplaced_bases: u64,
-    /// The folder was kept closed by the clock rule (4.7 item 8).
-    pub kept_closed: bool,
 }
 
 /// The transitions of one instance: the first (Checking) kept for good, the
@@ -183,9 +166,6 @@ pub(crate) struct Folder {
     pub(crate) book: ChunkBook,
     pub(crate) health: Health,
     pub(crate) paused: Option<StoreFailureCause>,
-    /// Kept closed by the clock rule until the clock reaches this, in
-    /// microseconds (`FolderState::Closed`).
-    pub(crate) closed_until: Option<u64>,
     pub(crate) open: OpenCounts,
     pub(crate) state: FolderState,
     pub(crate) transitions: Transitions,
@@ -207,6 +187,16 @@ pub(crate) struct Folder {
     /// first epoch), staged with the folder's next transaction and kept
     /// until a commit carries it, so that a failed one loses nothing of it.
     pub(crate) open_changes: Option<licketysync_index::ChangeSet>,
+    /// At a write holder: a check for a watermark is owed (the folder
+    /// opened, the device resumed from sleep, or `WATERMARK_CHECK_INTERVAL`
+    /// passed; 4.4, "When a write holder signs one"), made by the next commit
+    /// that writes no other cleanup of the folder, and kept until a commit
+    /// carries it.
+    pub(crate) check_due: bool,
+    /// When this device last signed a watermark in the folder since it
+    /// opened, by the runtime's monotonic clock, which counts time asleep:
+    /// `WATERMARK_INTERVAL` counts from it within this opening (4.4).
+    pub(crate) signed_at: Option<Instant>,
 }
 
 impl Folder {
@@ -216,10 +206,10 @@ impl Folder {
         self.health == Health::Usable
     }
 
-    /// Whether the folder is proven to peers: usable and not kept closed by
-    /// the clock rule (a store-failure pause keeps it proven, gap G4).
+    /// Whether the folder is proven to peers: usable (a store-failure pause
+    /// keeps it proven, gap G4).
     pub(crate) fn credentialed(&self) -> bool {
-        self.usable() && self.closed_until.is_none()
+        self.usable()
     }
 
     /// Whether it accepts records and writes now.
@@ -227,10 +217,16 @@ impl Folder {
         self.credentialed() && self.paused.is_none()
     }
 
-    /// Whether its connections hold it paused: a store failure, or the
-    /// clock rule at open (`Connection::set_paused`).
+    /// Whether its connections hold it paused: a store failure
+    /// (`Connection::set_paused`).
     pub(crate) fn held_paused(&self) -> bool {
-        self.paused.is_some() || self.closed_until.is_some()
+        self.paused.is_some()
+    }
+
+    /// Whether this device signs watermarks in the folder: a write holder
+    /// whose folder is usable.
+    pub(crate) fn signs(&self) -> bool {
+        self.tier == Tier::Write && self.usable()
     }
 
     /// Moves to `state`, logging a change of word at `at`.

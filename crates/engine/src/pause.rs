@@ -23,20 +23,6 @@
 //! each of those connections takes the folder again, which owes a round
 //! there and brings back what the folder skipped. A pause closes no
 //! connection.
-//!
-//! A folder that the clock rule keeps closed at open (its records lie more
-//! than a year ahead of the clock, 4.4 "A clock set back") judges and writes
-//! nothing as a paused one does, and is not proven to peers at all. Every
-//! handler compares the time the open gave with the wall clock
-//! (`Clock::wall_time_us`), and the `OpensAt` timer looks at least once a
-//! minute in case no handler runs, so the folder opens once the clock passes
-//! that time, a clock set right by stepping it forward included. Its
-//! credential is then back, and it is proven on every connection: a new
-//! connection proves it, a peer's proof that arrives from then on is
-//! accepted and answered with its own (3.5), and a peer whose folder opened
-//! while both were closed gets this side's proof.
-
-use core::time::Duration;
 
 use licketysync_keys::FolderId;
 
@@ -44,12 +30,7 @@ use crate::engine::Engine;
 use crate::issues::{Issue, IssueKind, StoreFailureCause, Subject, bump};
 use crate::runtime::{Context, StorageError};
 use crate::store::PROBE;
-use crate::timers::Purpose;
 use crate::work::Work;
-
-/// The longest the clock rule's timer waits between two looks at the wall
-/// clock while a folder is kept closed.
-pub(crate) const OPENS_AT_POLL: Duration = Duration::from_secs(60);
 
 impl Engine {
     /// Pauses `folder` for a store failure (module documentation).
@@ -132,54 +113,6 @@ impl Engine {
             // changes, chunk frees) commits in a handler of its own at once.
             self.deferred.entry(folder).or_default();
             self.hold_paused(cx, work, folder, false);
-        }
-    }
-
-    /// Every handler, first, and the `OpensAt` timer: each folder kept
-    /// closed by the clock rule whose time the wall clock has passed opens,
-    /// its credential back, and is proven on every connection; the timer
-    /// stays armed while one is still closed.
-    pub(crate) fn opens_at(&mut self, cx: &mut dyn Context, work: &mut Work) {
-        if self.folders.values().all(|f| f.closed_until.is_none()) {
-            return;
-        }
-        let now = cx.wall_time_us();
-        let opened: Vec<FolderId> = self
-            .folders
-            .iter_mut()
-            .filter_map(|(id, f)| {
-                let at = f.closed_until?;
-                (now >= at).then(|| {
-                    f.closed_until = None;
-                    f.book.dirty = true;
-                    f.recheck_disk = true;
-                    *id
-                })
-            })
-            .collect();
-        if !opened.is_empty() {
-            self.refresh_credentials();
-        }
-        for folder in opened {
-            work.passes.insert(folder);
-            self.prove_everywhere(cx, work, folder);
-        }
-        self.arm_opens_at(cx);
-    }
-
-    /// Keeps the clock rule's timer armed while a folder is closed: due when
-    /// the earliest opens by the clock as it reads now, and in a minute at
-    /// most ([`OPENS_AT_POLL`]), so that a clock set right by stepping it
-    /// forward is seen even when no handler runs.
-    pub(crate) fn arm_opens_at(&mut self, cx: &mut dyn Context) {
-        let now = cx.wall_time_us();
-        let next = self.folders.values().filter_map(|f| f.closed_until).min();
-        if let Some(at) = next {
-            let wait = Duration::from_micros(at.saturating_sub(now)).min(OPENS_AT_POLL);
-            let deadline = cx.now().saturating_add(wait);
-            if !self.timers.arm_once(cx, Purpose::OpensAt, deadline) {
-                self.counters.bug();
-            }
         }
     }
 }

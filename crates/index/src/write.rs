@@ -6,9 +6,12 @@
 //! vector and names of a new record", "Cleanup"; 4.7 item 6): a batch of
 //! changes is one commit, its records taking consecutive counters from one
 //! reading of the clock, versions, then tree deletes, then tombstones, then
-//! cleanups, each kind by ascending path tag (cleanups in page order); and
-//! the cleanups a write holder issues at the end of a round for the stale
-//! copies and forgotten records it noted.
+//! cleanups, each kind by ascending path tag (cleanups in page order); the
+//! cleanups a write holder issues at the end of a round for the stale copies
+//! and forgotten records it noted; and its check for a watermark, which signs
+//! one, in a cleanup with no group, when its candidate allows (4.4, "Expiry
+//! by the watermark"). Every cleanup carries the greatest watermark held, or
+//! the one it signs.
 //!
 //! Every vector is built from the content on this device's disk, never from
 //! records held whose content has not reached it ("Why it is safe" 9): `S`
@@ -31,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use core::cmp::Reverse;
 use core::fmt;
+use core::time::Duration;
 
 use licketysync_keys::chunk::PlainHash;
 use licketysync_keys::records::SignedRecord;
@@ -157,6 +161,8 @@ pub struct Written {
     /// Whether a cleanup was issued (at a round's end: the round owes
     /// another).
     pub cleanup: bool,
+    /// The watermark a check signed, in a cleanup of its own (case (d)).
+    pub watermark: Option<u64>,
 }
 
 /// The order of kinds in a commit.
@@ -861,7 +867,11 @@ impl Txn<'_> {
             }
             cleanups.extend(cleanups_because(own, hash, plan, per));
         }
+        // Every cleanup carries the greatest watermark held, which the
+        // records above, none a cleanup, left as it was.
+        let watermark = self.ix.s.watermark();
         for mut c in cleanups {
+            c.forget_before = watermark;
             c.dot.counter = counter;
             counter += 1;
             let record = self.sign_cleanup(&c, rng)?;
@@ -894,6 +904,7 @@ impl Txn<'_> {
             .store(parsed, verdict, &replaces, Seq::Own(rng), clock_us, out)
             .ok();
         written.records.push((hash, seq));
+        self.wrote_cleanup = true;
         Ok(())
     }
 
@@ -923,7 +934,10 @@ impl Txn<'_> {
     /// has named yet, judged again now and named in a group `because` the
     /// held record that replaces it (a note that nothing held replaces any
     /// more is dropped, unnamed); each forgotten record noted, named with
-    /// `because` empty; none that a held record names at its tag or a held
+    /// `because` empty when its counter is at most the watermark the cleanup
+    /// carries, the greatest held now, and otherwise dropped, unnamed (a
+    /// dishonest write holder's cleanup named away the watermark it was noted
+    /// under); none that a held record names at its tag or a held
     /// cleanup names in any group; of the records one peer offered, at most
     /// `MAX_PEER_NAMES` in its current window, counted against the peer that
     /// offered each. Paged by `MAX_CLEANUP_GROUPS` and `MAX_CLEANUP_ENTRIES`.
@@ -960,6 +974,7 @@ impl Txn<'_> {
         let mut groups: BTreeMap<Option<RecordHash>, Vec<RecordHash>> = BTreeMap::new();
         let mut spent: BTreeMap<DeviceId, u64> = BTreeMap::new();
         let mut named = Vec::new();
+        let watermark = self.ix.s.watermark();
         for (h, from, noted) in notes {
             let already = self.ix.s.named_by_any_group(&h)
                 || matches!(&noted, Noted::Stale { tag, .. } if self.ix.s.named_at(tag, &h));
@@ -976,7 +991,7 @@ impl Txn<'_> {
                     at.or_else(|| self.ix.s.covering_tree_delete(path, dot, Some(&h)))
                         .map(Some)
                 }
-                Noted::Forgotten => Some(None),
+                Noted::Forgotten { counter } => (*counter <= watermark).then_some(None),
             };
             match because {
                 Some(b) if !already => {
@@ -998,6 +1013,7 @@ impl Txn<'_> {
         }
         let drafts = page_groups(
             self.ix.own,
+            watermark,
             groups,
             self.ix.bounds.cleanup_entries,
             self.ix.bounds.cleanup_groups,
@@ -1025,8 +1041,88 @@ impl Txn<'_> {
         }
         written.cleanup = true;
         written.dropped = out.dropped;
-        // The paths of what its cleanups dropped, those they expired by
-        // raising the folder's time included (S3-C).
+        // The paths of what its cleanups dropped (S3-C).
+        written.paths = out.paths;
+        written.paths.sort();
+        written.paths.dedup();
+        Ok(written)
+    }
+
+    /// A write holder's check for a watermark (4.4, "When a write holder
+    /// signs one"), at wall-clock reading `clock_us`, with `since_signed` the
+    /// monotonic time since it last signed one in this opening of the folder
+    /// (`None` when it has not), and `interval` the least time between two
+    /// watermarks (`WATERMARK_INTERVAL`, which the simulator may scale). It
+    /// signs, in this transaction, a cleanup with no group that carries its
+    /// candidate (case (d)), when (3) the interval has passed since the last
+    /// it signed in the folder: within this opening by `since_signed`, before
+    /// it by the wall-clock reading kept with the folder's metadata, a
+    /// reading earlier than that one counting as passed, and with none
+    /// signed, passed; and the candidate, the greatest counter of a
+    /// tombstone, tree delete or cleanup held at least `TOMBSTONE_HORIZON`
+    /// since it arrived that lies below every one held less ("Wait, never
+    /// early"), is (1) above the greatest watermark held, and (2) passes a
+    /// tombstone, tree delete or cleanup with a `because`. Holding the cleanup
+    /// raises the greatest watermark held and expires what it passes, in the
+    /// same transaction; the wall-clock reading is kept with the folder's
+    /// metadata. A check that signs nothing changes nothing. Read and sealed
+    /// holders sign none. A transaction that has signed a cleanup already
+    /// ([`Txn::wrote_cleanup`]) signs no watermark: the check waits for a
+    /// transaction of its own, since a watermark goes in a cleanup with no
+    /// group only when no other cleanup goes in its commit (case (d)), and
+    /// a check that signs must see the records its commit holds.
+    ///
+    /// # Errors
+    /// [`WriteError::CounterExhausted`] or [`WriteError::Draft`].
+    pub fn check_watermark(
+        &mut self,
+        clock_us: u64,
+        since_signed: Option<Duration>,
+        interval: Duration,
+        rng: &mut RandomFill<'_>,
+    ) -> Result<Written, WriteError> {
+        if !self.ix.writer() || self.wrote_cleanup {
+            return Ok(Written::default());
+        }
+        let interval_us = u64::try_from(interval.as_micros()).unwrap_or(u64::MAX);
+        let passed = match (since_signed, self.ix.s.meta.last_signed_us) {
+            (Some(d), _) => d >= interval,
+            (None, Some(t)) => clock_us < t || clock_us - t >= interval_us,
+            (None, None) => true,
+        };
+        if !passed {
+            return Ok(Written::default());
+        }
+        let Some((candidate, lets_sign)) = self.ix.s.candidate(clock_us, self.ix.bounds.horizon)
+        else {
+            return Ok(Written::default());
+        };
+        if candidate <= self.ix.s.watermark() || !lets_sign {
+            return Ok(Written::default());
+        }
+        let counter = self
+            .ix
+            .next_counter(clock_us)
+            .ok_or(WriteError::CounterExhausted)?;
+        let draft = CleanupDraft {
+            dot: Dot {
+                device: self.ix.own,
+                counter,
+            },
+            forget_before: candidate,
+            groups: Vec::new(),
+        };
+        let record = self.sign_cleanup(&draft, rng)?;
+        let mut written = Written::default();
+        let mut out = Accepted::scratch();
+        self.hold_own(record, clock_us, rng, &mut written, &mut out)?;
+        let meta = crate::store::StoredMeta {
+            last_signed_us: Some(clock_us),
+            ..self.ix.s.meta
+        };
+        self.ix.s.set_meta(meta, Some(&mut self.undo));
+        written.watermark = Some(candidate);
+        written.dropped = out.dropped;
         written.paths = out.paths;
         written.paths.sort();
         written.paths.dedup();
@@ -1039,6 +1135,7 @@ impl Txn<'_> {
 /// split where its names pass a record's.
 fn page_groups(
     own: DeviceId,
+    watermark: u64,
     groups: BTreeMap<Option<RecordHash>, Vec<RecordHash>>,
     per: usize,
     max_groups: usize,
@@ -1048,6 +1145,7 @@ fn page_groups(
             device: own,
             counter: 0,
         },
+        forget_before: watermark,
         groups,
     };
     let mut drafts: Vec<CleanupDraft> = Vec::new();
@@ -1094,6 +1192,7 @@ fn cleanups_because(own: DeviceId, hash: RecordHash, plan: &Plan, per: usize) ->
                 device: own,
                 counter: 0,
             },
+            forget_before: 0,
             groups: vec![Group {
                 because: Some(hash),
                 forget,

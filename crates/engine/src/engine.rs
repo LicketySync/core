@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use licketysync_keys::device::{DeviceKey, Libp2pIdentity};
 use licketysync_keys::{CipherHash, DeviceId, FolderId, FolderKey};
 use licketysync_protocol::connection::{Config, Connection, Event, Keys, Output, Side, Tick};
-use licketysync_protocol::limits::{MAX_CLOCK_DAYS, MAX_OPEN_FOLDERS_PER_CONNECTION};
+use licketysync_protocol::limits::MAX_OPEN_FOLDERS_PER_CONNECTION;
 use licketysync_protocol::proof::FolderCredential;
 use licketysync_protocol::{Cause, CloseReason, Report};
 
@@ -114,14 +114,6 @@ pub(crate) fn tick(cx: &dyn Context, peer: PeerId) -> Tick {
 /// (`protocol.md` 4.7 item 1: once a minute).
 const FREE_TICK: Duration = Duration::from_secs(60);
 
-/// This device's wall clock in whole days since the Unix epoch, for the
-/// Hello's `clock_days` (3.2): at most `MAX_CLOCK_DAYS`.
-fn clock_days(cx: &dyn Context) -> u32 {
-    u32::try_from(cx.wall_time() / 86_400)
-        .unwrap_or(u32::MAX)
-        .min(MAX_CLOCK_DAYS)
-}
-
 /// A connection's deadline as an instant of the runtime's clock.
 fn instant(d: Duration) -> Instant {
     Instant::from_nanos(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
@@ -186,8 +178,8 @@ impl Engine {
     }
 
     /// The protocol configuration every connection starts from.
-    fn connection_config(&self, cx: &dyn Context) -> Config {
-        let mut c = Config::new(self.libp2p, clock_days(cx));
+    fn connection_config(&self) -> Config {
+        let mut c = Config::new(self.libp2p);
         c.device_name.clone_from(&self.settings.device_name);
         c.max_message_size = self.settings.max_message_size;
         c.max_requests_in_flight = self.settings.max_requests_in_flight;
@@ -205,8 +197,6 @@ impl Engine {
         decide: impl FnOnce(&mut Self, &mut dyn Context, &mut Work) -> R,
     ) -> (R, Work) {
         let mut work = Work::default();
-        // The clock rule's check, every handler (`pause`).
-        self.opens_at(cx, &mut work);
         let result = decide(self, cx, &mut work);
         self.react_all(cx, &mut work);
         self.commit(cx, &mut work);
@@ -270,12 +260,6 @@ impl Engine {
         } = event
         {
             self.closed(work, peer, reason, by, cause);
-            return;
-        }
-        if let Event::ClockOutOfRange { .. } | Event::StrangerClockOutOfRange { .. } = event {
-            // The clock rule's events come in the output that closes the
-            // connection, so they are taken whatever its state.
-            let _ = self.sync_event(work, peer, event);
             return;
         }
         if !self.conns.get(&peer).is_some_and(Conn::reacts) {
@@ -455,8 +439,10 @@ impl Engine {
 
     /// Brings every folder's state word up to date and keeps the timers
     /// armed that the folders' state needs: the resume probe while a folder
-    /// is paused, the deferred commit while phase C left index work, the
-    /// free tick while chunks wait to be freed or re-read, and the chunk
+    /// is paused, the deferred commit while phase C left index work or a
+    /// folder that accepts records owes a watermark check that waited for a
+    /// commit of its own (`crate::watermark`), the free tick while chunks
+    /// wait to be freed or re-read, and the chunk
     /// patience, once the chunk requests that all ended in this handler are
     /// gone, each hash still lacking keeping only its place
     /// (`InFlight::sweep`). A patience timer that is due is
@@ -487,7 +473,8 @@ impl Engine {
                 now.saturating_add(self.settings.resume_probe),
             );
         }
-        if !self.deferred.is_empty() {
+        if !self.deferred.is_empty() || self.folders.values().any(|f| f.check_due && f.accepting())
+        {
             arm(cx, Purpose::Deferred, now);
         }
         if self
@@ -541,9 +528,6 @@ impl Engine {
         if let Some(cause) = f.paused {
             return FolderState::Paused(cause);
         }
-        if let Some(opens_at_us) = f.closed_until {
-            return FolderState::Closed { opens_at_us };
-        }
         let open: Vec<&Conn> = self.conns.values().filter(|c| c.has_open(id)).collect();
         let pending = open.iter().filter(|c| !c.sync.caught_up(id)).count();
         let lacking = f.book.lacking().len();
@@ -559,7 +543,7 @@ impl Engine {
     }
 
     fn connect(&mut self, cx: &mut dyn Context, work: &mut Work, peer: PeerId) {
-        let config = self.connection_config(cx);
+        let config = self.connection_config();
         let t = tick(cx, peer);
         let made = Connection::new(
             &self.device,
@@ -638,7 +622,7 @@ impl Engine {
             }
             // Phase B makes the commit the deferred work waits for.
             Purpose::Deferred => {}
-            Purpose::OpensAt => self.opens_at(cx, work),
+            Purpose::WatermarkCheck => self.watermark_checks_due(cx),
             Purpose::FreeTick => {
                 self.reread_blobs(cx, work);
                 let alone: Vec<FolderId> = self
@@ -657,8 +641,7 @@ impl Engine {
     }
 
     fn disconnect(&mut self, cx: &mut dyn Context, work: &mut Work, peer: PeerId) {
-        // The transport dropped: the connection reports what ended with it
-        // (a stranger's clock out of range is counted).
+        // The transport dropped: the connection reports what ended with it.
         let t = tick(cx, peer);
         if let Some(c) = self.conns.get_mut(&peer) {
             let out = c.protocol.disconnected(t);
@@ -741,6 +724,13 @@ impl Peer for Engine {
     fn on_stop(&mut self, cx: &mut dyn Context) {
         self.run(cx, Self::stop);
     }
+
+    /// Every folder this device writes checks for a watermark, in this
+    /// handler's commit (`protocol.md` 4.4, "When a write holder signs
+    /// one"); the periodic check counts afresh from now.
+    fn on_resumed(&mut self, cx: &mut dyn Context) {
+        self.run(cx, |e, cx, _| e.watermark_checks_due(cx));
+    }
 }
 
 #[cfg(test)]
@@ -766,10 +756,24 @@ mod tests {
         // `settle_states`: the free tick is set while chunks wait to be
         // freed or read again (4.7 item 1: once a minute while the folder is
         // open on no connection), the deferred commit while phase C left
-        // index work; an engine with nothing waiting sets no timer at all.
+        // index work; an engine with nothing waiting sets no timer but the
+        // write holder's hourly check for a watermark (4.4), and a read
+        // holder's none at all.
         let mut net = Net::new(vec![config(0, vec![folder_key(1, 1)])]);
-        let idle = |net: &Net| net.nodes[0].cx.timers.is_empty();
+        let check =
+            |net: &Net| Instant::from_nanos(net.now).saturating_add(Duration::from_secs(3_600));
+        let idle = |net: &Net| {
+            let at: Vec<Instant> = net.nodes[0].cx.timers.values().copied().collect();
+            at.len() == 1 && at[0] <= check(net)
+        };
         assert!(idle(&net), "{:?}", net.nodes[0].cx.timers);
+        assert_eq!(
+            net.nodes[0].cx.timers.values().copied().collect::<Vec<_>>(),
+            vec![check(&net)],
+            "the hourly check"
+        );
+        let reader = Net::new(vec![config(0, vec![folder_key(1, 2)])]);
+        assert!(reader.nodes[0].cx.timers.is_empty(), "a read holder's none");
         // A second version leaves the first one's chunks unnamed: listed to
         // be freed, on no connection.
         write(&mut net, 0, "a.bin", &[1u8; 3000]).unwrap();

@@ -4,10 +4,10 @@
 
 //! `protocol.md` section 8 item 7 whole (`heads.json`): file IDs, coverage,
 //! arrival order, display order and "content differs", pruning, a restored
-//! device, the lost update (ruling S-1), conflict copies, the clock rule at
-//! open, a base that fails at open, renames, opaque records and shared
-//! writer faults, tree deletes, expiry by the folder's own time, the spread
-//! of clocks, and twins under a write (`identical`'s vector); each case that
+//! device, the lost update (S-1), conflict copies, a store ahead of
+//! the clock at open, a base that fails at open, renames, opaque records and
+//! shared writer faults, tree deletes, expiry by the watermark, clocks far
+//! apart, and twins under a write (`identical`'s vector); each case that
 //! shows a write holder's heads is checked on a read holder given the same
 //! records (`same_on_a_reader`), and the display-order pairs, built on a read
 //! holder, on a write holder too; the cases that only a read holder or only
@@ -17,14 +17,13 @@ use std::collections::BTreeSet;
 
 use licketysync_keys::RecordHash;
 use licketysync_protocol::connection::Judgement;
-use licketysync_protocol::limits::{
-    CLEANUP_HORIZON, CLOCK_RULE_LIMIT, MAX_REPLACES, MAX_VECTOR_ENTRIES, TOMBSTONE_HORIZON,
-};
+use licketysync_protocol::limits::{MARK_SLACK, MAX_COUNTER, MAX_REPLACES, MAX_VECTOR_ENTRIES};
 use licketysync_protocol::record::{Kind, Record};
 use serde_json::{Value, json};
 
 use super::kit::{
-    DAY, Dev, SEC, T0, chunk, dev, dir, file, forge, sealed_file, tombstone, write_key,
+    DAY, Dev, SEC, T0, chunk, cleanup, dev, dir, file, forge, sealed_file, tombstone, watermarked,
+    write_key,
 };
 use super::vectors::{check, h};
 use crate::{Change, Place, Put, Store};
@@ -497,28 +496,28 @@ fn conflict_copy_promoted() -> Value {
     json!({ "copy_base_before": h(&x.0), "own_path_after": h(&copy_version.0) })
 }
 
-fn clock_set_back_at_open() -> Value {
-    // A store whose newest applied record lies more than CLOCK_RULE_LIMIT
-    // ahead of the clock at open: the folder does not open, nothing is
-    // removed, the mark kept; once the clock passes the time it needs, it
-    // opens; opened with the clock right, it opens.
+fn store_ahead_of_the_clock_at_open() -> Value {
+    // A store whose greatest counter lies years ahead of the clock at open,
+    // after the clock was set back: the folder opens, nothing is removed,
+    // no issue, the high-water mark kept, and the next write takes a counter
+    // above every one held (4.4, "Opening a folder").
     let mut d = Dev::writer(0xd0);
+    d.clock = T0 + 3 * 365 * DAY;
     d.put("p", 1);
-    let newest = d.ix.folder_time();
     let hw = d.ix.hw();
     let held = d.all();
-    d.clock = T0 - CLOCK_RULE_LIMIT - 2 * SEC;
+    d.clock = T0;
     let report = d.reopen();
-    let opens_at = report.opens_at.unwrap();
-    assert_eq!(opens_at, newest - CLOCK_RULE_LIMIT);
+    assert!(report.is_clean(), "no issue: {report:?}");
     assert_eq!(d.all(), held, "nothing removed");
     assert_eq!(d.ix.hw(), hw, "the mark kept");
-    d.clock = opens_at;
-    assert_eq!(d.reopen().opens_at, None, "opens once the clock reaches it");
-    d.clock = T0;
-    assert!(d.reopen().is_clean());
-    same_on_a_reader(&d, &["p"]);
-    json!({ "opens_at": opens_at, "newest_counter": newest })
+    let next = d.put("q", 2);
+    assert!(
+        d.counter(&next) > hw,
+        "the next write above every counter held"
+    );
+    same_on_a_reader(&d, &["p", "q"]);
+    json!({ "opens": true, "years_ahead": 3, "next_above_the_mark": true })
 }
 
 fn base_failing_at_open() -> Value {
@@ -804,119 +803,156 @@ fn tree_deletes() -> Value {
     json!(out)
 }
 
-/// Expiry by the folder's own time (B1 of all three reviewers: never by the
-/// local clock).
-pub(crate) fn expiry_b1() -> Value {
+/// Expiry by the watermark (4.4, "Expiry by the watermark"; B1 of all
+/// three reviewers, kept: never by a device's own clock): what a held
+/// watermark expires depends only on the records held.
+pub(crate) fn expiry_by_the_watermark() -> Value {
     let mut out = Vec::new();
-    for (by, kept) in [
-        (TOMBSTONE_HORIZON - 1, true),
-        (TOMBSTONE_HORIZON, true),
-        (TOMBSTONE_HORIZON + 1, false),
-    ] {
-        // The same history on two devices whose wall clocks differ by six
-        // months: the same outcome.
-        let mut outcomes = Vec::new();
-        for skew in [0, 182 * DAY] {
-            let t = forge(
-                "t",
-                &[],
-                &{
-                    let mut m = sealed_file("t", dev(0xd0), T0);
-                    m.deleted = true;
-                    m.size = 0;
-                    m.plain_hashes.clear();
-                    m
-                },
-                &[],
-            );
-            let later = forge("u", &[chunk(1)], &sealed_file("u", dev(0xd0), T0 + by), &[]);
-            let mut x = Dev::reader(0xa1);
-            x.clock = T0 + by + skew;
-            x.accept(&t).unwrap();
-            x.accept(&later).unwrap();
-            outcomes.push(x.holds(&t.hash()));
-            if !kept {
-                assert_eq!(
-                    x.judge(&t),
-                    Ok(Judgement::Expired),
-                    "ignored when it arrives again"
-                );
-            }
-        }
-        assert_eq!(outcomes, vec![kept, kept], "the same on both clocks");
-        let name = match by.cmp(&TOMBSTONE_HORIZON) {
-            core::cmp::Ordering::Less => "a-tombstone-exceeded-by-the-horizon-less-one-microsecond",
-            core::cmp::Ordering::Equal => "a-tombstone-exceeded-by-exactly-the-horizon",
-            core::cmp::Ordering::Greater => {
-                "a-tombstone-exceeded-by-the-horizon-plus-one-microsecond"
-            }
-        };
-        out.push(json!({ "name": name, "kept": kept }));
-    }
-    // A cleanup past CLEANUP_HORIZON.
-    let c = super::kit::cleanup(dev(0xd0), T0, &[(None, vec![RecordHash([1; 32])])]);
-    let later = forge(
-        "u",
-        &[chunk(1)],
-        &sealed_file("u", dev(0xd0), T0 + CLEANUP_HORIZON + 1),
-        &[],
+    // A watermark arriving before and after the deletion it forgets, on two
+    // devices whose wall clocks differ by six months: the same records and
+    // heads.
+    let mut d = Dev::writer(0xd0);
+    let v = d.put("t", 1);
+    d.apply("t");
+    let t = d.delete("t");
+    let w = watermarked(dev(0xd1), T0 + 500 * SEC, d.counter(&t), &[]);
+    let mut before = Dev::reader(0xa1);
+    let mut after = Dev::reader(0xa2);
+    after.clock = T0 + 182 * DAY;
+    before.take(&d, &[v]);
+    before.apply("t");
+    assert_eq!(before.judge(&w), Ok(Judgement::Held));
+    assert_eq!(
+        before.take(&d, &[t]),
+        vec![Judgement::Expired],
+        "a deletion after its watermark: ignored unverified"
     );
+    assert_eq!(before.heads("t"), vec![v], "the version kept");
+    after.take(&d, &[v]);
+    after.take(&d, &[t]);
+    assert_eq!(after.heads("t"), vec![t], "the deletion applied");
+    let a = after.accept(&w).unwrap();
+    assert_eq!(
+        a.dropped,
+        vec![t],
+        "expired in the commit that holds the watermark"
+    );
+    assert_eq!(
+        after.take(&d, &[v]),
+        vec![Judgement::Held],
+        "the version held again once offered"
+    );
+    assert_eq!(before.all(), after.all(), "the same records");
+    assert_eq!(before.heads("t"), after.heads("t"));
+    out.push(json!({ "name": "a-watermark-before-and-after-the-deletion", "same": true }));
+    // A tree delete and its case-(a) cleanup, the watermark between their
+    // counters: the tree delete expired, not the cleanup, which a later
+    // watermark expires.
+    let mut d = Dev::writer(0xd0);
+    d.put("m/f", 1);
+    d.apply_all();
+    let written = d.tree_delete("m");
+    let (tree, clean) = (written.records[0].0, written.records[1].0);
     let mut x = Dev::reader(0xa1);
-    x.accept(&c).unwrap();
+    x.take_all(&d);
+    let between = watermarked(dev(0xd1), d.counter(&clean) + 10, d.counter(&tree), &[]);
+    x.accept(&between).unwrap();
+    assert!(
+        !x.holds(&tree) && x.holds(&clean),
+        "the tree delete expired, not its cleanup"
+    );
+    let later = watermarked(dev(0xd1), d.counter(&clean) + 20, d.counter(&clean), &[]);
     x.accept(&later).unwrap();
-    assert!(!x.holds(&c.hash()));
-    out.push(json!({ "name": "a-cleanup-past-its-horizon", "kept": false }));
-    // A folder with no write for two years: nothing expires.
+    assert!(!x.holds(&clean), "expired by the later watermark");
+    out.push(json!({ "name": "a-tree-delete-and-its-cleanup-with-the-watermark-between", "tree_delete_first": true }));
+    // Two concurrent watermarks h1 < h2, delivered in both orders: both
+    // held, H = h2; the one carrying h1 expired once a watermark passes it,
+    // the one carrying the greatest never.
+    let (h1, h2) = (T0 + 10, T0 + 20);
+    let w1 = watermarked(dev(0xd1), T0 + 30, h1, &[]);
+    let w2 = watermarked(dev(0xd2), T0 + 31, h2, &[]);
+    let past = watermarked(dev(0xd3), T0 + 40, T0 + 30, &[]);
+    let mut seen = Vec::new();
+    for order in [[&w1, &w2], [&w2, &w1]] {
+        let mut x = Dev::reader(0xa1);
+        for r in order {
+            assert_eq!(x.judge(r), Ok(Judgement::Held));
+        }
+        assert_eq!(x.ix.watermark(), h2);
+        assert!(x.holds(&w1.hash()) && x.holds(&w2.hash()));
+        x.accept(&past).unwrap();
+        assert!(!x.holds(&w1.hash()), "the cleanup carrying h1 expired");
+        assert!(x.holds(&past.hash()), "the one carrying the greatest never");
+        assert_eq!(x.ix.watermark(), T0 + 30);
+        seen.push(x.all());
+    }
+    assert_eq!(seen[0], seen[1], "in either order");
+    out.push(json!({ "name": "two-concurrent-watermarks", "h": h2 }));
+    // H unchanged when the cleanup carrying a lower watermark goes.
+    let mut x = Dev::reader(0xa1);
+    x.accept(&w1).unwrap();
+    x.accept(&w2).unwrap();
+    let away = cleanup(dev(0xd4), T0 + 50, &[(None, vec![w1.hash()])]);
+    x.accept(&away).unwrap();
+    assert!(!x.holds(&w1.hash()));
+    assert_eq!(x.ix.watermark(), h2, "H unchanged");
+    out.push(json!({ "name": "the-lower-watermark-named-away", "h": h2 }));
+    // A live version, a base kept only as a base that is a version, and a
+    // later version, each with a counter below H: none expired.
+    let mut d = Dev::writer(0xd0);
+    let old = d.put("k", 1);
+    d.apply("k");
+    let newer = d.put("k", 2);
+    let live = d.put("l", 3);
+    let mut x = Dev::writer(0xa0);
+    x.take(&d, &[old]);
+    x.apply("k");
+    x.take(&d, &[newer, live]);
+    assert!(!x.holds(&old), "replaced, and kept only as a base");
+    let w = watermarked(dev(0xd1), d.ix.hw() + 10, d.ix.hw(), &[]);
+    x.accept(&w).unwrap();
+    assert_eq!(x.ix.watermark(), d.counter(&live));
+    assert!(x.holds(&newer) && x.holds(&live), "no version expires");
+    assert!(
+        x.ix.bases("k").iter().any(|(_, h)| *h == old),
+        "the base kept only as a base stays"
+    );
+    out.push(json!({ "name": "versions-below-h", "expired": 0 }));
+    // A folder in which nobody writes: a deletion, then a watermark above it
+    // that a write holder signed earlier: the deletion expired all the same.
     let mut d = Dev::writer(0xd0);
     d.put("z", 1);
     let t = d.delete("z");
-    d.clock = T0 + 730 * DAY;
-    let report = d.reopen();
-    assert!(report.is_clean());
-    assert!(d.holds(&t), "the folder's time stands still");
-    same_on_a_reader(&d, &["z"]);
-    out.push(json!({ "name": "no-write-for-two-years", "kept": true }));
-    // A record 11 months ahead raises the folder's time: deletions older than
-    // that time less the horizon are forgotten at once.
     let mut x = Dev::reader(0xa1);
-    let old = forge(
-        "o",
+    x.take(&d, &[t]);
+    x.clock = T0 + 730 * DAY;
+    let report = x.reopen();
+    assert!(report.is_clean());
+    assert!(x.holds(&t), "no clock expires it");
+    x.accept(&watermarked(
+        dev(0xd1),
+        d.counter(&t) + 1,
+        d.counter(&t),
         &[],
-        &{
-            let mut m = sealed_file("o", dev(0xd0), T0 - 40 * DAY);
-            m.deleted = true;
-            m.size = 0;
-            m.plain_hashes.clear();
-            m
-        },
-        &[],
-    );
-    x.accept(&old).unwrap();
-    let ahead = forge(
-        "a",
-        &[chunk(1)],
-        &sealed_file("a", dev(0xf0), T0 + 330 * DAY),
-        &[],
-    );
-    let a = x.accept(&ahead).unwrap();
-    assert_eq!(a.dropped, vec![old.hash()]);
-    out.push(json!({ "name": "a-record-11-months-ahead", "forgotten": 1 }));
-    // The version a tombstone covered, offered again after the tombstone
-    // expired: live again.
+    ))
+    .unwrap();
+    assert!(!x.holds(&t), "the watermark does");
+    out.push(json!({ "name": "a-folder-nobody-writes-to", "expired": 1 }));
+    // The version a tombstone covered, offered again after the watermark
+    // expired the tombstone: live again.
     let mut d = Dev::writer(0xd0);
     let v = d.put("back", 1);
     d.apply("back");
     let t = d.delete("back");
     let mut x = Dev::reader(0xa1);
     x.take(&d, &[t]);
-    x.clock = T0 + TOMBSTONE_HORIZON + 10 * SEC;
-    let raise = forge(
-        "r",
-        &[chunk(1)],
-        &sealed_file("r", dev(0xd1), T0 + TOMBSTONE_HORIZON + 5 * SEC),
+    x.accept(&watermarked(
+        dev(0xd1),
+        d.counter(&t) + 5,
+        d.counter(&t),
         &[],
-    );
-    x.accept(&raise).unwrap();
+    ))
+    .unwrap();
     assert!(!x.holds(&t));
     assert_eq!(
         x.take(&d, &[v]),
@@ -924,6 +960,26 @@ pub(crate) fn expiry_b1() -> Value {
         "the deleted file reappears"
     );
     out.push(json!({ "name": "a-version-after-its-tombstone-expired", "live_again": true }));
+    // The counter ceiling: a record at MAX_COUNTER applied, the device's
+    // next counter past it, so it writes nothing more; one above it a
+    // writer fault, covering nothing.
+    let mut x = Dev::writer(0xa0);
+    let top = forge(
+        "c",
+        &[chunk(1)],
+        &sealed_file("c", dev(0xd1), MAX_COUNTER),
+        &[],
+    );
+    assert_eq!(x.judge(&top), Ok(Judgement::Held));
+    assert_eq!(x.ix.next_counter(x.clock), None, "it writes nothing more");
+    let over = forge(
+        "c",
+        &[chunk(2)],
+        &sealed_file("c", dev(0xd1), MAX_COUNTER + 1),
+        &[],
+    );
+    assert_eq!(x.judge(&over), Ok(Judgement::HeldOpaque), "a writer fault");
+    out.push(json!({ "name": "the-counter-ceiling", "at": "applied", "above": "opaque" }));
     json!(out)
 }
 
@@ -939,6 +995,7 @@ fn hold_directly(d: &mut Dev, records: &[licketysync_keys::records::SignedRecord
                 record,
                 seq,
                 verdict,
+                arrival: None,
             },
             None,
         );
@@ -1231,18 +1288,17 @@ fn tree_deletes_by_the_index() -> Value {
 
 /// The open-time check of the stored high-water mark (`protocol.md` 8 item
 /// 7, a connection-free vector; the R2 review's N6): above the greatest
-/// counter held and the clock floor by more than `CLOCK_AHEAD_WARNING`,
-/// reported corrupt and replaced; by exactly that, kept.
+/// counter held and the clock floor by more than `MARK_SLACK`, reported
+/// corrupt and replaced; by exactly that, kept; one of `MAX_COUNTER` beside a
+/// held record at `MAX_COUNTER`, and beside a greatest held counter of
+/// `MAX_COUNTER` − 5, accepted with no report; one of `MAX_COUNTER` + 1,
+/// corrupt.
 fn the_open_time_high_water_mark() -> Value {
-    use licketysync_protocol::limits::CLOCK_AHEAD_WARNING;
     let mut out = Vec::new();
-    for (over, corrupt) in [
-        (CLOCK_AHEAD_WARNING, false),
-        (CLOCK_AHEAD_WARNING + 1, true),
-    ] {
+    for (over, corrupt) in [(MARK_SLACK, false), (MARK_SLACK + 1, true)] {
         let mut d = Dev::writer(0xd0);
         d.put("p", 1);
-        let justified = d.ix.folder_time().max(d.clock);
+        let justified = d.ix.s.greatest_counter().max(d.clock);
         let meta = d.store.meta().unwrap();
         d.store.set_meta(crate::StoredMeta {
             hw: justified + over,
@@ -1254,15 +1310,38 @@ fn the_open_time_high_water_mark() -> Value {
             d.ix.hw(),
             if corrupt { justified } else { justified + over }
         );
-        out.push(json!({ "name": format!("a-stored-mark-{}-the-warning-ahead", if corrupt { "past" } else { "exactly" }), "corrupt": corrupt, "hw": d.ix.hw() }));
+        out.push(json!({ "name": format!("a-stored-mark-{}-the-slack-ahead", if corrupt { "past" } else { "exactly" }), "corrupt": corrupt, "hw": d.ix.hw() }));
+    }
+    for (greatest, stored, corrupt) in [
+        (MAX_COUNTER, MAX_COUNTER, false),
+        (MAX_COUNTER - 5, MAX_COUNTER, false),
+        (MAX_COUNTER, MAX_COUNTER + 1, true),
+    ] {
+        let mut d = Dev::writer(0xd0);
+        d.accept(&forge(
+            "c",
+            &[chunk(1)],
+            &sealed_file("c", dev(0xd1), greatest),
+            &[],
+        ))
+        .unwrap();
+        let meta = d.store.meta().unwrap();
+        d.store.set_meta(crate::StoredMeta { hw: stored, ..meta });
+        let report = d.reopen();
+        assert_eq!(report.hw_corrupt, corrupt, "{greatest} {stored}");
+        assert_eq!(d.ix.hw(), if corrupt { greatest } else { stored });
+        if greatest == MAX_COUNTER || !corrupt {
+            assert_eq!(d.ix.next_counter(d.clock), None, "it writes nothing more");
+        }
+        out.push(json!({ "greatest_held": greatest, "stored_mark": stored, "corrupt": corrupt }));
     }
     json!(out)
 }
 
-fn the_spread() -> Value {
-    // Three holders 300 days ahead, right, and 70 days behind: the right one
-    // accepts the fast one's record; the slow one then refuses the right
-    // one's next record; the folder's time on the two sides.
+fn clocks_far_apart() -> Value {
+    // Three holders 300 days ahead, right, and 70 days behind: each holds
+    // the others' records as any record, whatever its clock reads; nothing
+    // is refused for a clock (4.4, "Dots and counters").
     let mut fast = Dev::writer(0xf0);
     fast.clock = T0 + 300 * DAY;
     let mut right = Dev::writer(0xa0);
@@ -1271,10 +1350,15 @@ fn the_spread() -> Value {
     let f = fast.put("x", 1);
     assert_eq!(right.take(&fast, &[f]), vec![Judgement::Held]);
     let next = right.put("y", 2);
-    let j = slow.take(&right, &[next]);
-    assert_eq!(j, vec![Judgement::FromTheFuture], "the slow one refuses");
+    assert!(right.counter(&next) > right.counter(&f), "carried forward");
+    assert_eq!(slow.take(&right, &[f, next]), vec![Judgement::Held; 2]);
+    let own = slow.put("z", 3);
+    assert!(
+        slow.counter(&own) > right.counter(&next),
+        "above every one it holds"
+    );
     same_on_a_reader(&right, &["x", "y"]);
-    json!({ "right_folder_time": right.ix.folder_time(), "slow_folder_time": slow.ix.folder_time(), "slow_refuses": true })
+    json!({ "slow_holds": 2, "refused": 0 })
 }
 
 #[test]
@@ -1282,7 +1366,7 @@ fn vector_heads() {
     check(
         "heads",
         &json!({
-            "description": "protocol.md 8 item 7 whole: latest only, coverage, display order, pruning, bases and the lost update, conflict copies, the clock rule at open, renames, opaque records and shared writer faults, tree deletes, expiry by the folder's own time, the spread of clocks, and twins (heads of one content) under a write; records of the keys crate's fixed folder written at the fixed clock T0, or forged with fixed nonces. Heads are listed by record hash in display order.",
+            "description": "protocol.md 8 item 7 whole: latest only, coverage, display order, pruning, bases and the lost update, conflict copies, a store ahead of the clock at open, renames, opaque records and shared writer faults, tree deletes, expiry by the watermark and the counter ceiling, clocks far apart, and twins (heads of one content) under a write; records of the keys crate's fixed folder written at the fixed clock T0, or forged with fixed nonces. Heads are listed by record hash in display order.",
             "file_ids": file_ids(),
             "coverage": coverage(),
             "arrival_order": arrival_order(),
@@ -1291,13 +1375,13 @@ fn vector_heads() {
             "restored_device": restored_device(),
             "lost_update": lost_update_s1(),
             "conflict_copy": conflict_copy_promoted(),
-            "clock_set_back_at_open": clock_set_back_at_open(),
+            "store_ahead_of_the_clock_at_open": store_ahead_of_the_clock_at_open(),
             "base_failing_at_open": base_failing_at_open(),
             "renames": renames(),
             "opaque_and_shared_faults": opaque_and_shared_faults(),
             "tree_deletes": tree_deletes(),
-            "expiry": expiry_b1(),
-            "spread": the_spread(),
+            "expiry": expiry_by_the_watermark(),
+            "clocks_far_apart": clocks_far_apart(),
             "tree_deletes_by_the_index": tree_deletes_by_the_index(),
             "open_time_high_water_mark": the_open_time_high_water_mark(),
             "twins": super::identical::twins_vector(),
@@ -1311,8 +1395,8 @@ fn the_lost_update_r1_b2_s1() {
 }
 
 #[test]
-fn expiry_by_the_folders_own_time_b1() {
-    expiry_b1();
+fn expiry_by_the_watermark_depends_only_on_the_records_held_b1() {
+    expiry_by_the_watermark();
 }
 
 /// A tree delete whose pruned vector misses a tree delete held beneath its

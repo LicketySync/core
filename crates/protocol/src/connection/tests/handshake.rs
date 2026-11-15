@@ -21,6 +21,7 @@ use licketysync_keys::folder::FolderKey;
 use licketysync_keys::{CipherHash, FolderId, Role, Tier};
 use prost::Message as _;
 
+use crate::Parse as _;
 use crate::connection::{
     ChunkAnswer, Config, ConfigError, Connection, Event, Keys, ProveError, SendError, Side, State,
     Tick,
@@ -699,7 +700,7 @@ fn a_folder_held_and_proven_but_not_open_is_refused_both_ways() {
             conn.send_status(tick, &status(&[g]).folders).err(),
         ];
         assert_eq!(refused, [Some(SendError::FolderNotOpen); 9], "{how:?}");
-        assert!(p.a.conn.memories_mut(tick, &g).is_none(), "{how:?}");
+        assert!(p.a.conn.notes_mut(tick, &g).is_none(), "{how:?}");
         assert_eq!(p.a.conn.state(), State::Established, "{how:?}");
     }
 }
@@ -779,7 +780,7 @@ fn closing_and_the_flush() {
 fn configuration_errors_and_proving_errors() {
     let (key, libp2p) = device(0xa0);
     let mut rng = Rng(1);
-    let mut bad = Config::new(libp2p, 20_751);
+    let mut bad = Config::new(libp2p);
     bad.max_message_size = 1;
     assert_eq!(
         Connection::new(&key, bad, &mut |b| rng.fill(b), Tick::default()).err(),
@@ -792,7 +793,7 @@ fn configuration_errors_and_proving_errors() {
         (MAX_REQUESTS_IN_FLIGHT, true),
         (MAX_REQUESTS_IN_FLIGHT + 1, false),
     ] {
-        let mut c = Config::new(libp2p, 20_751);
+        let mut c = Config::new(libp2p);
         c.max_requests_in_flight = n;
         let made = Connection::new(&key, c, &mut |b| rng.fill(b), Tick::default());
         assert_eq!(made.is_ok(), ok, "max_requests_in_flight {n}");
@@ -800,16 +801,16 @@ fn configuration_errors_and_proving_errors() {
             assert_eq!(made.err(), Some(ConfigError::Limits));
         }
     }
-    let mut bad = Config::new(libp2p, 20_751);
+    let mut bad = Config::new(libp2p);
     bad.compressions.clear();
     assert!(matches!(
         Connection::new(&key, bad, &mut |b| rng.fill(b), Tick::default()),
         Err(ConfigError::Hello(_))
     ));
-    let mut bad = Config::new(libp2p, 20_751);
+    let mut bad = Config::new(libp2p);
     bad.device_name = "a\u{7}".into();
     assert!(Connection::new(&key, bad, &mut |b| rng.fill(b), Tick::default()).is_err());
-    let mut bad = Config::new(libp2p, 20_751);
+    let mut bad = Config::new(libp2p);
     bad.features = vec!["f".repeat(32); 32];
     bad.compressions = (0..32).map(|i| format!("c{i:0>19}")).collect();
     bad.hashes = std::iter::once("blake3".to_string())
@@ -970,113 +971,49 @@ fn another_device_key_than_the_hellos_is_a_local_error() {
 }
 
 #[test]
-fn the_clock_rule_closes_both_sides_when_the_first_folder_opens() {
-    // 3.2: 365 days apart syncs; 366, in either direction, and a clock of 0
-    // against a present one, close both sides with CLOCK_OUT_OF_RANGE when
-    // the first folder opens, before any record, chunk or Status crosses,
-    // each naming the peer and both readings.
-    let dev = |seed: u8| device(seed).0.device_id();
-    for (a_days, b_days, out) in [
-        (20_000u32, 20_365u32, false),
-        (20_365, 20_000, false),
-        (20_000, 20_366, true),
-        (20_366, 20_000, true),
-        (0, 20_751, true),
-    ] {
-        let mut p = Pair::with(
-            0xa0,
-            0xb0,
-            &[write()],
-            &[write()],
-            |c| c.clock_days = a_days,
-            |c| c.clock_days = b_days,
-        );
-        p.settle();
-        p.a.prove_all(p.now);
-        p.settle();
-        if !out {
-            assert!(p.a.conn.is_open(&p.a.folder_id()), "{a_days} {b_days}");
-            assert!(p.b.conn.is_open(&p.b.folder_id()));
-            continue;
-        }
-        for (side, ours, theirs, peer) in [
-            (&p.a, a_days, b_days, dev(0xb0)),
-            (&p.b, b_days, a_days, dev(0xa0)),
-        ] {
-            assert_eq!(
-                closed(side),
-                Some((CloseReason::ClockOutOfRange, Some(Cause::ClockOutOfRange))),
-                "{a_days} {b_days}"
-            );
-            assert!(side.saw(|e| matches!(e,
-                Event::ClockOutOfRange { ours: o, theirs: t, peer: d, .. }
-                    if *o == ours && *t == theirs && *d == peer)));
-            assert!(!side.saw(|e| matches!(e, Event::FolderOpened { .. })));
-            assert!(!side.saw(|e| matches!(e, Event::StrangerClockOutOfRange { .. })));
-            let crossed = side.sent.iter().any(|(_, f)| {
-                matches!(
-                    u16::from_be_bytes([f[4], f[5]]),
-                    0x8007 | 0x8008 | 0x8009 | 0x800A | 0x800B | 0x800C | 0x0001
-                )
-            });
-            assert!(!crossed, "nothing of the folder crossed");
-        }
-    }
-    // No folder opens: only counted, then NO_COMMON_FOLDER.
-    let mut p = Pair::with(
-        0xa0,
-        0xb0,
-        &[write()],
-        &[FolderKey::from(folder(0x20))],
-        |c| c.clock_days = 20_000,
-        |c| c.clock_days = 21_000,
-    );
-    p.settle();
-    p.a.prove_all(p.now);
-    p.b.prove_all(p.now);
-    p.settle();
-    p.advance(s(31));
+fn a_hello_carrying_the_removed_clock_days_is_accepted_and_no_clock_is_compared() {
+    // 4.2: field 11 was `clock_days`, the clock rule's reading, removed with
+    // the clock rule (4.4, "Expiry by the watermark"). A Hello that still
+    // carries it, at any value, is accepted with the field skipped as
+    // unknown, and its bytes stay in the transcript as sent; no Hello this
+    // release sends carries it.
+    let mut p = half_open();
+    let mut q = Pair::new(0xa0, 0xb0, &[write()], &[write()]);
+    q.b.auto = false;
+    let hello_b = core::mem::take(&mut q.b.outbox);
+    // The Hello frame's body with field 11 (varint, tag 0x58) appended:
+    // 2 097 152, the old bound plus one, which the clock rule refused.
+    let mut body = hello_b[6..].to_vec();
+    body.extend_from_slice(&[0x58, 0x80, 0x80, 0x80, 0x01]);
+    let with_field = raw(0x8001, &body);
+    q.a.receive(q.now, &with_field);
+    assert_eq!(q.a.conn.state(), State::AwaitingDeviceProof);
+    assert_eq!(closed(&q.a), None);
+    // The field is skipped as unknown: the Hello parses to B's own.
     assert_eq!(
-        closed(&p.a),
-        Some((CloseReason::NoCommonFolder, Some(Cause::ProofTimeout)))
+        Hello::parse(&body).unwrap(),
+        Hello::parse(&hello_b[6..]).unwrap()
     );
-    assert!(p.a.saw(|e| matches!(
-        e,
-        Event::StrangerClockOutOfRange {
-            ours: 20_000,
-            theirs: 21_000
-        }
-    )));
-    assert!(!p.a.saw(|e| matches!(e, Event::ClockOutOfRange { .. })));
-    // The transport drops before anything closes: counted as well, once, and
-    // nothing is sent (the review's PS NIT 8).
-    let mut p = Pair::with(
-        0xa0,
-        0xb0,
-        &[write()],
-        &[FolderKey::from(folder(0x20))],
-        |c| c.clock_days = 20_000,
-        |c| c.clock_days = 21_000,
-    );
-    p.settle();
+    // A Hello this release sends carries no field 11: decoding drops
+    // unknown fields, and the decoded Hello encodes to the bytes sent.
+    let (key, libp2p) = device(0xa0);
+    let (_, out) = Connection::new(
+        &key,
+        Config::new(libp2p),
+        &mut |b| b.fill(1),
+        Tick::default(),
+    )
+    .unwrap();
+    let sent = Hello::decode(&out.frames[0][6..]).unwrap();
+    assert_eq!(sent.encode_to_vec(), out.frames[0][6..].to_vec());
+    // The transport drops before anything closes: nothing is sent and no
+    // event is reported, once (the review's PS NIT 8).
     let out = p.a.conn.disconnected(p.a.tick(p.now));
     assert!(out.frames.is_empty(), "the transport is gone");
-    assert_eq!(
-        out.events,
-        vec![Event::StrangerClockOutOfRange {
-            ours: 20_000,
-            theirs: 21_000
-        }]
-    );
+    assert!(out.events.is_empty());
     assert_eq!(p.a.conn.state(), State::Closed);
     assert!(
         p.a.conn.disconnected(p.a.tick(p.now)).events.is_empty(),
         "once"
     );
-    // A clock past the bound is sent as the bound.
-    let (key, libp2p) = device(0xa0);
-    let c = Config::new(libp2p, u32::MAX);
-    let (_, out) = Connection::new(&key, c, &mut |b| b.fill(1), Tick::default()).unwrap();
-    let hello = Hello::decode(&out.frames[0][6..]).unwrap();
-    assert_eq!(hello.clock_days, crate::limits::MAX_CLOCK_DAYS);
 }

@@ -41,7 +41,9 @@ use licketysync_protocol::messages::{
     ChunkReply, ChunkRequest, FolderStatus, IndexRecords, Message, ReconcileOutcome, ReconcileReply,
 };
 use licketysync_protocol::proof::FolderCredential;
-use licketysync_protocol::record::{Applied, Chunk, Dot, IndexDraft, Kind, Meta, Record, Vector};
+use licketysync_protocol::record::{
+    Applied, Chunk, CleanupDraft, Dot, IndexDraft, Kind, Meta, Record, Vector,
+};
 use licketysync_protocol::{CloseReason, Parse};
 use licketysync_sim::member::Member;
 
@@ -100,8 +102,10 @@ pub(crate) enum Attack {
     /// (4 095 bytes, 2 048 components), each with a forged signature.
     DeepPath,
     /// Once a member has sent it records, replays to it a tree delete of
-    /// `p0` whose counter the folder's own time has passed by more than the
-    /// deletion horizon: genuinely signed, or with its signature forged.
+    /// `p0`, dated a horizon and ten days ago, after a watermark at its
+    /// counter that the adversary, a write holder, signed: the watermark
+    /// genuine, the tree delete genuinely signed or with its signature
+    /// forged.
     ExpiredTreeDelete {
         /// The signature is forged.
         forged: bool,
@@ -706,8 +710,21 @@ impl Adversary {
                 } else {
                     r
                 };
-                self.log.borrow_mut().records.push(r.hash());
-                self.push(cx, peer, &[r]);
+                let watermark = CleanupDraft {
+                    dot: Dot {
+                        device: me,
+                        counter: counter + 1,
+                    },
+                    forget_before: counter,
+                    groups: Vec::new(),
+                }
+                .sign(&a, &a.record_keys(), &mut |b: &mut [u8]| b.fill(0x5c))
+                .unwrap();
+                self.log
+                    .borrow_mut()
+                    .records
+                    .extend([r.hash(), watermark.hash()]);
+                self.push(cx, peer, &[watermark, r]);
             }
             Attack::ReplayHistory => {
                 for r in records {
@@ -785,7 +802,7 @@ impl Peer for Adversary {
     }
 
     fn on_connected(&mut self, cx: &mut dyn Context, peer: PeerId) {
-        let mut config = Config::new(self.libp2p, (CLOCK_US / 86_400_000_000) as u32);
+        let mut config = Config::new(self.libp2p);
         "adversary".clone_into(&mut config.device_name);
         let t = Self::tick(cx, peer);
         let (conn, out) = Connection::new(

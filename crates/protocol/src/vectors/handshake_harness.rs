@@ -240,10 +240,10 @@ fn odd_mode(mode: u8, mut rest: &[u8], watch: &mut dyn Watch) {
     };
     let t0 = Tick::default();
     let view = View::of(mode);
-    let Ok((mut a, out_a)) = Connection::new(&ka, Config::new(ia, 20_751), &mut fill, t0) else {
+    let Ok((mut a, out_a)) = Connection::new(&ka, Config::new(ia), &mut fill, t0) else {
         return;
     };
-    let Ok((mut b, out_b)) = Connection::new(&kb, Config::new(ib, 20_751), &mut fill, t0) else {
+    let Ok((mut b, out_b)) = Connection::new(&kb, Config::new(ib), &mut fill, t0) else {
         return;
     };
     let mut to_b = out_a.frames.concat();

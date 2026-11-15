@@ -6,8 +6,8 @@
 //! that the other tests do not pin, one test each, named by the rule: the
 //! pending-free list, the chunk book and the bases of what arrives (item 1),
 //! the store-failure pause and the failed commit (item 4, section 5, "Store
-//! failure"), the bases and conflicts of a write (item 6), and phase 0's
-//! clock rule, which the code keeps until phase 1 removes it.
+//! failure"), the bases and conflicts of a write (item 6), clocks far apart,
+//! and a write holder's watermark (`crate::watermark`).
 
 #![allow(
     clippy::unwrap_used,
@@ -232,181 +232,61 @@ fn a_write_over_a_conflict_turns_each_copy_into_an_ordinary_file() {
     }
 }
 
-/// Seconds in 400 days: past the one-year clock rule.
-const PAST_THE_RULE: u64 = 400 * 86_400;
+/// Seconds in 400 days, more than a year.
+const FOUR_HUNDRED_DAYS: u64 = 400 * 86_400;
 
 #[test]
-fn the_clock_rule_issue_is_raised_though_the_close_comes_with_it() {
-    // Item 6, the clock rule: the two Hellos are compared when the first
-    // folder opens, and a peer out of range is refused with the issue. The
-    // bug: the event came in the output that closed the connection, and the
-    // engine dropped it with the connection's other events.
+fn two_devices_whose_clocks_are_400_days_apart_sync_with_no_issue() {
+    // 4.4, "Expiry by the watermark": no Hello carries a clock and no peer
+    // or record is refused for one. The folder opens, a write crosses both
+    // ways, and no issue is raised.
     let mut net = Net::new(vec![
         config(0, vec![folder_key(1, 1)]),
         config(1, vec![folder_key(1, 1)]),
     ]);
-    net.nodes[1].cx.wall += PAST_THE_RULE;
+    net.nodes[1].cx.wall += FOUR_HUNDRED_DAYS;
     net.connect(0, 1);
     net.advance(Duration::from_secs(2));
+    let ahead = write(&mut net, 1, "ahead.txt", b"ahead").unwrap();
+    let behind = write(&mut net, 0, "behind.txt", b"behind").unwrap();
+    net.advance(Duration::from_secs(3));
     for i in 0..2 {
         let e = &net.nodes[i].engine;
-        assert!(
-            e.issues()
-                .list()
-                .iter()
-                .any(|x| x.kind == IssueKind::ClockOutOfRange),
-            "node {i}: {:?}",
-            e.issues()
-        );
-        assert_ne!(state(&net, i), FolderState::UpToDate, "node {i}");
+        assert!(e.issues().list().is_empty(), "node {i}: {:?}", e.issues());
+        assert_eq!(state(&net, i), FolderState::UpToDate, "node {i}");
+        let held: Vec<RecordHash> = e
+            .folder(&folder())
+            .unwrap()
+            .records
+            .iter()
+            .map(|r| r.hash)
+            .collect();
+        assert!(held.contains(&ahead) && held.contains(&behind), "node {i}");
     }
 }
 
 #[test]
-fn a_stranger_out_of_the_clock_rule_is_only_counted() {
-    // 3.2: a connection that ends with no folder opened and clocks out of
-    // range is counted, with no issue (the same bug as above, at the close).
+fn a_store_400_days_ahead_of_the_clock_opens_and_syncs() {
+    // 4.4, "Opening a folder": a store whose records lie far ahead of the
+    // clock, after the clock was set back, opens like any other: no folder
+    // is kept closed for its clock. It writes, its next counter above every
+    // one held, and syncs with a peer at once.
     let mut net = Net::new(vec![
         config(0, vec![folder_key(1, 1)]),
-        config(1, vec![folder_key(2, 1)]),
+        config(1, vec![folder_key(1, 1)]),
     ]);
-    net.nodes[1].cx.wall += PAST_THE_RULE;
-    net.connect(0, 1);
-    net.advance(Duration::from_secs(2));
-    net.disconnect(0, 1);
-    for i in 0..2 {
-        let e = &net.nodes[i].engine;
-        assert_eq!(e.counters().stranger_clocks, 1, "node {i}");
-        assert!(
-            e.issues()
-                .list()
-                .iter()
-                .all(|x| x.kind != IssueKind::ClockOutOfRange),
-            "node {i}"
-        );
-    }
-}
-
-#[test]
-fn a_record_from_the_future_is_refused_with_the_issue_naming_its_device() {
-    // Item 2, "from the future (verified, refused, the clock-rule issue)":
-    // node 0's clock jumps past the rule after the handshake.
-    let mut net = pair();
-    net.nodes[0].cx.wall += PAST_THE_RULE;
-    let r = write(&mut net, 0, "f.txt", b"later").unwrap();
-    net.advance(Duration::from_secs(3));
-    let e = &net.nodes[1].engine;
-    let v = e.folder(&folder()).unwrap();
-    assert!(v.records.iter().all(|x| x.hash != r), "refused");
-    assert!(
-        e.issues()
-            .list()
-            .iter()
-            .any(|x| x.kind == IssueKind::FromTheFuture
-                && matches!(x.subject, crate::issues::Subject::Device(_))),
-        "{:?}",
-        e.issues()
-    );
-}
-
-/// A node whose folder holds a record dated 400 days ahead of its clock,
-/// restarted with its clock back: kept closed for 35 days. Node `i` of a
-/// net of `n`, the others' clocks `ahead` seconds ahead of it.
-fn closed_net(n: usize, ahead: u64) -> Net {
-    let configs = (0..n)
-        .map(|i| config(u8::try_from(i).unwrap(), vec![folder_key(1, 1)]))
-        .collect();
-    let mut net = Net::new(configs);
-    for i in 1..n {
-        net.nodes[i].cx.wall += ahead;
-    }
-    net.nodes[0].cx.wall += PAST_THE_RULE;
+    net.nodes[0].cx.wall += FOUR_HUNDRED_DAYS;
     write(&mut net, 0, "f.txt", b"ahead").unwrap();
-    net.nodes[0].cx.wall -= PAST_THE_RULE;
+    net.nodes[0].cx.wall -= FOUR_HUNDRED_DAYS;
     net.restart(0, config(0, vec![folder_key(1, 1)]));
-    net
-}
-
-/// Days of the lead past a year that `closed_net` leaves, plus one.
-const STEP: u64 = 36 * 86_400;
-
-#[test]
-fn a_folder_whose_records_lie_more_than_a_year_ahead_stays_closed_and_opens_by_itself() {
-    // Item 8 and 4.4, "A clock set back": kept closed while its records lie
-    // more than a year ahead of the clock, held paused meanwhile (no write,
-    // no round), with the clock-rule issue and the open report saying so,
-    // and opened once the clock reaches the time the open gave.
-    let mut net = closed_net(1, 0);
-    let FolderState::Closed { opens_at_us } = state(&net, 0) else {
-        panic!("not closed: {:?}", state(&net, 0));
-    };
-    let now_us = net.nodes[0].cx.wall * 1_000_000;
-    let days = (opens_at_us - now_us) / 86_400_000_000;
-    assert_eq!(days, 35, "the record's lead past a year");
-    let e = &net.nodes[0].engine;
-    assert!(
-        e.folder(&folder()).unwrap().open.kept_closed,
-        "the open report says so"
-    );
-    assert!(
-        e.issues()
-            .list()
-            .iter()
-            .any(|i| i.kind == IssueKind::KeptClosed && i.folder == Some(folder())),
-        "{:?}",
-        e.issues()
-    );
-    assert_eq!(write(&mut net, 0, "g.txt", b"g"), Err(WriteFailure::Paused));
-    net.nodes[0].cx.wall += STEP;
-    net.advance(Duration::from_secs(STEP));
-    assert!(
-        !matches!(state(&net, 0), FolderState::Closed { .. }),
-        "{:?}",
-        state(&net, 0)
-    );
-    assert!(write(&mut net, 0, "g.txt", b"g").is_ok());
-}
-
-#[test]
-fn a_closed_folder_opens_when_its_wall_clock_steps_forward_without_monotonic_time() {
-    // EP-1, the bug: the open's time was turned into a monotonic delay, so a
-    // clock set right by stepping it forward kept the folder closed until
-    // that delay ran out. The wall clock is compared every handler, and the
-    // timer looks at least once a minute.
-    let mut net = closed_net(1, 0);
-    net.nodes[0].cx.wall += STEP;
-    net.advance(Duration::from_secs(61));
-    assert!(
-        !matches!(state(&net, 0), FolderState::Closed { .. }),
-        "still closed a minute after the clock passed its time: {:?}",
-        state(&net, 0)
-    );
-    // And at once in any handler, here a write.
-    let mut net = closed_net(1, 0);
-    net.nodes[0].cx.wall += STEP;
-    assert!(write(&mut net, 0, "g.txt", b"g").is_ok());
-}
-
-#[test]
-fn a_closed_folder_is_not_proven_to_peers_and_is_proven_once_it_opens() {
-    // EP-2, 4.4: while kept closed the folder counts as paused for folder
-    // proofs: not proven, the peer's proof answered REJECTED, nothing
-    // received. Once it opens, its credential is back; a peer that proved it
-    // on the connection already does not prove it again there (3.5), so it
-    // syncs on the next one. Node 1's clock runs 36 days ahead, so that the
-    // records are within its year.
-    let mut net = closed_net(2, STEP);
-    assert!(!net.nodes[0].engine.folder(&folder()).unwrap().credentialed);
-    net.connect(0, 1);
-    net.advance(Duration::from_secs(5));
-    assert!(net.nodes[1].engine.counters().proofs_rejected >= 1);
-    let one = net.nodes[1].engine.folder(&folder()).unwrap();
-    assert_eq!(one.records.len(), 0, "nothing crossed while closed");
-    assert!(!matches!(one.state, FolderState::UpToDate));
-    net.nodes[0].cx.wall += STEP;
-    net.advance(Duration::from_secs(61));
-    assert!(net.nodes[0].engine.folder(&folder()).unwrap().credentialed);
-    net.disconnect(0, 1);
+    let v = net.nodes[0].engine.folder(&folder()).unwrap();
+    assert!(v.credentialed, "proven to peers");
+    assert_ne!(state(&net, 0), FolderState::Checking);
+    let issues = net.nodes[0].engine.issues();
+    assert!(issues.list().is_empty(), "{issues:?}");
+    let hw = v.hw;
+    write(&mut net, 0, "g.txt", b"g").unwrap();
+    assert!(net.nodes[0].engine.folder(&folder()).unwrap().hw > hw);
     net.connect(0, 1);
     net.advance(Duration::from_secs(5));
     for i in 0..2 {
@@ -414,7 +294,7 @@ fn a_closed_folder_is_not_proven_to_peers_and_is_proven_once_it_opens() {
     }
     assert_eq!(
         net.nodes[1].engine.folder(&folder()).unwrap().records.len(),
-        1
+        2
     );
 }
 
@@ -511,7 +391,8 @@ fn a_failed_first_commit_pauses_the_folder_and_its_probe_handler_commits_once() 
     };
     assert!(!meta(&net));
     let n = &mut net.nodes[0];
-    let probe = *n.cx.timers.keys().next().unwrap();
+    // The probe is due first; the watermark check, an hour on, waits.
+    let probe = *n.cx.timers.iter().min_by_key(|(_, at)| **at).unwrap().0;
     n.cx.timers.remove(&probe);
     let before = n.cx.storage.commits;
     n.engine.on_timer(&mut n.cx, probe);
@@ -872,36 +753,6 @@ fn a_paused_folder_serving_a_reset_claims_no_redraw() {
     assert!(resets.iter().all(|(_, redrew)| !redrew), "{resets:?}");
 }
 
-#[test]
-fn a_closed_folder_that_opens_before_the_peers_proof_arrives_syncs_without_a_reconnect() {
-    // CF-3 (b): node 1's proof is in flight while node 0's folder is kept
-    // closed; node 0 opens before it arrives and proves it on every
-    // connection (`prove_everywhere`), and accepts the late proof with the
-    // credential it now holds (3.5 step 6): the folder opens on that
-    // connection and syncs with no reconnect. Either alone opens it here;
-    // the case only `prove_everywhere` opens, both sides closed, is
-    // `a_folder_both_devices_kept_closed_opens_when_the_second_proves_it`.
-    let mut net = closed_net(2, STEP);
-    net.hold = Some(Hold::new(1, 0, MessageType::FolderProof));
-    net.connect(0, 1);
-    net.advance(Duration::from_secs(1));
-    // The clock is set right; node 0's next handler (a write) opens the
-    // folder first, well inside the proof timeout.
-    net.nodes[0].cx.wall += STEP;
-    write(&mut net, 0, "g.txt", b"g").unwrap();
-    assert!(net.nodes[0].engine.folder(&folder()).unwrap().credentialed);
-    net.release();
-    net.advance(Duration::from_secs(5));
-    for i in 0..2 {
-        assert_eq!(state(&net, i), FolderState::UpToDate, "node {i}");
-        assert_eq!(net.nodes[i].engine.counters.internal_errors, 0, "node {i}");
-    }
-    assert_eq!(
-        net.nodes[1].engine.folder(&folder()).unwrap().records.len(),
-        2
-    );
-}
-
 /// Every node's disk: its base slots, all of them.
 fn disks(net: &Net) -> Vec<Vec<(String, Place, RecordHash)>> {
     (0..net.nodes.len())
@@ -1106,37 +957,6 @@ fn a_file_and_two_nested_tree_deletes_in_either_order_leave_the_same_disk() {
 }
 
 #[test]
-fn a_folder_both_devices_kept_closed_opens_when_the_second_proves_it() {
-    // RC-N1 (probe P6): both nodes keep the folder closed by the clock rule,
-    // so neither proves it at connect. Node 0's clock is set right first and
-    // its folder opens; node 1's is set right before anything node 0 sent
-    // for the folder arrives. Each side proves it when it opens
-    // (`prove_everywhere`): without that, neither would ever prove it on
-    // this connection.
-    let mut net = Net::new((0..2).map(|i| config(i, vec![folder_key(1, 1)])).collect());
-    for i in 0..2u8 {
-        let n = usize::from(i);
-        net.nodes[n].cx.wall += PAST_THE_RULE;
-        write(&mut net, n, &format!("f{i}.txt"), b"ahead").unwrap();
-        net.nodes[n].cx.wall -= PAST_THE_RULE;
-        net.restart(n, config(i, vec![folder_key(1, 1)]));
-        assert!(!net.nodes[n].engine.folder(&folder()).unwrap().credentialed);
-    }
-    net.hold = Some(Hold::new(0, 1, MessageType::FolderProof));
-    net.connect(0, 1);
-    net.advance(Duration::from_secs(1));
-    net.nodes[0].cx.wall += STEP;
-    write(&mut net, 0, "g.txt", b"g").unwrap();
-    net.nodes[1].cx.wall += STEP;
-    write(&mut net, 1, "h.txt", b"h").unwrap();
-    net.release();
-    net.advance(Duration::from_secs(5));
-    for i in 0..2 {
-        assert_eq!(state(&net, i), FolderState::UpToDate, "node {i}");
-    }
-}
-
-#[test]
 fn a_blob_this_device_freed_after_a_read_error_raises_no_corruption() {
     // RC-2 (probe P7), the bug: node 1 could not read a blob at a restart
     // and kept it to read again; it then freed that chunk itself (the
@@ -1298,15 +1118,15 @@ fn two_tree_deletes_apart(mtime: i64) -> (Net, RecordHash, RecordHash) {
 }
 
 #[test]
-fn a_rounds_end_cleanup_that_expires_the_greater_tree_delete_leaves_the_other_as_the_base() {
-    // S3-C, the bug: node 0 and node 1 hold two tree deletes of d, d's base
-    // the greater, which is also the older. 200 days later node 2, back
-    // with V1, offers it; node 0 notes it (V3 covers it, nothing held names
-    // it) and names it at the round's end
-    // in a cleanup whose counter raises the folder's time past the older
-    // delete's horizon, which expires it. The round's end reported no
-    // paths, so node 0 left d with no base, while node 1, expiring it as it
-    // accepted that cleanup, made the newer delete d's base.
+fn a_watermark_that_expires_the_greater_tree_delete_leaves_the_other_as_the_base() {
+    // S3-C: node 0 and node 1 hold two tree deletes of d, d's base the
+    // greater, which is also the older. 200 days later node 2, back with
+    // V1, offers it, and node 0 names it at the round's end (V3 covers it,
+    // nothing held names it); node 1, which has held the older delete a
+    // year, checks and signs a watermark that expires it, and node 0 takes
+    // that watermark. Each commit that expires the older delete reports its
+    // path, so that both make the newer delete d's base: a commit that
+    // reported no paths left d with no base.
     // The first of node 0's deletes, by its mtime, that sorts below node 1's.
     let (mut net, old, new) = (0..64)
         .map(two_tree_deletes_apart)
@@ -1318,6 +1138,15 @@ fn a_rounds_end_cleanup_that_expires_the_greater_tree_delete_leaves_the_other_as
     step_clocks(&mut net, TWO_HUNDRED_DAYS);
     net.connect(0, 2);
     net.advance(Duration::from_secs(40));
+    for i in 0..3 {
+        net.with(i, |e, cx| e.on_resumed(cx));
+    }
+    net.advance(Duration::from_secs(5));
+    assert_eq!(
+        net.nodes[1].engine.counters().watermarks_signed,
+        1,
+        "node 1 held the older delete a year"
+    );
     let d = disks(&net);
     for (i, disk) in d.iter().enumerate() {
         let held: Vec<RecordHash> = net.nodes[i]
@@ -1411,7 +1240,7 @@ fn plant(net: &mut Net, i: usize, records: &[licketysync_keys::records::SignedRe
 
 /// Puts `records` in node `i`'s committed store, as held there in folder 1,
 /// and restarts it over them with `config`.
-fn plant_and_restart(
+pub(crate) fn plant_and_restart(
     net: &mut Net,
     i: usize,
     records: &[licketysync_keys::records::SignedRecord],
@@ -1681,19 +1510,10 @@ fn a_write_the_index_refuses_reports_its_refusal_though_its_handlers_commit_fail
     // `MAX_COUNTER`); the same handler commits folder 2's cursor that node
     // 0's counted push raised, which waited for the next commit, and that
     // commit fails.
-    //
-    // The clocks are set just below `MAX_COUNTER` only for phase 0's clock
-    // rule, which the code keeps: it keeps a store more than a year ahead of
-    // the clock closed (the index's open, `CLOCK_RULE_LIMIT`) and compares
-    // the Hellos' clocks. 4.4, "Opening a folder", opens such a store
-    // whatever the clock; phase 1 removes the rule, and these lines with it.
     let max = licketysync_protocol::limits::MAX_COUNTER;
     let (f1, f2) = (folder(), folder_key(2, 1).folder_id());
     let both = || config(1, vec![folder_key(1, 1), folder_key(2, 1)]);
     let mut net = Net::new(vec![config(0, vec![folder_key(2, 1)]), both()]);
-    for n in &mut net.nodes {
-        n.cx.wall = max / 1_000_000;
-    }
     plant_and_restart(&mut net, 1, &[crafted("z", 0x99, max, &[], None)], both());
     assert_eq!(net.nodes[1].engine.high_water(&f1), Some(max));
     net.connect(0, 1);
@@ -1721,13 +1541,10 @@ fn a_write_past_the_counter_ceiling_raises_one_issue_saying_to_share_the_folder_
     // would pass `MAX_COUNTER` writes nothing more in the folder and raises
     // an issue saying that the folder must be shared again, naming no one.
     // Node 0 holds a record at `MAX_COUNTER`, so each of its writes there is
-    // refused; the issue is listed once however often it is raised. The
-    // clock is set just below `MAX_COUNTER` only for phase 0's clock rule,
-    // as in the test above.
+    // refused; the issue is listed once however often it is raised.
     let max = licketysync_protocol::limits::MAX_COUNTER;
     let tier_1 = || config(0, vec![folder_key(1, 1)]);
     let mut net = Net::new(vec![tier_1()]);
-    net.nodes[0].cx.wall = max / 1_000_000;
     plant_and_restart(&mut net, 0, &[crafted("z", 0x99, max, &[], None)], tier_1());
     for path in ["a.txt", "b.txt"] {
         let n = &mut net.nodes[0];
@@ -1759,14 +1576,10 @@ fn a_cleanup_refused_at_the_counter_ceiling_raises_the_issue_to_share_the_folder
     // a record of `p` at `MAX_COUNTER` that covers node 1's, which node 1
     // still holds and sends. Node 0 notes it as a stale copy, and the
     // cleanup naming it at the round's end would pass the ceiling: refused,
-    // counted, and the issue raised, with no engine bug. The clocks are set
-    // just below `MAX_COUNTER` only for phase 0's clock rule, as above.
+    // counted, and the issue raised, with no engine bug.
     let max = licketysync_protocol::limits::MAX_COUNTER;
     let tier_1 = |i: u8| config(i, vec![folder_key(1, 1)]);
     let mut net = Net::new(vec![tier_1(0), tier_1(1)]);
-    for n in &mut net.nodes {
-        n.cx.wall = max / 1_000_000;
-    }
     let ours = crafted("p", 0x99, max, &[(0x77, 5)], Some(0x42));
     plant_and_restart(&mut net, 0, &[ours], tier_1(0));
     let stale = crafted("p", 0x77, 5, &[], Some(0x41));

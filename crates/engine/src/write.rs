@@ -77,8 +77,7 @@ pub enum WriteFailure {
     /// This device holds the read or sealed key, which cannot sign
     /// (`keys.md` 1.3; the index's `WriteError::NotWriteKey`).
     NotWriteKey,
-    /// The folder is paused for a store failure, or kept closed by the
-    /// clock rule.
+    /// The folder is paused for a store failure.
     Paused,
     /// The folder is misconfigured or its store unreadable.
     NotUsable,

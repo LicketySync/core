@@ -417,6 +417,13 @@ impl Peer for Member {
         }
     }
 
+    fn on_resumed(&mut self, cx: &mut dyn Context) {
+        if let Ok(engine) = &mut self.engine {
+            engine.on_resumed(cx);
+        }
+        self.note();
+    }
+
     fn on_stop(&mut self, cx: &mut dyn Context) {
         if let Ok(engine) = &mut self.engine {
             engine.on_stop(cx);

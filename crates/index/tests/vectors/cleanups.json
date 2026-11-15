@@ -1,5 +1,4 @@
 {
-  "cleanup_horizon_days": 30,
   "description": "protocol.md 8 item 12, the index's part: the sealed-peer rule and every cleanup outcome, on a sealed holder unless named; records of the keys crate's fixed folder written at T0 or forged with fixed nonces. The 100 000-record tree delete is scaled to 100 records at 16 names a cleanup record, which pages into seven records as 100 000 do at 16 384.",
   "file_ids": [
     {

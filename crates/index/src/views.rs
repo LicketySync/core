@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 
 use licketysync_keys::chunk::PlainHash;
 use licketysync_keys::{CipherHash, PathTag, RecordHash, Tier};
-use licketysync_protocol::record::{Chunk, Dot, Kind, Meta};
+use licketysync_protocol::record::{Applied, Chunk, Dot, Kind, Meta};
 
 use crate::index::{Index, Txn};
 use crate::state::BaseRecord;
@@ -87,6 +87,9 @@ pub struct RecordView {
     pub dot: Option<Dot>,
     /// A cleanup.
     pub cleanup: bool,
+    /// The watermark an applied cleanup carries at a read or write holder,
+    /// 0 for none (4.4, "Expiry by the watermark"); 0 for any other record.
+    pub forget_before: u64,
 }
 
 /// A file version's content, by record hash, for reassembly.
@@ -324,6 +327,7 @@ impl Index {
             seq: held.seq,
             dot: held.applied().map(|a| *a.dot()),
             cleanup: held.record.is_cleanup(),
+            forget_before: held.applied().map_or(0, Applied::forget_before),
         })
     }
 

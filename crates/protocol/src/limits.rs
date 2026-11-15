@@ -11,9 +11,11 @@
 //! both sides alike, through [`crate::connection::Timing`].
 //!
 //! Counters (`protocol.md` 4.4, "Dots and counters") are microseconds since the
-//! Unix epoch, so every bound on them (the horizons, the clock rule, the fast
-//! clock warning) is given here in microseconds; the clock rule is also given
-//! in whole days, the unit of Hello's `clock_days` (3.2).
+//! Unix epoch, so every bound on them (the counter ceiling, the clock floor's
+//! cap, the deletion horizon, the slack of a stored high-water mark) is given
+//! here in microseconds. No bound here judges a record or a peer by a clock:
+//! the deletion horizon decides only when a write holder signs a watermark
+//! (4.4, "Expiry by the watermark").
 
 use core::time::Duration;
 
@@ -72,10 +74,6 @@ pub const HELLO_NONCE_LEN: usize = 32;
 pub const LIBP2P_IDENTITY_LEN: usize = 32;
 /// `Close.detail`: at most this many bytes.
 pub const MAX_CLOSE_DETAIL_BYTES: usize = 256;
-/// `Hello.clock_days` at most: 2 097 151 (2^21 − 1, in the year 7711), so that
-/// it takes at most a 3-byte varint, which the largest Hello of section 2
-/// counts; a value above it is malformed (3.2, 4.2).
-pub const MAX_CLOCK_DAYS: u32 = (1 << 21) - 1;
 
 // Section 4.3: proofs.
 
@@ -106,34 +104,30 @@ pub const MAX_CLEANUP_SEALED_BYTES: usize = licketysync_keys::sealed_meta::MAX_C
 /// `MAX_VECTOR_ENTRIES`: entries in a record's vector, and records a write
 /// covers at once (4.4).
 pub const MAX_VECTOR_ENTRIES: usize = 32;
-/// `MAX_COUNTER`: the largest counter, 2^62, so that no arithmetic on
-/// counters can overflow (4.4).
-pub const MAX_COUNTER: u64 = 1 << 62;
-/// `CLOCK_FLOOR_MAX`: the most the clock floor of a new counter may be, 2^61
-/// (4.4, "The writer's rule").
-pub const CLOCK_FLOOR_MAX: u64 = 1 << 61;
 /// One day in counter units (microseconds).
 pub const DAY_US: u64 = 86_400_000_000;
-/// `CLOCK_AHEAD_WARNING`: a received counter this far ahead of the local
-/// clock raises an issue; a stored high-water mark this far above what the
-/// records and the clock justify is corrupt (4.4). One day, in microseconds.
-pub const CLOCK_AHEAD_WARNING: u64 = DAY_US;
-/// `TOMBSTONE_HORIZON`, the deletion horizon: a tombstone or tree delete
-/// expires at a read or write holder once the folder's own time passes its
-/// counter by more than this (4.4). 365 days, in microseconds.
-pub const TOMBSTONE_HORIZON: u64 = 365 * DAY_US;
-/// `CLEANUP_HORIZON`: a cleanup expires at a read or write holder once the
-/// folder's own time passes its counter by more than this; also the window of
-/// `MAX_PEER_NAMES`, by the write holder's wall clock (4.4). 30 days, in
+/// `MAX_COUNTER`, the counter ceiling: the largest counter, 10 000 years of
+/// 365.2425 days in microseconds after 1970, a fixed bound that reads no
+/// clock (4.4, "The counter ceiling"). Below 2^59, so that no arithmetic on
+/// counters can overflow.
+pub const MAX_COUNTER: u64 = 315_569_520_000_000_000;
+/// `CLOCK_FLOOR_MAX`: the most the clock floor of a new counter may be, half
+/// of `MAX_COUNTER`, 5 000 years after 1970 (4.4, "The writer's rule").
+pub const CLOCK_FLOOR_MAX: u64 = MAX_COUNTER / 2;
+/// `MARK_SLACK`: a stored high-water mark this far above what the records
+/// held and the clock floor justify is corrupt (4.4, "Opening a folder"). One
+/// day, in microseconds; a check of this device's own store, never of a
+/// peer's record.
+pub const MARK_SLACK: u64 = DAY_US;
+/// `TOMBSTONE_HORIZON`, the deletion horizon: how long a write holder holds a
+/// tombstone, tree delete or cleanup, by its wall clock since it arrived
+/// there, before it signs a watermark that expires it (4.4, "When a write
+/// holder signs one"); the same for every write holder. 365 days, in
 /// microseconds.
-pub const CLEANUP_HORIZON: u64 = 30 * DAY_US;
-/// `CLOCK_RULE_LIMIT` in whole days, the unit of Hello's `clock_days`: two
-/// devices whose clocks differ by more do not sync (3.2, 4.4).
-pub const CLOCK_RULE_LIMIT_DAYS: u32 = 365;
-/// `CLOCK_RULE_LIMIT` in counter units: a record whose counter is more than
-/// this ahead of the receiver's clock is from the future (4.4 step 4). A
-/// different rule from the deletion horizon, of the same length.
-pub const CLOCK_RULE_LIMIT: u64 = CLOCK_RULE_LIMIT_DAYS as u64 * DAY_US;
+pub const TOMBSTONE_HORIZON: u64 = 365 * DAY_US;
+/// `PEER_NAMES_WINDOW`: the window of `MAX_PEER_NAMES`, by the write
+/// holder's wall clock (4.4, 4.5). 30 days, in microseconds.
+pub const PEER_NAMES_WINDOW: u64 = 30 * DAY_US;
 /// `MAX_REPLACES`: names in an index record's `replaces` (4.4).
 pub const MAX_REPLACES: usize = 64;
 /// `MAX_CLEANUP_ENTRIES`: names in one cleanup record, across its groups
@@ -156,12 +150,9 @@ pub const MAX_PENDING_PUSHES: usize = 4_096;
 /// open on the connection (4.5, "Stale copies"): about 0.24 s of one core.
 pub const MAX_NOTE_VERIFICATIONS: usize = 4_096;
 /// `MAX_PEER_NAMES`: records of one peer's that a write holder names, in
-/// writes and cleanups, per window of `CLEANUP_HORIZON` by its wall clock
-/// (4.4, 4.5).
+/// writes and cleanups, per `PEER_NAMES_WINDOW` by its wall clock (4.4,
+/// 4.5).
 pub const MAX_PEER_NAMES: u64 = 1_048_576;
-/// `MAX_FUTURE_KNOWN`: record hashes of refused records from the future a
-/// device remembers per folder on a connection (4.4 step 4).
-pub const MAX_FUTURE_KNOWN: usize = 1_024;
 /// `SealedMeta.path`: at most this many bytes.
 pub const MAX_PATH_BYTES: usize = 4_096;
 /// `MAX_NAME_BYTES`: the last component of a conflict copy's name, at most
@@ -258,6 +249,18 @@ pub const STATUS_CHUNKS_INTERVAL: Duration = Duration::from_secs(1);
 /// How long a side that sent Close waits before it asks the runtime to close
 /// the transport (4.2).
 pub const CLOSE_FLUSH: Duration = Duration::from_secs(1);
+/// `WATERMARK_CHECK_INTERVAL`: the longest a write holder goes between two
+/// checks for a watermark while a folder is open, by monotonic time; it also
+/// checks when the folder opens and when the device resumes from sleep
+/// (4.4, "When a write holder signs one").
+pub const WATERMARK_CHECK_INTERVAL: Duration = Duration::from_secs(3_600);
+/// `WATERMARK_INTERVAL`: the least time between two watermarks a write
+/// holder signs in a folder, within one opening by a monotonic clock that
+/// counts time asleep and across openings by its wall clock (4.4); also, by
+/// monotonic time, the least time between two rounds that a change of the
+/// greatest watermark owes toward a peer that reports the sealed tier (4.5,
+/// "Round owed"). One day.
+pub const WATERMARK_INTERVAL: Duration = Duration::from_secs(86_400);
 /// How often a connection that waits on the transport's send queue (queued
 /// frames waiting for room, or a request whose departure from the queue starts
 /// its reply deadline) asks to be called again, since the transport drains
@@ -276,10 +279,14 @@ const _: () = assert!(MIN_PAGE_RECORDS <= MAX_PAGE_RECORDS);
 const _: () = assert!(MAX_INDEX_RECORD_BYTES + 64 < MIN_MESSAGE_SIZE as usize);
 // One ChunkReply with the largest chunk always fits (section 2).
 const _: () = assert!(MAX_STORED_LEN + 128 < MIN_MESSAGE_SIZE as usize);
-// The horizons and the clock rule nest under the counter bounds (4.4).
+// The counter bounds (4.4): the floor's cap below the ceiling, the ceiling
+// below 2^59, so that a counter plus any bound here never overflows.
 const _: () = assert!(CLOCK_FLOOR_MAX < MAX_COUNTER);
-const _: () = assert!(CLEANUP_HORIZON < TOMBSTONE_HORIZON);
-const _: () = assert!(CLOCK_RULE_LIMIT == TOMBSTONE_HORIZON);
+const _: () = assert!(MAX_COUNTER < 1 << 59);
+// 10 000 years of 365.2425 days: 3 652 425 days.
+const _: () = assert!(MAX_COUNTER == 3_652_425 * DAY_US);
+const _: () = assert!(WATERMARK_CHECK_INTERVAL.as_secs() < WATERMARK_INTERVAL.as_secs());
+const _: () = assert!(WATERMARK_INTERVAL.as_secs() * 1_000_000 == DAY_US);
 const _: () = assert!(MAX_REPLACES >= 2 * MAX_VECTOR_ENTRIES);
 const _: () = assert!(MAX_WORK_LIST == 1_921);
 const _: () = assert!(MAX_UNSUPPORTED_TYPES == 1 << 15);
@@ -308,21 +315,19 @@ mod tests {
         assert_eq!(INDEX_RECORD_TYPE, 16);
         assert_eq!(CLEANUP_RECORD_TYPE, 17);
         assert_eq!(MAX_VECTOR_ENTRIES, 32);
-        assert_eq!(MAX_COUNTER, 4_611_686_018_427_387_904);
-        assert_eq!(CLOCK_FLOOR_MAX, 2_305_843_009_213_693_952);
-        assert_eq!(CLOCK_AHEAD_WARNING, 86_400_000_000);
+        assert_eq!(MAX_COUNTER, 315_569_520_000_000_000);
+        assert_eq!(CLOCK_FLOOR_MAX, 157_784_760_000_000_000);
+        assert_eq!(MARK_SLACK, 86_400_000_000);
         assert_eq!(TOMBSTONE_HORIZON, 31_536_000_000_000);
-        assert_eq!(CLEANUP_HORIZON, 2_592_000_000_000);
-        assert_eq!(CLOCK_RULE_LIMIT, 31_536_000_000_000);
-        assert_eq!(CLOCK_RULE_LIMIT_DAYS, 365);
-        assert_eq!(MAX_CLOCK_DAYS, 2_097_151);
+        assert_eq!(PEER_NAMES_WINDOW, 2_592_000_000_000);
+        assert_eq!(WATERMARK_CHECK_INTERVAL.as_secs(), 3_600);
+        assert_eq!(WATERMARK_INTERVAL.as_secs(), 86_400);
         assert_eq!(MAX_REPLACES, 64);
         assert_eq!(MAX_CLEANUP_ENTRIES, 16_384);
         assert_eq!(MAX_CLEANUP_GROUPS, 1_024);
         assert_eq!(MAX_STALE_KNOWN, 65_536);
         assert_eq!(MAX_NOTE_VERIFICATIONS, 4_096);
         assert_eq!(MAX_PEER_NAMES, 1_048_576);
-        assert_eq!(MAX_FUTURE_KNOWN, 1_024);
         assert_eq!(MAX_LOCAL_SEQ, 1 << 62);
         assert_eq!(RECONCILE_LEAF_MAX, 64);
         assert_eq!(MAX_RECONCILE_PASSES, 4);

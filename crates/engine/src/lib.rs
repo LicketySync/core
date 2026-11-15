@@ -25,7 +25,7 @@
 //! # Shape
 //!
 //! - [`runtime`]: the traits the engine runs on (time, timers, transport,
-//!   storage, randomness) and the six handlers of [`runtime::Peer`].
+//!   storage, randomness) and the seven handlers of [`runtime::Peer`].
 //! - [`config`]: [`EngineConfig`], its defaults and checks.
 //! - `engine`: [`Engine`], `impl Peer`, how a connection's output is applied,
 //!   and the three phases of every handler (`work`: decide, commit, send;
@@ -40,8 +40,9 @@
 //!   Status sent.
 //! - `store`: the storage layout, the index's stored state and change sets;
 //!   `open`: the folders opened at start (Checking, the open issue,
-//!   Misconfigured, the clock rule's Closed); `pause`: the store-failure
-//!   pause and its probe.
+//!   Misconfigured); `pause`: the store-failure pause and its probe;
+//!   `watermark`: a write holder's checks for a watermark and the rounds a
+//!   change of the greatest watermark owes.
 //! - `write`: fixed-size chunking and the four writes; [`inspect`]: read-only
 //!   views and [`Engine::read_file`].
 //! - `issues`: the bounded Issues list and the log counters; `folder`: the
@@ -87,6 +88,7 @@ mod store;
 mod sync;
 mod timers;
 mod transfer;
+mod watermark;
 mod work;
 mod write;
 

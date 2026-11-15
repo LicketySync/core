@@ -5,9 +5,7 @@
       "notes": "held once; the same body again with a garbage signature is a duplicate, not verified",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "9a7e95da4a1498944dfbe6b2b12fb314b20f532909806542b8e5ac0a54968ce2",
@@ -15,9 +13,7 @@
           "writer_fault": null
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "duplicate",
           "own_counter_ahead": false,
           "record": "9a7e95da4a1498944dfbe6b2b12fb314b20f532909806542b8e5ac0a54968ce2",
@@ -33,9 +29,7 @@
       "notes": "held once; the same body again with a garbage signature is a duplicate, not verified",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "9a7e95da4a1498944dfbe6b2b12fb314b20f532909806542b8e5ac0a54968ce2",
@@ -43,9 +37,7 @@
           "writer_fault": null
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "duplicate",
           "own_counter_ahead": false,
           "record": "9a7e95da4a1498944dfbe6b2b12fb314b20f532909806542b8e5ac0a54968ce2",
@@ -61,9 +53,7 @@
       "notes": "held once; the same body again with a garbage signature is a duplicate, not verified",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "9a7e95da4a1498944dfbe6b2b12fb314b20f532909806542b8e5ac0a54968ce2",
@@ -71,9 +61,7 @@
           "writer_fault": null
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "duplicate",
           "own_counter_ahead": false,
           "record": "9a7e95da4a1498944dfbe6b2b12fb314b20f532909806542b8e5ac0a54968ce2",
@@ -89,9 +77,7 @@
       "notes": "v2 held; v1 forged is obsolete (v2 names it), ignored unverified; v3 forged replaces v2, so it is verified: closed",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "obsolete",
           "own_counter_ahead": false,
           "record": "9a7e95da4a1498944dfbe6b2b12fb314b20f532909806542b8e5ac0a54968ce2",
@@ -107,24 +93,20 @@
     },
     {
       "name": "expired-tombstone-forged-read-holder",
-      "notes": "a tombstone, then a record a horizon and a second later: the tombstone expires; offered again forged",
+      "notes": "a tombstone, then the watermark its writer signed a horizon and two seconds later: the tombstone expires; offered again forged",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [
             "917593ec7062bd0075156f749f6d39110389398f1e44b801d2d32b6953e28cb0"
           ],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
-          "record": "923d1b1155820c79f642291b8f8430ce8410d1bad7e2a06993941c6749ac3293",
+          "record": "f56fb7e3a4dd652cb488a393a2788f13c6d21567d05b41ab4c04674055971365",
           "rows": [],
           "writer_fault": null
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "expired",
           "own_counter_ahead": false,
           "record": "917593ec7062bd0075156f749f6d39110389398f1e44b801d2d32b6953e28cb0",
@@ -137,17 +119,15 @@
     },
     {
       "name": "expired-tombstone-forged-write-holder",
-      "notes": "a tombstone, then a record a horizon and a second later: the tombstone expires; offered again forged",
+      "notes": "a tombstone, then the watermark its writer signed a horizon and two seconds later: the tombstone expires; offered again forged",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [
             "917593ec7062bd0075156f749f6d39110389398f1e44b801d2d32b6953e28cb0"
           ],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
-          "record": "923d1b1155820c79f642291b8f8430ce8410d1bad7e2a06993941c6749ac3293",
+          "record": "f56fb7e3a4dd652cb488a393a2788f13c6d21567d05b41ab4c04674055971365",
           "rows": [],
           "writer_fault": null
         },
@@ -161,9 +141,7 @@
       "notes": "a vector entry equal to the counter: held opaque, counted in the digest; the next write at the path names it",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held opaque",
           "own_counter_ahead": false,
           "record": "af323b759c35e3953e8fe832f3bce89a6493981006de377796170d79a3d474b4",
@@ -183,9 +161,7 @@
       "notes": "a record under this device's ID five above its mark, then one at the mark",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": true,
           "record": "08d8b5611b52b5e34e30b566228da9c197688e2dc4d6baf093b19e3241681dbe",
@@ -195,9 +171,7 @@
           "writer_fault": null
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "69fad4d6cb30397ecb3dc03332d1028539ef9275302e610229f88d7cfdbd59a8",
@@ -207,86 +181,65 @@
       ]
     },
     {
-      "name": "counter-ahead-of-the-clock",
-      "notes": "a day and a microsecond ahead (warned), exactly a day (not), and the first forged once something replaces it (ignored, read holder)",
+      "name": "far-from-the-clock",
+      "notes": "counters of 1, a year and a microsecond ahead of T0, and MAX_COUNTER: each held, as any record",
       "steps": [
         {
-          "clock_ahead_us": 86400000001,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
-          "record": "f222020361cfef2c4830acc2c88460e63912593e386321308ae7a62a17be5ccc",
-          "rows": [
-            "Counter ahead of the clock"
-          ],
-          "writer_fault": null
-        },
-        {
-          "clock_ahead_us": null,
-          "dropped": [],
-          "from_the_future": false,
-          "judgement": "held",
-          "own_counter_ahead": false,
-          "record": "9e09c18e8293336b5e2492a030a2f1712f8c18c3620b491ed07ec81204efdd32",
+          "record": "8a71042056caf176141fb7f90cb72e73f41abb1c7f83cc4f072d08b7f6a5c04d",
           "rows": [],
           "writer_fault": null
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
-          "judgement": "obsolete",
+          "judgement": "held",
           "own_counter_ahead": false,
-          "record": "f222020361cfef2c4830acc2c88460e63912593e386321308ae7a62a17be5ccc",
-          "rows": [
-            "Obsolete"
-          ],
+          "record": "9d8932ab073b9842c9bc76f3d1f447ff99eb33ac79de4f4c519866586ef4b761",
+          "rows": [],
+          "writer_fault": null
+        },
+        {
+          "dropped": [],
+          "judgement": "held",
+          "own_counter_ahead": false,
+          "record": "5ef75724773bbdb8a26861eea4f9187880d1fb4fecfeea4e3f429715e3a6cf8d",
+          "rows": [],
           "writer_fault": null
         }
       ]
     },
     {
-      "name": "from-the-future",
-      "notes": "a year and a microsecond ahead (refused, verified, remembered on the connection), again with a garbage signature (ignored), forged on a fresh connection (closed), exactly a year (held)",
+      "name": "cleanups-with-no-group",
+      "notes": "a cleanup with no group and no watermark (held, changing nothing), one whose watermark equals its counter (a writer fault, counting for nothing), and one with no group carrying the watermark T0 + 10, which expires the first",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": true,
-          "judgement": "from the future",
-          "own_counter_ahead": false,
-          "record": "1bac173a7b14918cccd46146d3458e7f64a4005e1b06212a64be300c32ce3454",
-          "rows": [
-            "From the future"
-          ],
-          "writer_fault": null
-        },
-        {
-          "clock_ahead_us": null,
-          "dropped": [],
-          "from_the_future": false,
-          "judgement": "from the future",
-          "own_counter_ahead": false,
-          "record": "1bac173a7b14918cccd46146d3458e7f64a4005e1b06212a64be300c32ce3454",
-          "rows": [
-            "From the future"
-          ],
-          "writer_fault": null
-        },
-        {
-          "closes": "Forged"
-        },
-        {
-          "clock_ahead_us": 31536000000000,
-          "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
-          "record": "82518f24524b4728f2c34731b50d53cb4db4228f67cdd1dc043e7690b68a59b3",
+          "record": "2c8d401940712b627b30f8e211ff2ce9d65f7657d7d9077f432f78cba8388eb8",
+          "rows": [],
+          "writer_fault": null
+        },
+        {
+          "dropped": [],
+          "judgement": "held opaque",
+          "own_counter_ahead": false,
+          "record": "ad611468ae2a724be824d77310fc58a200f684148a921f7a32bdf0d1555ae290",
           "rows": [
-            "Counter ahead of the clock"
+            "Writer fault"
           ],
+          "writer_fault": "a watermark of 1800000000000030, not below the cleanup's counter 1800000000000030"
+        },
+        {
+          "dropped": [
+            "2c8d401940712b627b30f8e211ff2ce9d65f7657d7d9077f432f78cba8388eb8"
+          ],
+          "judgement": "held",
+          "own_counter_ahead": false,
+          "record": "dfe1b7d7e392cf354a230f35ec1755c9b7e205291013c4606be3dca9411b0dd2",
+          "rows": [],
           "writer_fault": null
         }
       ]
@@ -296,9 +249,7 @@
       "notes": "a vector entry equal to its counter that would cover the good record: opaque, covers nothing; a later version covering both dots drops only the good one",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held opaque",
           "own_counter_ahead": false,
           "record": "3b3b0867a5632ada215bf931819ecaec1447e80cd86fbd08b85b4118819390e2",
@@ -308,9 +259,7 @@
           "writer_fault": "a vector entry whose counter is not below the record's"
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "3605c5c7ffdf51953c0160da1409a6d283b9b28e950bcea774ebf895fcb60b66",
@@ -318,11 +267,9 @@
           "writer_fault": null
         },
         {
-          "clock_ahead_us": null,
           "dropped": [
             "3605c5c7ffdf51953c0160da1409a6d283b9b28e950bcea774ebf895fcb60b66"
           ],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "5e3ed7e0351ce5af00305d11b90a8d8f979a8ca6d39bbe9307276572b5912953",
@@ -338,9 +285,7 @@
       "notes": "a vector entry equal to its counter that would cover the good record: opaque, covers nothing; a later version covering both dots drops only the good one",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "3605c5c7ffdf51953c0160da1409a6d283b9b28e950bcea774ebf895fcb60b66",
@@ -348,9 +293,7 @@
           "writer_fault": null
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held opaque",
           "own_counter_ahead": false,
           "record": "3b3b0867a5632ada215bf931819ecaec1447e80cd86fbd08b85b4118819390e2",
@@ -360,11 +303,9 @@
           "writer_fault": "a vector entry whose counter is not below the record's"
         },
         {
-          "clock_ahead_us": null,
           "dropped": [
             "3605c5c7ffdf51953c0160da1409a6d283b9b28e950bcea774ebf895fcb60b66"
           ],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "5e3ed7e0351ce5af00305d11b90a8d8f979a8ca6d39bbe9307276572b5912953",
@@ -380,9 +321,7 @@
       "notes": "300 bytes of metadata padded to 1 024: a writer fault",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held opaque",
           "own_counter_ahead": false,
           "record": "49850aead01423b1cf40c95677ba558a09f48b54617185eabf2cb5faa112d48f",
@@ -426,9 +365,7 @@
       "notes": "shared writer faults: held opaque, named by the next write at the path, dropped at a sealed peer by those names",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held opaque",
           "own_counter_ahead": false,
           "record": "b71fbc126a1bdb23d58328ade82d09d411352465e37efaca70284609a3b3ca3e",
@@ -438,9 +375,7 @@
           "writer_fault": "a tree delete that is not a directory of size 0"
         },
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held opaque",
           "own_counter_ahead": false,
           "record": "75d80b6f7ca4cbad0836e19d926d483ceb765f70ed05729fad7af1e01fec5868",
@@ -450,12 +385,10 @@
           "writer_fault": "a tree delete that is not a directory of size 0"
         },
         {
-          "clock_ahead_us": null,
           "dropped": [
             "75d80b6f7ca4cbad0836e19d926d483ceb765f70ed05729fad7af1e01fec5868",
             "b71fbc126a1bdb23d58328ade82d09d411352465e37efaca70284609a3b3ca3e"
           ],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "d55d9991474682a9ba2fd95e3cd78764afcde96f3de6ff438cef7ce4e08faf41",
@@ -480,9 +413,7 @@
       "notes": "held; nothing of its seal read",
       "steps": [
         {
-          "clock_ahead_us": null,
           "dropped": [],
-          "from_the_future": false,
           "judgement": "held",
           "own_counter_ahead": false,
           "record": "57e5d8c0293292050bb2ac27d141a64768a8c966f8af6a5bfa4c606931b786e2",

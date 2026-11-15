@@ -8,14 +8,15 @@
 //! folder across both request kinds, the reply deadline, the serving of the
 //! peer's requests with `INDEX_REQUEST_MIN_INTERVAL` for its `IndexRequest`s
 //! and root `ReconcileRequest`s, pushes and the empty push owed, the counting
-//! of the peer's pushes into its cursor, and the round owed.
+//! of the peer's pushes into its cursor, and the round owed, toward a peer
+//! that reports the sealed tier at most once per `WATERMARK_INTERVAL` for a
+//! change of the greatest watermark.
 //!
 //! Every table here is per open folder and bounded (TM-22, section 5 "Limits
 //! are per connection"): one outstanding request each way, the work list of
 //! at most `MAX_WORK_LIST` prefixes, the record hashes of the current
 //! `RECORDS` reply (at most `RECONCILE_LEAF_MAX`), one pending set of 16 child
-//! digests, the records from the future refused on this connection (at most
-//! `MAX_FUTURE_KNOWN`), the pushes awaiting their judgements (at most
+//! digests, the pushes awaiting their judgements (at most
 //! `MAX_PENDING_PUSHES`), and a few flags and times; and, for the whole
 //! connection, one count of note verifications (at most
 //! `MAX_NOTE_VERIFICATIONS` a window, [`NoteBudget`]). All of it is freed
@@ -29,17 +30,17 @@
 //! pages, so that whether a pass brought a record, or skipped one, is known
 //! before the pass ends.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 use core::time::Duration;
 
-use licketysync_keys::{DeviceId, FolderId, FolderVerifier, RecordHash, SetDigest};
+use licketysync_keys::{DeviceId, FolderId, FolderVerifier, RecordHash, SetDigest, Tier};
 
 use super::{Connection, Event, Output, SendError, State, Tag, Tick, open_mut};
 use crate::exchange::{IndexView, Prefix, page_limit};
 use crate::limits::{
-    MAX_FUTURE_KNOWN, MAX_LOCAL_SEQ, MAX_NOTE_VERIFICATIONS, MAX_PAGE_RECORDS, MAX_PASS_REQUESTS,
-    MAX_PENDING_PUSHES, MAX_RECONCILE_PASSES, MAX_WORK_LIST, RECONCILE_LEAF_MAX,
+    MAX_LOCAL_SEQ, MAX_NOTE_VERIFICATIONS, MAX_PAGE_RECORDS, MAX_PASS_REQUESTS, MAX_PENDING_PUSHES,
+    MAX_RECONCILE_PASSES, MAX_WORK_LIST, RECONCILE_LEAF_MAX,
 };
 use crate::messages::{
     IndexRecords, IndexRequest, Message, ReconcileOutcome, ReconcileReply, ReconcileRequest,
@@ -57,14 +58,11 @@ use crate::rules::Cause;
 pub enum Judgement {
     /// Already held: ignored, not verified.
     Duplicate,
-    /// Past the folder's own time by its horizon: ignored, not verified.
+    /// A tombstone, tree delete or cleanup at or below the greatest
+    /// watermark held: ignored, not verified.
     Expired,
     /// Something held replaces it and it replaces nothing held: ignored.
     Obsolete,
-    /// More than `CLOCK_RULE_LIMIT` ahead of this device's clock: verified,
-    /// neither held nor relayed (or ignored again unverified on this
-    /// connection).
-    FromTheFuture,
     /// Verified and held, applied.
     Held,
     /// Verified and held opaque: a writer fault.
@@ -93,7 +91,6 @@ impl Judgement {
             Self::Duplicate => Some(Cause::Duplicate),
             Self::Expired => Some(Cause::Expired),
             Self::Obsolete | Self::DroppedBeneath => Some(Cause::Obsolete),
-            Self::FromTheFuture => Some(Cause::FromTheFuture),
             Self::HeldOpaque => Some(Cause::WriterFault),
             Self::Held | Self::Skipped => None,
         }
@@ -149,25 +146,13 @@ pub struct ReconcileServe {
     pub digest: SetDigest,
 }
 
-/// The memory one connection keeps for one open folder that the index reads
-/// and updates when it judges a record from this peer (`protocol.md` 4.4
-/// step 4; it lives with the connection and is freed when it closes): the
-/// record hashes of records from the future
-/// refused on this connection, at most `MAX_FUTURE_KNOWN`, the oldest
-/// forgotten first.
-#[derive(Clone, Debug, Default)]
-pub struct FolderMemory {
-    future: VecDeque<RecordHash>,
-    future_set: BTreeSet<RecordHash>,
-}
-
 /// The one budget of verifications for notes of stale copies that a
 /// connection spends across every folder open on it (`protocol.md` 4.5
 /// "Stale copies"): at most `MAX_NOTE_VERIFICATIONS` in each window of
 /// `INDEX_RESYNC_INTERVAL` of monotonic time. A window starts at the first
 /// reading after the last one ended and is fixed, so a burst across a
 /// window's boundary can spend two windows' budget, as the spec states.
-/// Only a [`Connection`] makes one ([`Connection::memories_mut`]), so that
+/// Only a [`Connection`] makes one ([`Connection::notes_mut`]), so that
 /// the bound is the connection's, whatever the number of folders; outside
 /// this crate, tests make one with [`NoteBudget::for_tests`]. It is
 /// neither `Clone` nor `Copy`, so that a copy cannot spend a budget of its
@@ -223,34 +208,6 @@ impl NoteBudget {
             self.used = 0;
             self.window_end = Some(now.saturating_add(window));
         }
-    }
-}
-
-impl FolderMemory {
-    /// Whether a record from the future with this hash was refused on this
-    /// connection already: it is ignored again without verifying.
-    #[must_use]
-    pub fn knows_future(&self, hash: &RecordHash) -> bool {
-        self.future_set.contains(hash)
-    }
-
-    /// Remembers a record from the future refused on this connection.
-    pub fn remember_future(&mut self, hash: RecordHash) {
-        if !self.future_set.insert(hash) {
-            return;
-        }
-        self.future.push_back(hash);
-        if self.future.len() > MAX_FUTURE_KNOWN
-            && let Some(old) = self.future.pop_front()
-        {
-            self.future_set.remove(&old);
-        }
-    }
-
-    /// The records from the future remembered, oldest first (the tests').
-    #[cfg(test)]
-    pub(crate) fn future(&self) -> impl Iterator<Item = &RecordHash> + '_ {
-        self.future.iter()
     }
 }
 
@@ -374,7 +331,11 @@ enum Served {
     Records,
 }
 
-/// One open folder's exchange state on this connection.
+/// One open folder's exchange state on this connection. For the round a
+/// change of the greatest watermark owes (4.5, "Round owed") it keeps two
+/// bits and one time: whether the peer reported the sealed tier, whether a
+/// change waits for `WATERMARK_INTERVAL`, and, toward a sealed peer, when a
+/// change last owed a round.
 #[derive(Debug)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -382,7 +343,10 @@ enum Served {
 )]
 pub(super) struct Exchange {
     pub(super) verifier: FolderVerifier,
-    pub(super) memory: FolderMemory,
+    /// The tier the peer reported for the folder (3.5): toward a peer that
+    /// reports the sealed tier, a change of the greatest watermark owes a
+    /// round at most once per `WATERMARK_INTERVAL` (4.5, "Round owed").
+    sealed_peer: bool,
     outstanding: Option<Outstanding>,
     round: Option<Round>,
     /// A [`Event::RequestDue`] went: the engine is to call
@@ -395,6 +359,14 @@ pub(super) struct Exchange {
     reply_ended: bool,
     round_owed: bool,
     last_owed_start: Option<Duration>,
+    /// Toward a peer that reports the sealed tier: the monotonic time at
+    /// which a change of the greatest watermark last set `round_owed`, none
+    /// before the first.
+    watermark_owed: Option<Duration>,
+    /// Toward such a peer: a change of the greatest watermark came within
+    /// `WATERMARK_INTERVAL` of `watermark_owed`, and sets `round_owed` once
+    /// that interval has passed.
+    watermark_waiting: bool,
     /// The folder is paused (a store failure): no round starts, pushes are
     /// not counted.
     paused: bool,
@@ -419,10 +391,10 @@ pub(super) struct Exchange {
 }
 
 impl Exchange {
-    pub(super) fn new(verifier: FolderVerifier) -> Self {
+    pub(super) fn new(verifier: FolderVerifier, peer_tier: Tier) -> Self {
         Self {
             verifier,
-            memory: FolderMemory::default(),
+            sealed_peer: peer_tier == Tier::Sealed,
             outstanding: None,
             round: None,
             due: false,
@@ -430,6 +402,8 @@ impl Exchange {
             reply_ended: false,
             round_owed: false,
             last_owed_start: None,
+            watermark_owed: None,
+            watermark_waiting: false,
             paused: false,
             counting: None,
             pending_pushes: VecDeque::new(),
@@ -443,9 +417,10 @@ impl Exchange {
         }
     }
 
-    /// When an owed round may start, or a held request of the peer's may be
-    /// served.
-    fn wake(&self, resync: Duration) -> Option<Duration> {
+    /// When an owed round may start, a held request of the peer's may be
+    /// served, or a change of the greatest watermark that waits for
+    /// `WATERMARK_INTERVAL` may owe its round.
+    fn wake(&self, resync: Duration, watermark: Duration) -> Option<Duration> {
         let serve = self
             .serving
             .as_ref()
@@ -455,7 +430,48 @@ impl Exchange {
             .then_some(self.last_owed_start)
             .flatten()
             .map(|l| l.saturating_add(resync));
-        [serve, owed].into_iter().flatten().min()
+        let waiting = self
+            .watermark_waiting
+            .then_some(self.watermark_owed)
+            .flatten()
+            .map(|l| l.saturating_add(watermark));
+        [serve, owed, waiting].into_iter().flatten().min()
+    }
+
+    /// A change of the greatest watermark at `now` (4.5, "Round owed"): it
+    /// owes a round at once toward a peer that reports the read or write
+    /// tier, and toward one that reports the sealed tier at once only when
+    /// none was owed for such a change within `interval` before; otherwise
+    /// it waits until that interval has passed ([`Exchange::watermark_due`]).
+    fn watermark_moved(&mut self, now: Duration, interval: Duration) {
+        if !self.sealed_peer {
+            self.round_owed = true;
+            return;
+        }
+        if self
+            .watermark_owed
+            .is_none_or(|l| now >= l.saturating_add(interval))
+        {
+            self.round_owed = true;
+            self.watermark_owed = Some(now);
+            self.watermark_waiting = false;
+        } else {
+            self.watermark_waiting = true;
+        }
+    }
+
+    /// A change that waited owes its round once `interval` has passed since
+    /// the last one that owed one.
+    fn watermark_due(&mut self, now: Duration, interval: Duration) {
+        if self.watermark_waiting
+            && self
+                .watermark_owed
+                .is_none_or(|l| now >= l.saturating_add(interval))
+        {
+            self.watermark_waiting = false;
+            self.watermark_owed = Some(now);
+            self.round_owed = true;
+        }
     }
 
     fn stop_counting(&mut self) {
@@ -531,16 +547,21 @@ impl Connection {
 
     pub(super) fn exchange_wake(&self) -> Option<Duration> {
         let resync = self.config.timing.index_resync;
+        let watermark = self.config.timing.watermark_interval;
         self.folders
             .values()
-            .filter_map(|f| f.open.as_ref()?.wake(resync))
+            .filter_map(|f| f.open.as_ref()?.wake(resync, watermark))
             .min()
     }
 
     pub(super) fn wake_exchange(&mut self, out: &mut Output) {
+        let (now, interval) = (self.now, self.config.timing.watermark_interval);
         let folders: Vec<FolderId> = self.open_folders().copied().collect();
         for folder in folders {
             self.announce_serve(folder, out);
+            if let Some(x) = open_mut(&mut self.folders, &folder) {
+                x.watermark_due(now, interval);
+            }
             self.start_owed_round(folder, out);
         }
     }
@@ -895,19 +916,38 @@ impl Connection {
         out
     }
 
-    /// The connection's memories that the index reads and updates when it
-    /// judges this peer's records of `folder`: the folder's
-    /// [`FolderMemory`], and the connection's one [`NoteBudget`], whose
-    /// window this call moves on at `tick`. `None` when the folder is not
-    /// open.
-    pub fn memories_mut(
-        &mut self,
-        tick: Tick,
-        folder: &FolderId,
-    ) -> Option<(&mut FolderMemory, &mut NoteBudget)> {
+    /// A commit of this side's changed the greatest watermark of `folder`
+    /// (4.4, "Expiry by the watermark"; 4.5, "Round owed"): it raised it and
+    /// expired a record, or lowered it. A record the peer pushed and this
+    /// side ignored, as replaced by a deletion that has now expired or as
+    /// expired by a watermark that has now fallen, is judged again by the
+    /// round this owes: at once when the peer reports the read or write tier,
+    /// and, when it reports the sealed tier, at most once per
+    /// `WATERMARK_INTERVAL` of monotonic time, a later change waiting until
+    /// that interval has passed. The round starts as [`Connection::owe_round`]
+    /// says. A folder not open here, or a connection not established, is
+    /// left as it is.
+    pub fn watermark_moved(&mut self, tick: Tick, folder: FolderId) -> Output {
+        let mut out = Output::default();
+        self.observe(tick, &mut out);
+        let (now, interval) = (self.now, self.config.timing.watermark_interval);
+        if self.state == State::Established
+            && let Some(x) = open_mut(&mut self.folders, &folder)
+        {
+            x.watermark_moved(now, interval);
+            self.start_owed_round(folder, &mut out);
+        }
+        self.finish(&mut out);
+        out
+    }
+
+    /// The connection's one [`NoteBudget`], which the index spends when it
+    /// verifies this peer's records of `folder` for notes, its window moved
+    /// on at `tick`. `None` when the folder is not open.
+    pub fn notes_mut(&mut self, tick: Tick, folder: &FolderId) -> Option<&mut NoteBudget> {
         self.notes.refill(tick.now, self.config.timing.index_resync);
         let notes = &mut self.notes;
-        open_mut(&mut self.folders, folder).map(|x| (&mut x.memory, notes))
+        open_mut(&mut self.folders, folder).map(|_| notes)
     }
 
     /// Sends one page of the reply to the peer's request that
@@ -1731,6 +1771,15 @@ impl Connection {
             .get(folder)
             .and_then(|f| f.open.as_ref())
             .is_some_and(|x| x.round_owed)
+    }
+
+    /// Whether an open folder's change of the greatest watermark waits for
+    /// `WATERMARK_INTERVAL` to owe its round, for tests.
+    pub(super) fn watermark_waiting(&self, folder: &FolderId) -> bool {
+        self.folders
+            .get(folder)
+            .and_then(|f| f.open.as_ref())
+            .is_some_and(|x| x.watermark_waiting)
     }
 
     /// Whether a round of this side's is under way, for tests.

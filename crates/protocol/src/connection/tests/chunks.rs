@@ -90,9 +90,13 @@ fn status_frame(f: &FolderId, n: u64) -> Vec<u8> {
     }))
 }
 
-/// Fires B's wake-ups up to `t` (B alone; A's engine is off).
+/// Fires B's wake-ups up to `t` (B alone; A's engine is off). A wake-up
+/// that never clears fails the test instead of hanging it.
 fn wake_b_until(p: &mut Pair, t: Duration) {
+    let mut stuck = 0_u32;
     while let Some(w) = p.b.wake.filter(|w| *w <= t) {
+        stuck = if w > p.now { 0 } else { stuck + 1 };
+        assert!(stuck < 10_000, "a wake-up at {w:?} that never clears");
         p.now = p.now.max(w);
         let out = p.b.conn.wake(Tick::at(p.now));
         p.b.apply(p.now, out);
@@ -350,7 +354,10 @@ fn the_busy_backoff_doubles_to_64_s_and_resets_on_ok() {
         assert_eq!(blocked.err(), Some(SendError::BackingOff));
         // Wake at each deadline until the backoff ends.
         let busy_at = p.now;
+        let mut wakes = 0_u32;
         loop {
+            wakes += 1;
+            assert!(wakes < 10_000, "the backoff never ended");
             p.now = p.b.wake.unwrap();
             let out = p.b.conn.wake(Tick::at(p.now));
             let events = p.b.apply(p.now, out);
@@ -394,7 +401,10 @@ fn the_busy_backoff_doubles_to_64_s_and_resets_on_ok() {
 /// Wakes B at each deadline until the backoff ends; how long that took.
 fn allowed_after(p: &mut Pair) -> Duration {
     let start = p.now;
+    let mut wakes = 0_u32;
     loop {
+        wakes += 1;
+        assert!(wakes < 10_000, "the backoff never ended");
         p.now = p.b.wake.unwrap();
         let out = p.b.conn.wake(Tick::at(p.now));
         let events = p.b.apply(p.now, out);

@@ -333,7 +333,6 @@ fn the_change_set_frees_the_chunks_no_record_names_any_more_i2() {
         let mut fill = |b: &mut [u8]| b.fill(1);
         let mut arrival = crate::Arrival {
             peer: dev(0xd0),
-            memory: &mut x.memory,
             notes: &mut x.notes,
             clock_us: T0,
             rng: &mut fill,

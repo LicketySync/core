@@ -8,11 +8,12 @@
 //! contract (in order, once, loss only as a disconnect), timer generations,
 //! connection state, the wall clock and the event budget.
 
-// The simulator library uses the keys crate for its engine scenarios; these
-// tests of the toy peers do not.
+// The simulator library uses the keys and protocol crates for its engine
+// scenarios; these tests of the toy peers do not.
 use core::cell::RefCell;
 use core::time::Duration;
 use licketysync_keys as _;
+use licketysync_protocol as _;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 

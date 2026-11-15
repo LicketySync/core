@@ -7,9 +7,9 @@
 //!
 //! Design. The engine never performs I/O and never reads a clock of its own. A
 //! runtime (the daemon in production, `licketysync-sim` in tests) owns the
-//! clocks, the network and the disk and calls the engine through the six
+//! clocks, the network and the disk and calls the engine through the seven
 //! handlers of [`Peer`]: started, a message arrived, a timer fired, a peer
-//! connected or disconnected, stopping. Each handler receives a [`Context`]
+//! connected or disconnected, the device resumed from sleep, stopping. Each handler receives a [`Context`]
 //! through which the peer reads the current [`Instant`] and the device's wall
 //! clock, sends bytes, arms or cancels a timer, reads and writes its [`Storage`]
 //! and draws randomness; it never holds a reference to the context between
@@ -255,19 +255,29 @@ impl std::error::Error for SendError {}
 pub trait Clock {
     /// The current instant on this runtime's monotonic clock: for timeouts,
     /// intervals and knowing how long ago something happened in this process.
+    /// It keeps counting while the device sleeps (`CLOCK_BOOTTIME` on Linux
+    /// and Android, `mach_continuous_time` on macOS and iOS,
+    /// `QueryInterruptTime` on Windows; not `std::time::Instant`, which stops
+    /// on Linux and macOS), so that the least interval between two
+    /// watermarks a write holder signs within one opening of a folder counts
+    /// time asleep (`protocol.md` 4.4, "When a write holder signs one"); a
+    /// runtime with no such clock (a browser) signs late after a sleep,
+    /// which costs storage only.
     fn now(&self) -> Instant;
 
     /// The wall clock as this device believes it: seconds since the Unix
     /// epoch. It may be wrong by any amount, may jump forwards or backwards
-    /// between two readings, and differs between devices. It serves the
-    /// Hello's `clock_days` for the clock rule (`protocol.md` 3.2), and,
-    /// through [`Clock::wall_time_us`], the counters of the records this
-    /// device writes (a floor under them: `max(hw + 1, clock)`), its check of
-    /// each record's counter against the clock rule, and its informational
-    /// `written_at` (4.4). It orders nothing: versions are ordered by their
-    /// vectors, and a deletion expires by the folder's own time, the latest
-    /// counter it holds, never by this clock (4.4, "Expiry"; TM-40). Later
-    /// phases use it for the LAN beacon window and the daily discovery hash.
+    /// between two readings, and differs between devices. Through
+    /// [`Clock::wall_time_us`] it serves the counters of the records this
+    /// device writes (a floor under them: `max(hw + 1, clock)`), their
+    /// informational `written_at`, a write holder's arrivals of deletions
+    /// and cleanups and the interval since the last watermark it signed in
+    /// an earlier opening of a folder (4.4). It orders nothing and refuses
+    /// nothing: versions are ordered by their vectors, and a deletion is
+    /// forgotten only by a watermark a write holder signs, which this clock
+    /// decides only the time of (4.4, "Expiry by the watermark"; TM-40).
+    /// Later phases use it for the LAN beacon window and the daily discovery
+    /// hash.
     fn wall_time(&self) -> u64;
 
     /// The same wall clock in microseconds since the Unix epoch (0 before
@@ -411,7 +421,7 @@ pub trait Context: Clock + Timers + Transport + Randomness {
     fn storage(&mut self) -> &mut dyn Storage;
 }
 
-/// An engine instance as the runtime drives it. All six handlers run to
+/// An engine instance as the runtime drives it. All seven handlers run to
 /// completion before the next begins; none performs I/O except through `cx`.
 ///
 /// For any one [`PeerId`], [`Peer::on_connected`] and
@@ -454,6 +464,13 @@ pub trait Peer {
 
     /// The timer `id` fired, at or after its deadline, once per arming.
     fn on_timer(&mut self, cx: &mut dyn Context, id: TimerId);
+
+    /// The device resumed from sleep (the daemon learns it from the
+    /// operating system; the simulator from its scenario). The engine checks
+    /// for a watermark in every folder it writes (`protocol.md` 4.4, "When a
+    /// write holder signs one"). A peer with no use for it does nothing, the
+    /// default.
+    fn on_resumed(&mut self, _cx: &mut dyn Context) {}
 
     /// A connection to `peer` is open: a new stream that starts from nothing.
     /// [`Transport::send`] to it works from this call until

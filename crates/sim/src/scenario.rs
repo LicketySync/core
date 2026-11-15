@@ -116,6 +116,15 @@ pub enum Fault {
         /// When.
         at: Instant,
     },
+    /// The peer's device resumes from sleep at `at`: `on_resumed` runs, if
+    /// the peer runs. Its clocks do not move for it: a sleep with time
+    /// passing is a `ClockStep` too.
+    Resume {
+        /// Which peer.
+        peer: PeerId,
+        /// When.
+        at: Instant,
+    },
 }
 
 /// Everything a run needs, before it starts.
@@ -454,6 +463,8 @@ enum FaultEvent {
     DiskFull(PeerId),
     DiskFreed(PeerId),
     ClockStep(PeerId, u64),
+    /// From a `Fault::Resume`.
+    Resume(PeerId),
     /// From a `Fault::Reconnect`.
     Reconnect(PeerId, PeerId),
     /// The network's own reconnection after a drop, carrying the epoch the
@@ -514,6 +525,7 @@ enum Call<'a> {
     Timer(TimerId),
     Connected(PeerId),
     Disconnected(PeerId),
+    Resumed,
     Stop,
 }
 
@@ -1033,6 +1045,7 @@ impl<P: Peer> Sim<P> {
             Fault::ClockStep { peer, at, secs } => {
                 self.schedule_fault_event(at, FaultEvent::ClockStep(peer, secs));
             }
+            Fault::Resume { peer, at } => self.schedule_fault_event(at, FaultEvent::Resume(peer)),
         }
     }
 
@@ -1085,6 +1098,7 @@ impl<P: Peer> Sim<P> {
             Call::Timer(timer) => peer.on_timer(&mut cx, timer),
             Call::Connected(q) => peer.on_connected(&mut cx, q),
             Call::Disconnected(q) => peer.on_disconnected(&mut cx, q),
+            Call::Resumed => peer.on_resumed(&mut cx),
             Call::Stop => peer.on_stop(&mut cx),
         }
         cx.fx.list
@@ -1478,6 +1492,12 @@ impl<P: Peer> Sim<P> {
                 if let Some(node) = self.nodes.get_mut(&p) {
                     node.stepped = node.stepped.saturating_add(secs);
                     self.record(Some(p), EventKind::ClockStep(secs));
+                }
+            }
+            FaultEvent::Resume(p) => {
+                if self.nodes.get(&p).is_some_and(|n| n.peer.is_some()) {
+                    self.record(Some(p), EventKind::Resume);
+                    self.invoke(p, Call::Resumed);
                 }
             }
             FaultEvent::DiskFreed(p) => {

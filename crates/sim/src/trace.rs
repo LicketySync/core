@@ -142,6 +142,8 @@ pub enum EventKind {
     DiskFreed,
     /// The peer's wall clock jumped ahead by this many seconds.
     ClockStep(u64),
+    /// The peer's device resumed from sleep; `on_resumed` ran.
+    Resume,
 }
 
 /// One event of the run.
@@ -192,6 +194,7 @@ impl fmt::Display for TraceEvent {
             EventKind::DiskFull => f.write_str("disk full"),
             EventKind::DiskFreed => f.write_str("disk freed"),
             EventKind::ClockStep(secs) => write!(f, "wall clock steps {secs} s ahead"),
+            EventKind::Resume => f.write_str("resumes from sleep"),
         }
     }
 }
@@ -321,6 +324,7 @@ impl TraceEvent {
                 h.write(&[23]);
                 h.write_u64(*secs);
             }
+            EventKind::Resume => h.write(&[24]),
         }
     }
 }
@@ -526,6 +530,7 @@ mod tests {
             EventKind::DiskFull,
             EventKind::DiskFreed,
             EventKind::ClockStep(86_400),
+            EventKind::Resume,
         ]
     }
 

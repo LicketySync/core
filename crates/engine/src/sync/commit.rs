@@ -8,8 +8,11 @@
 //! Per folder, in this order: a local write (first, so that a write the
 //! index refuses is dropped with nothing else staged), the records of each
 //! queued page, the ends of rounds with their cleanups, the cursors, an epoch
-//! drawn for a reset, the chunk frees due, then the bases of every path
-//! whose content is now on the disk (`super::disk`). Each transaction's
+//! drawn for a reset, the chunk frees due, a write holder's check for a
+//! watermark (last, so that it sees every record the commit holds, and only
+//! in a transaction that signed no other cleanup; `crate::watermark`), then
+//! the bases of every path whose content is now on the disk
+//! (`super::disk`). Each transaction's
 //! change set is staged, with the chunks it left unnamed onto the
 //! pending-free list, beside the chunk blobs phase A staged and the blobs
 //! found changed at rest whose deletion was pending; then one commit. On
@@ -49,6 +52,23 @@ struct Done<'a> {
     took_frees: bool,
     /// It carried what the open changed (`Folder::open_changes`).
     took_open: bool,
+    /// What its watermark check did.
+    check: Check,
+    /// It raised the greatest watermark held and expired a record, or
+    /// lowered it: rounds are owed once it commits.
+    moved: bool,
+}
+
+/// What one folder's transaction did about a watermark check.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Check {
+    /// It made none: none was due, the device signs none, or the transaction
+    /// signed another cleanup (the check stays due).
+    NotMade,
+    /// It made the check, which signed nothing.
+    Made,
+    /// It made the check, which signed a watermark.
+    Signed,
 }
 
 /// The engine's state one folder's transaction reads and writes beside the
@@ -59,6 +79,10 @@ struct Shared<'e> {
     counters: &'e mut Counters,
     issues: &'e mut Issues,
     clock_us: u64,
+    /// The runtime's monotonic clock now, for the watermark's interval.
+    now: crate::runtime::Instant,
+    /// `WATERMARK_INTERVAL`, as the timing scales it.
+    watermark_interval: core::time::Duration,
 }
 
 impl Engine {
@@ -109,6 +133,8 @@ impl Engine {
         work: &mut Work,
     ) -> Result<(), StorageError> {
         let clock_us = cx.wall_time_us();
+        let now = cx.now();
+        let watermark_interval = self.settings.timing.watermark_interval;
         let Self {
             folders,
             conns,
@@ -123,6 +149,8 @@ impl Engine {
             counters,
             issues,
             clock_us,
+            now,
+            watermark_interval,
         };
         let mut done: Vec<Done<'_>> = Vec::new();
         let mut staged = work.staged;
@@ -130,7 +158,8 @@ impl Engine {
             let ops = shared.sync.ops.remove(id).unwrap_or_default();
             let recheck =
                 core::mem::take(&mut f.recheck_disk) || work.chunks_stored.contains_key(id);
-            if ops.is_empty() && !f.free_due && !recheck && f.open_changes.is_none() {
+            if ops.is_empty() && !f.free_due && !recheck && f.open_changes.is_none() && !f.check_due
+            {
                 continue;
             }
             if f.held_paused() || !f.credentialed() {
@@ -176,10 +205,26 @@ impl Engine {
         let mut after = Vec::new();
         for d in done {
             d.pending.commit();
-            after.push((d.folder, d.freed, d.deleted, d.took_frees, d.took_open));
+            if d.moved {
+                work.sync.moved.insert(d.folder);
+            }
+            after.push((
+                d.folder,
+                d.freed,
+                d.deleted,
+                d.took_frees,
+                d.took_open,
+                d.check,
+            ));
         }
-        for (id, freed, deleted, took, took_open) in after {
+        for (id, freed, deleted, took, took_open, check) in after {
             if let Some(f) = folders.get_mut(&id) {
+                if check != Check::NotMade {
+                    f.check_due = false;
+                }
+                if check == Check::Signed {
+                    f.signed_at = Some(now);
+                }
                 if took {
                     f.pending_free.clear();
                     f.free_due = false;
@@ -242,6 +287,8 @@ fn run_folder<'f>(
     shared: &mut Shared<'_>,
     cx: &mut dyn Context,
 ) -> Result<FolderOutcome<'f>, StorageError> {
+    // The last signing's time when a check is due and the device signs.
+    let check_at = (f.check_due && f.signs()).then_some(f.signed_at);
     let Folder {
         id,
         index,
@@ -337,6 +384,10 @@ fn run_folder<'f>(
         }
         staged |= !pending_free.is_empty();
     }
+    let check = check_at.map_or(Check::NotMade, |at| {
+        check_watermark(&mut txn, folder, at, shared, cx, &mut paths)
+    });
+    let moved = txn.watermark_moved();
     if record_keys.is_some() {
         super::disk::apply(&mut txn, book, unapplied, paths, shared.counters);
     }
@@ -353,9 +404,61 @@ fn run_folder<'f>(
             deleted,
             took_frees: do_free,
             took_open,
+            check,
+            moved,
         },
         staged,
     })
+}
+
+/// A write holder's check for a watermark (4.4, "When a write holder signs
+/// one"), last in the folder's transaction: none when the transaction signed
+/// a cleanup already, which leaves the check owed for a commit of its own;
+/// otherwise the index computes the candidate and signs it when it may, the
+/// cleanup it signs pushed once committed. What it expires (tombstones,
+/// tree deletes and cleanups) names no chunk and is not wanted, so the
+/// chunk book stays as it is.
+fn check_watermark(
+    txn: &mut Txn<'_>,
+    folder: FolderId,
+    signed_at: Option<crate::runtime::Instant>,
+    shared: &mut Shared<'_>,
+    cx: &mut dyn Context,
+    paths: &mut BTreeSet<String>,
+) -> Check {
+    if txn.wrote_cleanup() {
+        return Check::NotMade;
+    }
+    let since = signed_at.map(|at| shared.now.saturating_duration_since(at));
+    let checked = txn.check_watermark(
+        shared.clock_us,
+        since,
+        shared.watermark_interval,
+        &mut |b: &mut [u8]| cx.fill_random(b),
+    );
+    match checked {
+        Ok(w) => {
+            for (hash, seq) in &w.records {
+                if seq.is_some() {
+                    shared.sync.push(folder, *hash, None);
+                }
+            }
+            paths.extend(w.paths);
+            if w.watermark.is_none() {
+                return Check::Made;
+            }
+            bump(&mut shared.counters.watermarks_signed);
+            Check::Signed
+        }
+        Err(WriteError::CounterExhausted) => {
+            counter_exhausted(folder, shared);
+            Check::Made
+        }
+        Err(_) => {
+            shared.counters.bug();
+            Check::Made
+        }
+    }
 }
 
 /// The cleanups of a round's end (4.4, "Cleanup", cases (b) and (c)):
@@ -462,8 +565,8 @@ fn write(
 
 /// Steps 2 to 9 of 4.4 for one page's records from `peer`, in order, up to
 /// and including the first refusal that closes (a forged record), with the
-/// connection's own memories and verification budget. Its judgements, and
-/// whether a record was held or dropped.
+/// connection's own verification budget. Its judgements, and whether a
+/// record was held or dropped.
 #[allow(
     clippy::too_many_arguments,
     reason = "one phase B step and its context"
@@ -486,19 +589,19 @@ fn accept_page(
         counters,
         issues,
         clock_us,
+        ..
     } = shared;
     let device = conns.get(&peer).and_then(|c| c.device);
-    let memories = conns
+    let notes = conns
         .get_mut(&peer)
-        .and_then(|c| c.protocol.memories_mut(t, &folder));
-    let (Some(device), Some((memory, notes))) = (device, memories) else {
+        .and_then(|c| c.protocol.notes_mut(t, &folder));
+    let (Some(device), Some(notes)) = (device, notes) else {
         // The connection closed since the page came: nothing to judge for.
         return (Judged::skipped(peer, folder, page, n), false);
     };
     let mut fill = |b: &mut [u8]| cx.fill_random(b);
     let mut arrival = Arrival {
         peer: device,
-        memory,
         notes,
         clock_us: *clock_us,
         rng: &mut fill,
@@ -556,15 +659,6 @@ fn note(
     }
     if acc.own_ahead {
         raise(IssueKind::OwnCounterAhead, Subject::None);
-    }
-    if let Some((lead_us, device)) = acc.clock_ahead {
-        raise(
-            IssueKind::ClockAhead,
-            Subject::ClockAhead { lead_us, device },
-        );
-    }
-    if let Some(device) = acc.from_future {
-        raise(IssueKind::FromTheFuture, Subject::Device(device));
     }
     if acc.noted {
         bump(&mut counters.stale_noted);

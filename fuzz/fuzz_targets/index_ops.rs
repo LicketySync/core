@@ -12,9 +12,10 @@
 //!   fuzz-chosen sealed metadata (path, the path its tag is of, kind,
 //!   deleted and tree marks, size, chunks, plain hashes, device, counter, a
 //!   vector of up to three entries, names of earlier records), or a cleanup
-//!   (device, counter, one or two groups with a `because` and names of
-//!   earlier records), each genuine, forged (a signature bit flipped) or with
-//!   a garbage signature;
+//!   (device, counter, a watermark of 0, below its counter, at it (a writer
+//!   fault) or half of it, and none, one or two groups with a `because` and
+//!   names of earlier records), each genuine, forged (a signature bit
+//!   flipped) or with a garbage signature;
 //! - before the folder opens, stage stored state: a pool record with a
 //!   local sequence number (the next one, 0, a repeat, `MAX_LOCAL_SEQ` or
 //!   past it), a record kept only as a base, a base slot (for any record,
@@ -25,8 +26,9 @@
 //! - open the folder from the stored state (the open's changes committed);
 //! - deliver a pool record from a peer, write (a file, a tombstone, a tree
 //!   delete or a rename), set or clear a base, end a round, record a round's
-//!   end or a counted push: each in one transaction, finished, then
-//!   committed through the store or dropped;
+//!   end or a counted push, or check for a watermark (signed or not by the
+//!   interval since the last, within the opening or not): each in one
+//!   transaction, finished, then committed through the store or dropped;
 //! - move the clock (days ahead, a year ahead, or a year back);
 //! - make the store's next commit crash between its records and its
 //!   removals (the store then reopens, as a store that cannot stage
@@ -52,8 +54,8 @@ use licketysync_keys::sealed_meta::RecordKeys;
 use licketysync_keys::{
     CipherHash, DeviceId, FolderKey, RecordHash, Suite, Tier, WriteKey, WriteSecret,
 };
-use licketysync_protocol::connection::{FolderMemory, NoteBudget};
-use licketysync_protocol::limits::{DAY_US, MAX_COUNTER, MAX_LOCAL_SEQ};
+use licketysync_protocol::connection::NoteBudget;
+use licketysync_protocol::limits::{DAY_US, MAX_COUNTER, MAX_LOCAL_SEQ, WATERMARK_INTERVAL};
 use licketysync_protocol::messages::{
     ChunkRef, CleanupGroup, CleanupMeta, CleanupRecord, IndexRecord, SealedMeta, VectorEntry,
 };
@@ -266,14 +268,21 @@ fn cleanup_record(i: &mut In<'_>, pool: &[SignedRecord], rng: &mut Rng) -> Optio
     let (w, keys) = write_key();
     let device = i.device();
     let counter = i.counter();
+    let forget_before = match i.b() % 4 {
+        0 => 0,
+        1 => counter.saturating_sub(1),
+        2 => counter,
+        _ => counter / 2,
+    };
     let meta = CleanupMeta {
         device_id: device.0.to_vec(),
         counter,
+        forget_before,
     };
     let sealed = keys
         .seal_cleanup_meta(&meta.encode_to_vec(), &mut |b: &mut [u8]| rng.fill(b))
         .ok()?;
-    let n_groups = 1 + usize::from(i.b() % 2);
+    let n_groups = usize::from(i.b() % 3);
     let groups = (0..n_groups)
         .map(|_| {
             let because = match i.b() {
@@ -304,12 +313,13 @@ fn snapshot(ix: &Index) -> String {
     let mut s = String::new();
     let _ = write!(
         s,
-        "len {} seq {} epoch {} hw {} g {} extra {}",
+        "len {} seq {} epoch {} hw {} h {} signed {:?} extra {}",
         ix.len(),
         ix.local_seq(),
         ix.epoch(),
         ix.hw(),
-        ix.folder_time(),
+        ix.watermark(),
+        ix.last_signed_us(),
         ix.extra_versions()
     );
     for r in ix.records() {
@@ -365,14 +375,12 @@ struct World {
     pool: Vec<SignedRecord>,
     clock: u64,
     rng: Rng,
-    memory: FolderMemory,
     notes: NoteBudget,
 }
 
 impl World {
     /// Opens the folder from the store, the staged stored state first; the
-    /// open's changes are committed. A folder whose records lie more than a
-    /// year ahead of the clock does not open.
+    /// open's changes are committed.
     fn open(&mut self) {
         let pre = core::mem::take(&mut self.pre);
         if !pre.is_empty() {
@@ -389,10 +397,6 @@ impl World {
             self.clock,
             &mut |b: &mut [u8]| rng.fill(b),
         );
-        if report.opens_at.is_some() {
-            self.ix = None;
-            return;
-        }
         if self.store.commit(&report.changes).is_err() {
             self.ix = None;
             return;
@@ -415,25 +419,13 @@ impl World {
     fn handler(
         &mut self,
         commit: bool,
-        stage: impl FnOnce(
-            &mut licketysync_index::Txn<'_>,
-            &mut Rng,
-            &mut FolderMemory,
-            &mut NoteBudget,
-            u64,
-        ) -> bool,
+        stage: impl FnOnce(&mut licketysync_index::Txn<'_>, &mut Rng, &mut NoteBudget, u64) -> bool,
     ) {
         let Some(ix) = self.ix.as_mut() else { return };
         let before = snapshot(ix);
         let clock = self.clock;
         let mut txn = ix.begin();
-        let ok = stage(
-            &mut txn,
-            &mut self.rng,
-            &mut self.memory,
-            &mut self.notes,
-            clock,
-        );
+        let ok = stage(&mut txn, &mut self.rng, &mut self.notes, clock);
         let (changes, pending) = txn.finish();
         let mut reopen = false;
         if ok && commit {
@@ -478,9 +470,6 @@ impl World {
             self.clock,
             &mut |b: &mut [u8]| rng.fill(b),
         );
-        if report.opens_at.is_some() {
-            return;
-        }
         assert_eq!(
             held(&again),
             want,
@@ -493,7 +482,7 @@ impl World {
     }
 
     fn step(&mut self, i: &mut In<'_>) {
-        match i.b() % 16 {
+        match i.b() % 17 {
             0 => {
                 if self.pool.len() < MAX_POOL {
                     if let Some(r) = index_record(i, &self.pool, &mut self.rng) {
@@ -559,6 +548,7 @@ impl World {
                         hw,
                         next_seq,
                         epoch: u64::from(epoch),
+                        last_signed_us: (next % 2 == 0).then_some(hw),
                     });
                 }
             }
@@ -586,11 +576,10 @@ impl World {
                 let Ok(record) = Record::parse(signed, write_key().0.verifier()) else {
                     return;
                 };
-                self.handler(commit, |txn, rng, memory, notes, clock| {
+                self.handler(commit, |txn, rng, notes, clock| {
                     let mut fill = |b: &mut [u8]| rng.fill(b);
                     let mut arrival = Arrival {
                         peer,
-                        memory,
                         notes,
                         clock_us: clock,
                         rng: &mut fill,
@@ -642,7 +631,7 @@ impl World {
                         to: file(q, content),
                     },
                 };
-                self.handler(commit, |txn, rng, _, _, clock| {
+                self.handler(commit, |txn, rng, _, clock| {
                     txn.write(&[change], clock, &mut |b: &mut [u8]| rng.fill(b))
                         .is_ok()
                 });
@@ -657,7 +646,7 @@ impl World {
                 } else {
                     Some(self.pool[usize::from(r) % self.pool.len()].hash())
                 };
-                self.handler(commit, |txn, _, _, _, _| {
+                self.handler(commit, |txn, _, _, _| {
                     txn.set_base(p, Place::Path, hash).is_ok()
                 });
             }
@@ -666,18 +655,17 @@ impl World {
                 if !self.ensure_open() {
                     return;
                 }
-                self.handler(commit, |txn, rng, _, _, clock| {
+                self.handler(commit, |txn, rng, _, clock| {
                     txn.end_round(clock, &mut |b: &mut [u8]| rng.fill(b))
                         .is_ok()
                 });
-                self.memory = FolderMemory::default();
             }
             12 => {
                 let (peer, how, cursor, commit) = (i.device(), i.b(), i.b(), i.b() % 4 != 0);
                 if !self.ensure_open() {
                     return;
                 }
-                self.handler(commit, |txn, _, _, _, clock| {
+                self.handler(commit, |txn, _, _, clock| {
                     if how % 3 == 2 {
                         txn.cursor_advanced(peer, 1, u64::from(cursor));
                     } else {
@@ -697,6 +685,33 @@ impl World {
                 self.notes = NoteBudget::for_tests();
             }
             14 => self.store.mode = Commit::CrashBeforeRemovals,
+            15 => {
+                // A check for a watermark: within this opening, the time
+                // since the last signing short of the interval or past it,
+                // or across openings (none).
+                let (since, commit) = (i.b(), i.b() % 4 != 0);
+                if !self.ensure_open() {
+                    return;
+                }
+                let since = match since % 3 {
+                    0 => None,
+                    1 => Some(WATERMARK_INTERVAL / 2),
+                    _ => Some(WATERMARK_INTERVAL),
+                };
+                self.handler(commit, |txn, rng, _, clock| {
+                    let h = txn.index().watermark();
+                    let w = txn.check_watermark(clock, since, WATERMARK_INTERVAL, &mut |b: &mut [u8]| {
+                        rng.fill(b);
+                    });
+                    if let Ok(w) = &w
+                        && let Some(signed) = w.watermark
+                    {
+                        assert!(signed > h, "a watermark signed above the greatest held");
+                        assert_eq!(txn.index().watermark(), signed);
+                    }
+                    w.is_ok()
+                });
+            }
             _ => self.reopen_and_compare(),
         }
     }
@@ -720,7 +735,6 @@ fuzz_target!(|data: &[u8]| {
         pool: Vec::new(),
         clock: T0,
         rng: Rng(data.len() as u64),
-        memory: FolderMemory::default(),
         notes: NoteBudget::for_tests(),
     };
     let mut ops = 0;

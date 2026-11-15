@@ -21,9 +21,9 @@
       "8d272557a5b1ca0f4af749543e689e92409e2a95964b3199597e4de75d173af1"
     ]
   },
-  "clock_set_back_at_open": {
-    "newest_counter": 1800000000000000,
-    "opens_at": 1768464000000000
+  "clocks_far_apart": {
+    "refused": 0,
+    "slow_holds": 2
   },
   "conflict_copy": {
     "copy_base_before": "f3a744da4c7b531db6cd5698e64c6c1ba18ec3666c7216c8f006c8dd8f797481",
@@ -69,7 +69,7 @@
       "name": "vector-entry-equal-to-the-counter"
     }
   ],
-  "description": "protocol.md 8 item 7 whole: latest only, coverage, display order, pruning, bases and the lost update, conflict copies, the clock rule at open, renames, opaque records and shared writer faults, tree deletes, expiry by the folder's own time, the spread of clocks, and twins (heads of one content) under a write; records of the keys crate's fixed folder written at the fixed clock T0, or forged with fixed nonces. Heads are listed by record hash in display order.",
+  "description": "protocol.md 8 item 7 whole: latest only, coverage, display order, pruning, bases and the lost update, conflict copies, a store ahead of the clock at open, renames, opaque records and shared writer faults, tree deletes, expiry by the watermark and the counter ceiling, clocks far apart, and twins (heads of one content) under a write; records of the keys crate's fixed folder written at the fixed clock T0, or forged with fixed nonces. Heads are listed by record hash in display order.",
   "display_order": [
     {
       "copies": 0,
@@ -101,32 +101,37 @@
   ],
   "expiry": [
     {
-      "kept": true,
-      "name": "a-tombstone-exceeded-by-the-horizon-less-one-microsecond"
+      "name": "a-watermark-before-and-after-the-deletion",
+      "same": true
     },
     {
-      "kept": true,
-      "name": "a-tombstone-exceeded-by-exactly-the-horizon"
+      "name": "a-tree-delete-and-its-cleanup-with-the-watermark-between",
+      "tree_delete_first": true
     },
     {
-      "kept": false,
-      "name": "a-tombstone-exceeded-by-the-horizon-plus-one-microsecond"
+      "h": 1800000000000020,
+      "name": "two-concurrent-watermarks"
     },
     {
-      "kept": false,
-      "name": "a-cleanup-past-its-horizon"
+      "h": 1800000000000020,
+      "name": "the-lower-watermark-named-away"
     },
     {
-      "kept": true,
-      "name": "no-write-for-two-years"
+      "expired": 0,
+      "name": "versions-below-h"
     },
     {
-      "forgotten": 1,
-      "name": "a-record-11-months-ahead"
+      "expired": 1,
+      "name": "a-folder-nobody-writes-to"
     },
     {
       "live_again": true,
       "name": "a-version-after-its-tombstone-expired"
+    },
+    {
+      "above": "opaque",
+      "at": "applied",
+      "name": "the-counter-ceiling"
     }
   ],
   "file_ids": [
@@ -170,12 +175,27 @@
     {
       "corrupt": false,
       "hw": 1800086400000000,
-      "name": "a-stored-mark-exactly-the-warning-ahead"
+      "name": "a-stored-mark-exactly-the-slack-ahead"
     },
     {
       "corrupt": true,
       "hw": 1800000000000000,
-      "name": "a-stored-mark-past-the-warning-ahead"
+      "name": "a-stored-mark-past-the-slack-ahead"
+    },
+    {
+      "corrupt": false,
+      "greatest_held": 315569520000000000,
+      "stored_mark": 315569520000000000
+    },
+    {
+      "corrupt": false,
+      "greatest_held": 315569519999999995,
+      "stored_mark": 315569520000000000
+    },
+    {
+      "corrupt": true,
+      "greatest_held": 315569520000000000,
+      "stored_mark": 315569520000000001
     }
   ],
   "pruning": [
@@ -260,10 +280,10 @@
     ],
     "hw_past_r1": true
   },
-  "spread": {
-    "right_folder_time": 1825920000000001,
-    "slow_folder_time": 0,
-    "slow_refuses": true
+  "store_ahead_of_the_clock_at_open": {
+    "next_above_the_mark": true,
+    "opens": true,
+    "years_ahead": 3
   },
   "tree_deletes": [
     {

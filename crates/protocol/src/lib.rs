@@ -28,7 +28,7 @@
 //!   of a `ReconcileReply`, the page limit and the [`exchange::Pager`], and
 //!   [`exchange::IndexView`], what the connection reads of the index (4.5).
 //! - [`connection`]: one [`connection::Connection`] per transport
-//!   connection: the handshake and the clock rule, open folders, rounds
+//!   connection: the handshake, open folders, rounds
 //!   (Since, the Check and the passes of reconciliation), the cursors and the
 //!   counting of pushes, the round owed, pages and pushes, the deadlines,
 //!   chunks and their backoff and passes, Status (sections 3 to 5).

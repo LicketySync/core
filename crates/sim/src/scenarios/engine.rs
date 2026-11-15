@@ -520,23 +520,21 @@ fn crash_expect(run: &Run) -> Result<(), String> {
 pub const S_PATH: &str = "shared/s.txt";
 
 /// Clocks 5 min, 1 h and 23 h ahead (peers 1, 3, 4), `mtime_ns` from each
-/// writer's wall clock; 0 and 4 write [`S_PATH`] at the same instant. 23 h
-/// stays inside `CLOCK_AHEAD_WARNING` (one day, which a skew of exactly a
-/// day would sit on): no clock warning is allowed.
+/// writer's wall clock; 0 and 4 write [`S_PATH`] at the same instant. No
+/// issue is allowed: no rule judges a record or a peer by a clock.
 fn skew(seed: u64) -> Run {
     skewed("engine-skew", seed, Duration::from_secs(23 * 60 * 60))
 }
 
-/// As `engine-skew`, with peer 4 two days ahead: every other key holder
-/// warns that the folder's time is ahead of its clock (`ClockAhead`), well
-/// inside the one-year clock rule, and the run still converges.
+/// As `engine-skew`, with peer 4 two years ahead: nothing is refused, no
+/// issue is raised, and the run converges (`protocol.md` 4.4, "Expiry by the
+/// watermark": no peer and no record is refused for a clock).
 fn clock_ahead(seed: u64) -> Run {
     let mut run = skewed(
         "engine-clock-ahead",
         seed,
-        Duration::from_secs(2 * 24 * 60 * 60),
+        Duration::from_secs(2 * 365 * 24 * 60 * 60),
     );
-    run.expect.clock_ahead = true;
     run.extra = Some(clock_ahead_expect);
     run
 }
@@ -556,19 +554,9 @@ fn skewed(name: &'static str, seed: u64, four: Duration) -> Run {
 
 fn clock_ahead_expect(run: &Run) -> Result<(), String> {
     skew_expect(run)?;
-    let warned: BTreeSet<PeerId> = run
-        .ledger
-        .borrow()
-        .issues
-        .iter()
-        .filter(|(_, i)| i.kind == IssueKind::ClockAhead)
-        .map(|(w, _)| *w)
-        .collect();
-    let want: BTreeSet<PeerId> = [p(0), p(1), p(2), p(3)].into_iter().collect();
-    if warned != want {
-        return Err(format!(
-            "the clock warning came from {warned:?}, not 0 to 3"
-        ));
+    let issues = run.ledger.borrow().issues.len();
+    if issues != 0 {
+        return Err(format!("{issues} issues raised, not 0"));
     }
     Ok(())
 }
@@ -983,7 +971,7 @@ pub const C_PATH: &str = "c.txt";
 /// peer cannot tell that V3 replaces V1 (V3 names V2, which 2 never held), so
 /// it holds both (the probe at 35 s). At 40 s it meets 0, whose round with it
 /// ends in a cleanup that names V1 `because` V3, and 2 drops V1. Every clock
-/// is unskewed (the clock rule untouched).
+/// is unskewed.
 fn sealed_cleanup(seed: u64) -> Run {
     let mut plan = Plan::quiet(3, SMALL_CHUNK)
         .with_extra(sealed_cleanup_expect)
@@ -1068,20 +1056,22 @@ fn sealed_cleanup_expect(run: &Run) -> Result<(), String> {
 /// The file the expiry scenario deletes.
 pub const E_PATH: &str = "e.txt";
 /// How far every wall clock steps ahead: past `TOMBSTONE_HORIZON` (365
-/// days) with a day to spare, and well inside the one-year clock rule of a
-/// device whose clock stepped too.
+/// days) with a day to spare.
 const EXPIRY_STEP: u64 = 366 * 24 * 60 * 60;
 
-/// Three writers. Peer 0 writes [`E_PATH`] at 1 s; 2 stops at 4 s holding
-/// it, and 0 deletes it at 6 s. At 10 s every wall clock steps
-/// [`EXPIRY_STEP`] ahead; at 12 s 1 writes another file, so the folder's own
-/// time passes the tombstone's counter by more than the horizon and 0 and 1
-/// forget it (the probe at 25 s). 2 comes back at 30 s, still holding the old
-/// file, and brings it back (the owner's decision).
+/// Three writers, their watermark checks scaled ([`watermark::scaled`]).
+/// Peer 0 writes [`E_PATH`] at 1 s; 2 stops at 4 s holding it, and 0 deletes
+/// it at 6 s. At 10 s every wall clock steps [`EXPIRY_STEP`] ahead; at their
+/// next checks 0 and 1, which have held the tombstone a year, sign a
+/// watermark past it (one of them, or both, whichever checks first), and
+/// both forget it (the probe at 25 s). 2 comes back at 30 s, still holding
+/// the old file, and brings it back (a deleted file comes back wherever a
+/// copy survives).
 fn expiry(seed: u64) -> Run {
     let mut plan = Plan::quiet(3, SMALL_CHUNK)
         .with_extra(expiry_expect)
         .with_probe(Instant::from_secs(25), expiry_probe);
+    plan.tweak = watermark::scaled;
     plan.workloads.insert(
         p(0),
         vec![
@@ -1093,10 +1083,6 @@ fn expiry(seed: u64) -> Run {
                 },
             },
         ],
-    );
-    plan.workloads.insert(
-        p(1),
-        vec![write(1, 2, "later.txt", 60, Duration::from_secs(12))],
     );
     plan.build("engine-expiry", seed, |s| {
         let mut s = s
@@ -1155,6 +1141,7 @@ fn expiry_probe(run: &Run) -> Result<(), String> {
 
 fn expiry_expect(run: &Run) -> Result<(), String> {
     let (file, tombstone) = file_and_tombstone(run)?;
+    let mut signers = 0;
     for id in run.world.ids() {
         if run.heads(id, E_PATH) != [file] {
             return Err(format!("{id}: the old file did not come back"));
@@ -1168,6 +1155,13 @@ fn expiry_expect(run: &Run) -> Result<(), String> {
         if view.records.iter().any(|r| r.hash == tombstone) {
             return Err(format!("{id} holds the expired tombstone"));
         }
+        if view.watermark == 0 {
+            return Err(format!("{id} holds no watermark"));
+        }
+        signers += e.counters().watermarks_signed;
+    }
+    if signers == 0 {
+        return Err("nobody signed a watermark".to_owned());
     }
     Ok(())
 }
@@ -1176,7 +1170,7 @@ fn expiry_expect(run: &Run) -> Result<(), String> {
 pub type Builder = fn(u64) -> Run;
 
 /// Every engine scenario's name and builder.
-pub const ALL: [(&str, Builder); 25] = [
+pub const ALL: [(&str, Builder); 30] = [
     ("engine-clean", clean),
     ("engine-drops", drops),
     ("engine-drops-stress", drops_stress),
@@ -1195,6 +1189,11 @@ pub const ALL: [(&str, Builder); 25] = [
     ("engine-tree-delete", tree_delete),
     ("engine-sealed-cleanup", sealed_cleanup),
     ("engine-expiry", expiry),
+    ("engine-watermark-offline", watermark::offline),
+    ("engine-watermark-late", watermark::late),
+    ("engine-watermark-two", watermark::two),
+    ("engine-watermark-replay", watermark::replay),
+    ("engine-watermark-sealed", watermark::sealed),
     (
         "engine-identical-edit-0",
         identical::equal_mtimes_zero_edits,
@@ -1234,6 +1233,7 @@ pub fn run(name: &str, seed: u64) -> Outcome {
 }
 
 mod identical;
+pub mod watermark;
 
 #[cfg(test)]
 mod tests {

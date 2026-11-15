@@ -14,14 +14,13 @@
 //!   folder key on the connection;
 //! - a record by hash, never a device (ruling S-4), for a writer fault, a
 //!   chunk corrupt for that record, and a size mismatch at reassembly;
-//! - a device without blaming it, for the clock rule's issues: the peer whose
-//!   Hello was more than a year from this device's, the device a record from
-//!   the future claims, the device a record far ahead claims;
 //! - nothing, for a hint that this device was restored or cloned, and for a
 //!   folder whose counter is exhausted.
 //!
-//! No issue carries a path or a secret (TM-6): the subjects are record and
-//! chunk hashes, peer handles and device IDs, and counts. The list keeps
+//! No issue is raised for a clock: no record and no peer is refused for one
+//! (`protocol.md` 4.4, "Expiry by the watermark"). No issue carries a path
+//! or a secret (TM-6): the subjects are record and chunk hashes, peer
+//! handles and device IDs, and counts. The list keeps
 //! each source of issues within a bound of its own (`list`; TM-22, TM-10).
 
 use std::collections::BTreeMap;
@@ -76,33 +75,6 @@ pub enum IssueKind {
     /// the high-water mark corrupt, numbered the records afresh or dropped a
     /// misplaced base (4.4, "Opening a folder"; 4.7 item 8).
     OpenReport,
-    /// The clock rule at the handshake (3.2): when the folder opened, this
-    /// device's clock and the peer's differed by more than a year, and the
-    /// connection closed. Neither reading can say which clock is wrong:
-    /// compare this device's clock with a trusted one. The remedy, on the
-    /// device whose clock is wrong: unlink the folder keeping its files, set
-    /// the clock right, then add the folder again over the same files, which
-    /// starts its index afresh (4.4, "What adding the folder again resets on
-    /// that device").
-    ClockOutOfRange,
-    /// A record dated more than a year ahead of this device's clock was
-    /// refused (4.4, "The clock rule"): compare this device's clock with a
-    /// trusted one; the remedy is as for [`IssueKind::ClockOutOfRange`].
-    FromTheFuture,
-    /// The clock rule at the open (4.4, "A clock set back"): records here
-    /// are dated more than a year ahead of this device's clock: it was set
-    /// back, or was ahead when they arrived. The folder stays closed (not
-    /// proven to peers, receiving nothing) until the clock is within a year
-    /// of its newest record (`FolderState::Closed` gives when), and opens by
-    /// itself then. The remedy, if the clock is wrong: set it right, and the
-    /// folder opens; otherwise unlink the folder keeping its files and add it
-    /// again over the same files, which starts its index afresh (4.4, "What
-    /// adding the folder again resets on that device").
-    KeptClosed,
-    /// This folder's time is more than `CLOCK_AHEAD_WARNING` (a day) ahead of
-    /// this device's clock (4.4, "A fast clock carries forward"): deletions
-    /// up to that much early may be forgotten.
-    ClockAhead,
     /// The folder's store failed: it is paused until a probe commits.
     StoreFailure(StoreFailureCause),
     /// The store returned records and none passed: the folder is not used.
@@ -169,28 +141,6 @@ pub enum Subject {
     },
     /// A record, by hash.
     Record(RecordHash),
-    /// A device, named without blame: where a record from the future says
-    /// it came from.
-    Device(DeviceId),
-    /// The clock rule at the handshake: the peer's proven device ID and the
-    /// two Hellos' `clock_days`.
-    Clock {
-        /// The peer.
-        device: DeviceId,
-        /// This device's reading, in whole days since the Unix epoch.
-        ours: u32,
-        /// The peer's.
-        theirs: u32,
-    },
-    /// How far the folder's time is ahead of this device's clock, and the
-    /// device the record that carried it claims (which may only have carried
-    /// a fast device's time forward).
-    ClockAhead {
-        /// The lead, in microseconds.
-        lead_us: u64,
-        /// The device the record claims.
-        device: DeviceId,
-    },
     /// A stored chunk, by ciphertext hash.
     Chunk(CipherHash),
     /// What an open found (4.7 item 8), with at most [`OPEN_ISSUE_HASHES`]
@@ -250,12 +200,20 @@ pub struct Counters {
     /// Reply pages and `CHUNK_OK` frames held back by the send budget.
     pub deferrals: u64,
     /// Records not judged and chunks not stored because their folder was
-    /// held paused (a store failure, or the clock rule at open).
+    /// held paused (a store failure).
     pub skipped_while_paused: u64,
     /// Rounds owed on connections: when a folder resumed, after a failed
     /// handler skipped a folder's records, or after a round's end issued a
     /// cleanup.
     pub rounds_owed: u64,
+    /// Changes of the greatest watermark held handed to connections where
+    /// their folder is open, each owing a round there, toward a peer that
+    /// reports the sealed tier at most once per `WATERMARK_INTERVAL`
+    /// (`protocol.md` 4.5, "Round owed").
+    pub watermark_rounds: u64,
+    /// Watermarks this device signed (`protocol.md` 4.4, "When a write
+    /// holder signs one").
+    pub watermarks_signed: u64,
     /// Pages of a reply reported skipped, unjudged, because an earlier page
     /// of the same reply was skipped (the reply is void; the owed round
     /// brings its records back).
@@ -266,9 +224,6 @@ pub struct Counters {
     /// Records a write holder would have noted but did not: the peer's names
     /// or the connection's verifications for notes were spent (`NotNoted`).
     pub stale_not_noted: u64,
-    /// Connections that ended with no folder opened and Hellos more than a
-    /// year apart (3.2: a log line, never an issue).
-    pub stranger_clocks: u64,
     /// Chunks that arrived for a hash already stored: a second connection's
     /// answer to a request asked again after the chunk patience.
     pub late_chunks: u64,
@@ -361,9 +316,9 @@ pub(crate) fn bump(n: &mut u64) {
 /// Closes counted by reason: one count per reason this release defines and
 /// one for every other number, so the table has a fixed size however many
 /// numbers peers send (TM-22). A reason's slot is its place in
-/// `CloseReason::ALL`, found by its wire number, which is not its place
-/// (`CLOCK_OUT_OF_RANGE` is 13, after 11): the numbers there are distinct,
-/// checked when the crate builds.
+/// `CloseReason::ALL`, found by its wire number, which need not be its place
+/// (12 and 13 are reserved): the numbers there are distinct, checked when the
+/// crate builds.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CloseCounts {
     /// By the reason's place in `CloseReason::ALL`.
@@ -518,15 +473,6 @@ mod tests {
         );
         assert!(!issue(Subject::None).blames());
         assert!(!issue(Subject::Chunk(CipherHash([1; 32]))).blames());
-        assert!(!issue(Subject::Device(DeviceId([1; 32]))).blames());
-        assert!(
-            !issue(Subject::Clock {
-                device: DeviceId([1; 32]),
-                ours: 1,
-                theirs: 900
-            })
-            .blames()
-        );
     }
 
     #[test]
@@ -589,8 +535,8 @@ mod tests {
         c.close(true, CloseReason::Other(11));
         assert_eq!(c.closes_sent.of(CloseReason::Timeout), 1);
         assert_eq!(c.blaming_closes(), 2);
-        c.close(false, CloseReason::ClockOutOfRange);
-        assert_eq!(c.closes_received.of(CloseReason::ClockOutOfRange), 1);
-        assert_eq!(c.closes_received.other(), 2_000);
+        // 13, the removed CLOCK_OUT_OF_RANGE, is a number like any other.
+        c.close(false, CloseReason::Other(13));
+        assert_eq!(c.closes_received.other(), 2_001);
     }
 }

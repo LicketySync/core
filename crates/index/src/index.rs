@@ -13,10 +13,10 @@ use licketysync_keys::{
     DeviceId, FolderId, FolderKey, FolderVerifier, PathTag, RandomFill, RecordHash, Tier,
 };
 use licketysync_protocol::Cause;
-use licketysync_protocol::connection::{FolderMemory, Judgement, NoteBudget};
+use licketysync_protocol::connection::{Judgement, NoteBudget};
 use licketysync_protocol::limits::{
-    CLEANUP_HORIZON, CLOCK_AHEAD_WARNING, CLOCK_FLOOR_MAX, CLOCK_RULE_LIMIT, MAX_COUNTER,
-    MAX_LOCAL_SEQ, MAX_PEER_NAMES, MAX_STALE_KNOWN, TOMBSTONE_HORIZON,
+    CLOCK_FLOOR_MAX, MAX_COUNTER, MAX_LOCAL_SEQ, MAX_PEER_NAMES, MAX_STALE_KNOWN,
+    PEER_NAMES_WINDOW, TOMBSTONE_HORIZON,
 };
 use licketysync_protocol::record::{Applied, Record, Verdict, WriterFault};
 
@@ -31,7 +31,7 @@ pub(crate) enum Seq<'b, 'r> {
     /// epoch should one be drawn.
     Next(&'b mut RandomFill<'r>),
     /// The next number, for a record this device wrote: it is no record
-    /// "under its own ID above its mark", and no fast clock's.
+    /// "under its own ID above its mark".
     Own(&'b mut RandomFill<'r>),
 }
 
@@ -50,6 +50,8 @@ pub(crate) struct Bounds {
     pub(crate) stale_known: usize,
     /// `MAX_PEER_NAMES`, the names of one peer's records in a window.
     pub(crate) peer_names: u64,
+    /// `TOMBSTONE_HORIZON`, the deletion horizon, in microseconds.
+    pub(crate) horizon: u64,
 }
 
 impl Bounds {
@@ -59,6 +61,7 @@ impl Bounds {
         cleanup_groups: licketysync_protocol::limits::MAX_CLEANUP_GROUPS,
         stale_known: MAX_STALE_KNOWN,
         peer_names: MAX_PEER_NAMES,
+        horizon: TOMBSTONE_HORIZON,
     };
 }
 
@@ -117,8 +120,8 @@ pub struct OpenReport {
     /// open.
     pub dropped: Vec<RecordHash>,
     /// The stored high-water mark was above what the records held and the
-    /// clock floor justify by more than `CLOCK_AHEAD_WARNING`, or at or above
-    /// `MAX_COUNTER`, and was replaced.
+    /// clock floor justify by more than `MARK_SLACK`, or above `MAX_COUNTER`,
+    /// and was replaced.
     pub hw_corrupt: bool,
     /// Entries the store could no longer decode (a phase 1 store): dropped,
     /// as a record that fails its checks is, so the open draws a new epoch.
@@ -140,17 +143,13 @@ pub struct OpenReport {
     /// Stored base slots whose record lies at another file ID, dropped, as
     /// [`Txn::set_base`] would refuse them.
     pub misplaced_bases: Vec<crate::store::BaseSlot>,
-    /// The folder does not open yet: the greatest counter of an applied record
-    /// stored lies more than `CLOCK_RULE_LIMIT` ahead of this device's clock
-    /// ("records here are dated more than a year ahead of this device's
-    /// clock: it was set back, or was ahead when they arrived"). It opens
-    /// once the clock, in microseconds since the epoch, reaches this value;
-    /// the engine checks again then, through the clock trait.
-    pub opens_at: Option<u64>,
     /// What the open changed that the store is to keep: records another
-    /// stored record replaces, or that expired (dropped without a report),
-    /// the metadata (a new epoch, a repaired high-water mark or next local
-    /// sequence number) and per-peer state past `PEER_STATE_HORIZON`.
+    /// stored record replaces, or that the greatest watermark held has
+    /// expired (dropped without a report), the metadata (a new epoch, a
+    /// repaired high-water mark or next local sequence number), per-peer
+    /// state past `PEER_STATE_HORIZON`, and, at a write holder, the arrival
+    /// of each record held whose arrival the store lacked (the open's clock
+    /// reading).
     pub changes: ChangeSet,
 }
 
@@ -161,31 +160,29 @@ impl OpenReport {
         self.dropped.is_empty()
             && !self.hw_corrupt
             && self.undecodable == 0
-            && self.opens_at.is_none()
             && !self.renumbered
             && self.misplaced_bases.is_empty()
     }
 }
 
 /// The per-arrival context of one record from a peer (`protocol.md` 4.7 item
-/// 2): the peer's proven device ID, the connection's memories
-/// ([`licketysync_protocol::connection::Connection::memories_mut`]), this
+/// 2): the peer's proven device ID, the connection's note budget
+/// ([`licketysync_protocol::connection::Connection::notes_mut`]), this
 /// device's wall clock (microseconds since the Unix epoch, 0 before 1970)
 /// and the runtime's randomness.
 pub struct Arrival<'a, 'r> {
     /// The peer, by the device ID its `DeviceProof` proved.
     pub peer: DeviceId,
-    /// The connection's memory of the folder: records from the future
-    /// refused on it.
-    pub memory: &'a mut FolderMemory,
     /// The connection's one budget of verifications for notes, shared by
     /// every folder open on it: the engine passes the one
-    /// [`licketysync_protocol::connection::Connection::memories_mut`] gives
-    /// for the connection the record came on, never a budget of its own, or
-    /// the bound on what a peer can make this device verify (about 2.4 % of a
+    /// [`licketysync_protocol::connection::Connection::notes_mut`] gives for
+    /// the connection the record came on, never a budget of its own, or the
+    /// bound on what a peer can make this device verify (about 2.4 % of a
     /// core per connection) no longer holds.
     pub notes: &'a mut NoteBudget,
-    /// This device's wall clock, in microseconds.
+    /// This device's wall clock, in microseconds: at a write holder, the
+    /// arrival of a tombstone, tree delete or cleanup it comes to hold (4.4,
+    /// "Arrival"), and the `MAX_PEER_NAMES` window's clock.
     pub clock_us: u64,
     /// For a new epoch, should one be drawn.
     pub rng: &'a mut RandomFill<'r>,
@@ -212,13 +209,8 @@ pub struct Accepted {
     /// A record under this device's own ID above its high-water mark: the
     /// mark rose to it, and a new epoch was drawn.
     pub own_ahead: bool,
-    /// A held record more than `CLOCK_AHEAD_WARNING` ahead of this device's
-    /// clock: the lead, in microseconds, and the device ID it claims.
-    pub clock_ahead: Option<(u64, DeviceId)>,
     /// A writer fault, held opaque; the issue names the record by its hash.
     pub writer_fault: Option<WriterFault>,
-    /// From the future: the device ID it claims, as where it came from.
-    pub from_future: Option<DeviceId>,
     /// A write holder noted it as a stale copy or a forgotten record.
     pub noted: bool,
     /// Why a write holder that would have noted it did not.
@@ -236,9 +228,7 @@ impl Accepted {
             paths: Vec::new(),
             chunks_changed: false,
             own_ahead: false,
-            clock_ahead: None,
             writer_fault: None,
-            from_future: None,
             noted: false,
             not_noted: None,
         }
@@ -276,6 +266,13 @@ pub struct Txn<'a> {
     pub(crate) ix: &'a mut Index,
     pub(crate) undo: Vec<Undo>,
     done: bool,
+    /// The greatest watermark held when the transaction began.
+    watermark_began: u64,
+    /// A rise of the greatest watermark in this transaction expired a record
+    /// held.
+    pub(crate) expired_held: bool,
+    /// This transaction signed and held a cleanup of this device's.
+    pub(crate) wrote_cleanup: bool,
 }
 
 impl fmt::Debug for Txn<'_> {
@@ -326,6 +323,7 @@ impl Index {
             hw: 0,
             next_seq: 1,
             epoch: draw_epoch(rng),
+            last_signed_us: None,
         };
         let changes = ChangeSet {
             meta: Some(ix.s.meta),
@@ -347,10 +345,14 @@ impl Index {
 
     /// Opens a transaction.
     pub fn begin(&mut self) -> Txn<'_> {
+        let watermark_began = self.s.watermark();
         Txn {
             ix: self,
             undo: Vec::new(),
             done: false,
+            watermark_began,
+            expired_held: false,
+            wrote_cleanup: false,
         }
     }
 
@@ -410,11 +412,19 @@ impl Index {
         self.s.meta.hw
     }
 
-    /// The folder's own time `G`: the greatest counter of an applied record
-    /// held (read and write holders; 0 at a sealed holder).
+    /// The greatest watermark held, `H` (4.4, "The greatest watermark"): the
+    /// greatest `forget_before` of the applied cleanups held; 0 at a sealed
+    /// holder, which reads none.
     #[must_use]
-    pub fn folder_time(&self) -> u64 {
-        self.s.folder_time()
+    pub fn watermark(&self) -> u64 {
+        self.s.watermark()
+    }
+
+    /// The wall clock's reading when this device last signed a watermark in
+    /// the folder, kept with the folder's metadata; `None` before its first.
+    #[must_use]
+    pub fn last_signed_us(&self) -> Option<u64> {
+        self.s.meta.last_signed_us
     }
 
     /// The stored per-peer state of `peer`.
@@ -458,12 +468,13 @@ impl Index {
     /// across the processor's cores; the records that pass are held again in
     /// their stored local-sequence order, with their stored numbers, as steps
     /// 6 to 9 would hold them, those another stored record replaces or that
-    /// have expired dropped without a report; the stored high-water mark is
-    /// checked; and a new epoch is drawn once if anything was dropped. The
-    /// clock rule judges records on arrival only: nothing stored is removed
-    /// for its counter, and a store whose newest applied record lies more than
-    /// `CLOCK_RULE_LIMIT` ahead of `clock_us` keeps the folder from opening
-    /// ([`OpenReport::opens_at`]).
+    /// the greatest watermark held has expired dropped without a report; the
+    /// stored high-water mark is checked; and a new epoch is drawn once if
+    /// anything was dropped. No stored record is judged by its counter
+    /// against `clock_us`: a store far ahead of the clock opens like any
+    /// other. At a write holder, each stored arrival is read back as it was
+    /// stored, checked against nothing, and one the store lacks takes
+    /// `clock_us` (4.4, "Arrivals when a folder opens").
     pub fn open(
         key: FolderKey,
         own: DeviceId,
@@ -523,6 +534,25 @@ impl Txn<'_> {
     /// transaction does).
     pub fn abort(self) {}
 
+    /// Whether this transaction raised the greatest watermark held and so
+    /// expired a record held, or lowered it (4.4, "Expiry by the
+    /// watermark"): its commit then owes a round on every connection where
+    /// the folder is open (4.5, "Round owed";
+    /// `licketysync_protocol::connection::Connection::watermark_moved`).
+    #[must_use]
+    pub fn watermark_moved(&self) -> bool {
+        self.expired_held || self.ix.s.watermark() < self.watermark_began
+    }
+
+    /// Whether this transaction signed a cleanup already: a check for a
+    /// watermark then waits for a transaction of its own, so that a
+    /// watermark goes in a cleanup with no group only when no other cleanup
+    /// goes in its commit (4.4, "Cleanup", case (d)).
+    #[must_use]
+    pub fn wrote_cleanup(&self) -> bool {
+        self.wrote_cleanup
+    }
+
     /// Draws a new index epoch (4.5): for a peer's `since` above the local
     /// sequence (at most once per connection), and for the rules that draw
     /// one inside the index.
@@ -575,23 +605,24 @@ impl Txn<'_> {
     ///
     /// - a duplicate is ignored, never verified;
     /// - at a read or write holder its seal is checked by step 7 first,
-    ///   charging no one, and a deletion or cleanup the folder's own time has
-    ///   passed by its horizon is expired, before anything it replaces is
-    ///   looked at;
+    ///   charging no one, and a tombstone, tree delete or cleanup whose
+    ///   counter is at most the greatest watermark held is expired, judged by
+    ///   its counter alone, before anything it replaces is looked at;
     /// - a record that replaces nothing held (for a tree delete, judged
     ///   through the index by path, never by a walk) and that something held
     ///   names, or covers at its tag or from a tree delete above it (found in
     ///   `O(L)` for a path of `L` bytes), is obsolete;
     /// - both are ignored unverified, unless a write holder would note it,
     ///   which verifies it first;
-    /// - a record more than `CLOCK_RULE_LIMIT` ahead of the clock is from the
-    ///   future, verified and refused (once per connection);
+    /// - step 4 is empty: no record is judged by a clock;
     /// - then the signature;
     /// - then the store: what it replaces is dropped, it is held unless
     ///   something held replaces it (beneath a tree delete, step 8), the
-    ///   cleanup groups whose `because` it is apply, and an applied record
-    ///   raises the high-water mark and the folder's own time, which expires
-    ///   what it passes by a horizon.
+    ///   cleanup groups whose `because` it is apply, an applied record raises
+    ///   the high-water mark, and a cleanup whose watermark raises the
+    ///   greatest watermark held expires every tombstone, tree delete and
+    ///   cleanup at or below it, in the same commit; a write holder keeps the
+    ///   arrival of each tombstone, tree delete and cleanup it holds.
     ///
     /// # Errors
     /// [`Cause::Forged`] when the signature fails where it is verified: the
@@ -603,8 +634,8 @@ impl Txn<'_> {
         }
         let verdict = self.ix.verdict(&record);
         let applied = verdict.as_ref().and_then(|v| v.as_ref().ok());
-        // Step 3. Expiry first: it reads only the folder's time, whatever
-        // the record replaces (the coordinator's ruling IS-1(a)).
+        // Step 3. Expiry first: it reads only the greatest watermark held,
+        // whatever the record replaces.
         if let Some(app) = applied
             && self.expired(app)
         {
@@ -626,19 +657,7 @@ impl Txn<'_> {
                 return Ok(out);
             }
         }
-        if let Some(app) = applied {
-            // Step 4, the clock rule.
-            if app.dot().counter > a.clock_us.saturating_add(CLOCK_RULE_LIMIT) {
-                let mut out = Accepted::new(hash, Judgement::FromTheFuture);
-                if !a.memory.knows_future(&hash) {
-                    record.verify(&self.ix.verifier)?;
-                    a.memory.remember_future(hash);
-                    out.from_future = Some(app.dot().device);
-                }
-                return Ok(out);
-            }
-        }
-        // Step 5.
+        // Step 5 (step 4 is empty).
         record.verify(&self.ix.verifier)?;
         // Steps 6 to 9.
         let replaces = self.ix.s.replaced_by(&record, applied);
@@ -678,34 +697,31 @@ impl Txn<'_> {
         Ok(out)
     }
 
-    /// Whether an applied deletion or cleanup has expired: the folder's own
-    /// time has passed its counter by more than its horizon.
+    /// Whether an applied record has expired: a tombstone, tree delete or
+    /// cleanup whose counter is at most the greatest watermark held (4.4,
+    /// "Expiry by the watermark"). A sealed holder, which opens no seal,
+    /// never gets here with an applied record.
     fn expired(&self, applied: &Applied) -> bool {
-        let horizon = match applied {
-            Applied::Index(m) if m.deleted => TOMBSTONE_HORIZON,
-            Applied::Index(_) => return false,
-            Applied::Cleanup(_) => CLEANUP_HORIZON,
-        };
-        self.ix
-            .s
-            .folder_time()
-            .saturating_sub(applied.dot().counter)
-            > horizon
+        applied.expirable() && applied.dot().counter <= self.ix.s.watermark()
     }
 
     /// Step 6 for a record verified (or written here, or replayed at open):
     /// drops what it replaces, holds it unless something held replaces it
     /// (giving it back, with what replaces it), lets the groups whose
     /// `because` it is apply, and, for an applied record held, raises the
-    /// high-water mark and the folder's own time and expires what that
-    /// passes. Returns its local sequence number when it is held.
+    /// high-water mark and, for a cleanup whose watermark raises the greatest
+    /// watermark held, expires what that passes (but at open, whose replay
+    /// expires once at its end). At a write holder an applied tombstone, tree
+    /// delete or cleanup keeps `arrival_us` as its arrival: the clock reading
+    /// of the commit that holds it, or, at open, its stored arrival or the
+    /// open's reading. Returns its local sequence number when it is held.
     pub(crate) fn store(
         &mut self,
         record: Record,
         verdict: Option<Verdict>,
         replaces: &std::collections::BTreeSet<RecordHash>,
         seq: Seq<'_, '_>,
-        clock_us: u64,
+        arrival_us: u64,
         out: &mut Accepted,
     ) -> Result<u64, Box<(Record, Replacer)>> {
         let hash = record.hash();
@@ -716,11 +732,13 @@ impl Txn<'_> {
         if let Some(rep) = self.ix.s.replacer(&record, applied.as_ref()) {
             return Err(Box::new((record, rep)));
         }
-        let (seq, rng, own_write) = match seq {
-            Seq::Stored(n) => (n, None, false),
-            Seq::Next(r) => (self.next_seq(r), Some(r), false),
-            Seq::Own(r) => (self.next_seq(r), None, true),
+        let (seq, rng, own_write, replay) = match seq {
+            Seq::Stored(n) => (n, None, false, true),
+            Seq::Next(r) => (self.next_seq(r), Some(r), false, false),
+            Seq::Own(r) => (self.next_seq(r), None, true, false),
         };
+        let arrival = (self.ix.writer() && applied.as_ref().is_some_and(Applied::expirable))
+            .then_some(arrival_us);
         if let Some(meta) = applied.as_ref().and_then(Applied::meta) {
             out.paths.push(meta.path.clone());
         }
@@ -737,6 +755,7 @@ impl Txn<'_> {
                 record,
                 seq,
                 verdict,
+                arrival,
             },
             Some(&mut self.undo),
         );
@@ -759,10 +778,11 @@ impl Txn<'_> {
                 };
                 self.ix.s.set_meta(meta, Some(&mut self.undo));
             }
-            if !own_write && counter > clock_us.saturating_add(CLOCK_AHEAD_WARNING) {
-                out.clock_ahead = Some((counter - clock_us, app.dot().device));
-                out.rows.push(Cause::ClockAhead);
-            }
+        }
+        // What a rise of the greatest watermark expires goes in this commit;
+        // nothing held lies at or below it otherwise, so the expiry finds
+        // nothing then. The open expires once every stored record is in.
+        if !replay {
             self.expire(out);
         }
         Ok(seq)
@@ -795,14 +815,18 @@ impl Txn<'_> {
         }
     }
 
-    /// Expiry by the folder's own time (4.4, "Expiry"): every deletion and
-    /// cleanup the folder's time has passed by its horizon is dropped, with
-    /// any base that is that deletion.
+    /// Expiry by the watermark (4.4, "Expiry by the watermark"): every
+    /// tombstone, tree delete and cleanup held at or below the greatest
+    /// watermark held is dropped, with any base that is that deletion, and
+    /// so is every deletion kept only as a base at or below it. Each entry
+    /// lies above the watermark once this has run, so a rise drops entries
+    /// from the low end of the index by counter and looks at nothing else.
     pub(crate) fn expire(&mut self, out: &mut Accepted) {
         if !self.ix.key_holder() {
             return;
         }
-        for h in self.ix.s.expired(TOMBSTONE_HORIZON, CLEANUP_HORIZON) {
+        for h in self.ix.s.expired(self.ix.s.watermark()) {
+            self.expired_held |= self.ix.s.is_held(&h);
             let slots: Vec<_> = self
                 .ix
                 .s
@@ -827,7 +851,9 @@ impl Txn<'_> {
     /// (unless it is `verified` already); and its signature verifies. A
     /// record something held replaces is a stale copy, noted with its tag,
     /// path and dot; an expired one is a forgotten record. At most
-    /// `MAX_STALE_KNOWN` notes are kept, the oldest dropped first.
+    /// `MAX_STALE_KNOWN` notes are kept, the oldest dropped first. A
+    /// forgotten record is noted with its counter, which its cleanup judges
+    /// again against the watermark it carries.
     ///
     /// # Errors
     /// [`Cause::Forged`].
@@ -859,15 +885,19 @@ impl Txn<'_> {
             a.notes.verified();
             record.verify(&self.ix.verifier)?;
         }
-        let expired = applied.is_some_and(|app| self.expired(app));
-        let noted = match (record.path_tag(), applied.and_then(Applied::meta)) {
-            (Some(tag), Some(m)) if !expired => Noted::Stale {
+        let noted = match (record.path_tag(), applied) {
+            (_, Some(app)) if self.expired(app) => Noted::Forgotten {
+                counter: app.dot().counter,
+            },
+            (Some(tag), Some(Applied::Index(m))) => Noted::Stale {
                 tag,
                 path: m.path.clone(),
                 dot: m.dot,
                 tree: m.tree,
             },
-            _ => Noted::Forgotten,
+            // Only an applied record is expired or replaced by coverage; one
+            // replaced by a name is never noted (above).
+            _ => return Ok((false, None)),
         };
         while self.ix.s.notes.len() >= self.ix.bounds.stale_known {
             let Some((_, oldest)) = self.ix.s.note_order.iter().next().map(|(n, h)| (*n, *h))
@@ -890,13 +920,13 @@ impl Txn<'_> {
     }
 
     /// The names of `peer`'s records this write holder has given in the
-    /// current window of `CLEANUP_HORIZON`, by its wall clock.
+    /// current window of `PEER_NAMES_WINDOW`, by its wall clock.
     pub(crate) fn peer_names(&self, peer: &DeviceId, clock_us: u64) -> u64 {
         self.ix
             .s
             .peers
             .get(peer)
-            .filter(|p| clock_us < p.names_window_us.saturating_add(CLEANUP_HORIZON))
+            .filter(|p| clock_us < p.names_window_us.saturating_add(PEER_NAMES_WINDOW))
             .map_or(0, |p| p.names)
     }
 
@@ -908,7 +938,7 @@ impl Txn<'_> {
             round_ended_us: clock_us,
             ..PeerState::default()
         });
-        if clock_us >= state.names_window_us.saturating_add(CLEANUP_HORIZON) {
+        if clock_us >= state.names_window_us.saturating_add(PEER_NAMES_WINDOW) {
             state.names_window_us = clock_us;
             state.names = 0;
         }

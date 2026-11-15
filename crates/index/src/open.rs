@@ -9,8 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use licketysync_keys::{RandomFill, RecordHash};
 use licketysync_protocol::limits::{
-    CLOCK_AHEAD_WARNING, CLOCK_FLOOR_MAX, CLOCK_RULE_LIMIT, MAX_COUNTER, MAX_LOCAL_SEQ,
-    MAX_PEER_STATES, PEER_STATE_HORIZON,
+    CLOCK_FLOOR_MAX, MARK_SLACK, MAX_COUNTER, MAX_LOCAL_SEQ, MAX_PEER_STATES, PEER_STATE_HORIZON,
 };
 use licketysync_protocol::record::Record;
 
@@ -43,6 +42,7 @@ pub(crate) fn open(
     let stored_meta = stored.meta;
     let stored_bases = stored.bases;
     let stored_peers = stored.peers;
+    let stored_arrivals: BTreeMap<RecordHash, u64> = stored.arrivals.into_iter().collect();
     let mut items: Vec<(_, Kept)> = stored
         .records
         .into_iter()
@@ -100,6 +100,10 @@ pub(crate) fn open(
                 .max(1)
         },
         epoch: stored_meta.map_or(0, |m| m.epoch),
+        // Read back as stored: a check of this device's own store, which a
+        // reading later than the clock passes (4.4, "When a write holder
+        // signs one": a reading earlier than it counts as passed).
+        last_signed_us: stored_meta.and_then(|m| m.last_signed_us),
     };
     let (silent, misplaced) = replay(
         &mut ix,
@@ -107,7 +111,7 @@ pub(crate) fn open(
         &base_stored,
         held_stored,
         &dropped,
-        clock_us,
+        &|h| stored_arrivals.get(h).copied().unwrap_or(clock_us),
     );
     report.misplaced_bases = misplaced;
     // The high-water mark (read and write holders; a sealed holder keeps
@@ -117,18 +121,13 @@ pub(crate) fn open(
         let floor = clock_us.min(CLOCK_FLOOR_MAX);
         let justified = greatest.max(floor);
         let stored_hw = stored_meta.map_or(0, |m| m.hw);
-        let hw = if stored_hw >= MAX_COUNTER
-            || stored_hw > justified.saturating_add(CLOCK_AHEAD_WARNING)
-        {
+        let hw = if stored_hw > MAX_COUNTER || stored_hw > justified.saturating_add(MARK_SLACK) {
             report.hw_corrupt = true;
             justified
         } else {
             stored_hw.max(greatest)
         };
         ix.s.meta.hw = hw;
-        if greatest > clock_us.saturating_add(CLOCK_RULE_LIMIT) {
-            report.opens_at = Some(greatest - CLOCK_RULE_LIMIT);
-        }
     }
     // The epoch: as stored, redrawn once when the open dropped anything (the
     // entries the store could not decode included, F-2) or numbered the
@@ -156,6 +155,17 @@ pub(crate) fn open(
         &stored_bases,
         stored_meta,
     );
+    // A write holder's arrivals the store lacked took the open's reading,
+    // and the store keeps them (a record put afresh carries its own).
+    let put: BTreeSet<RecordHash> = changes.put.iter().map(|(r, _)| r.hash()).collect();
+    changes.arrivals =
+        ix.s.held
+            .iter()
+            .filter_map(|(h, held)| {
+                let a = held.arrival?;
+                (put.contains(h) || !stored_arrivals.contains_key(h)).then_some((*h, a))
+            })
+            .collect();
     report.dropped = dropped;
     report.changes = changes;
     (ix, report)
@@ -201,7 +211,11 @@ fn peers_at_open(
 }
 
 /// The base slots, then the replay of the records held in stored
-/// local-sequence order with their numbers, then expiry. Returns whether
+/// local-sequence order with their numbers, each tombstone, tree delete and
+/// cleanup with the arrival `arrival` gives it at a write holder, then expiry
+/// by the greatest watermark held once every record is in, so that what the
+/// open expires depends on the records stored, not on their order. Returns
+/// whether
 /// anything stored went silently (a base slot whose record is not there, or
 /// a record a stored one replaces), for the epoch, and the base slots
 /// dropped because their record lies at another file ID (the index security
@@ -212,7 +226,7 @@ fn replay(
     base_stored: &BTreeMap<RecordHash, Record>,
     held_stored: Vec<(u64, Record)>,
     dropped: &[RecordHash],
-    clock_us: u64,
+    arrival: &dyn Fn(&RecordHash) -> u64,
 ) -> (bool, Vec<BaseSlot>) {
     let mut misplaced = Vec::new();
     let by_hash: BTreeMap<RecordHash, &Record> =
@@ -255,13 +269,14 @@ fn replay(
         let verdict = txn.index().verdict(&record);
         let applied = verdict.as_ref().and_then(|v| v.as_ref().ok()).cloned();
         let replaces = txn.ix.s.replaced_by(&record, applied.as_ref());
+        let arrival_us = arrival(&record.hash());
         if txn
             .store(
                 record,
                 verdict,
                 &replaces,
                 Seq::Stored(seq),
-                clock_us,
+                arrival_us,
                 &mut scratch,
             )
             .is_err()

@@ -72,9 +72,9 @@ pub enum Cause {
     FolderProofRejected,
     /// A record whose record hash is already held.
     Duplicate,
-    /// At a read or write holder, a tombstone or tree delete that the folder's
-    /// own time has passed by `TOMBSTONE_HORIZON`, or a cleanup it has passed
-    /// by `CLEANUP_HORIZON`.
+    /// At a read or write holder, a tombstone, tree delete or cleanup whose
+    /// counter is at most the greatest watermark it holds (4.4, "Expiry by
+    /// the watermark").
     Expired,
     /// A record that something held replaces, and that replaces nothing held.
     Obsolete,
@@ -82,12 +82,6 @@ pub enum Cause {
     ReplacesHeld,
     /// A cleanup group whose `because` names a record not held.
     CleanupGroupWaiting,
-    /// At a read or write holder, a record whose counter is more than
-    /// `CLOCK_RULE_LIMIT` ahead of this device's clock.
-    FromTheFuture,
-    /// The two Hellos' `clock_days` differ by more than `CLOCK_RULE_LIMIT`,
-    /// judged when the first folder opens on the connection.
-    ClockOutOfRange,
     /// An `IndexRequest` whose epoch is not this side's, or whose `since` is
     /// above its local sequence.
     Reset,
@@ -106,9 +100,6 @@ pub enum Cause {
     /// A record under this device's own device ID with a counter above its
     /// high-water mark (4.5, "Durability before transmission").
     OwnCounterAhead,
-    /// A held record whose counter is more than `CLOCK_AHEAD_WARNING` ahead
-    /// of this device's clock (4.4, "A fast clock carries forward").
-    ClockAhead,
     /// This device's next counter would pass `MAX_COUNTER` (4.4).
     CounterExhausted,
 }
@@ -130,8 +121,6 @@ pub enum Keep {
     Replace,
     /// Hold the cleanup; the group applies while its `because` is held.
     HoldWaiting,
-    /// Verify; neither hold nor relay it.
-    Refuse,
     /// Answer one page with `reset` (and, for a `since` above the local
     /// sequence, draw a new epoch); the requester reconciles.
     AnswerReset,
@@ -146,8 +135,6 @@ pub enum Keep {
     AskElsewhere,
     /// Hold and apply; raise the high-water mark to it; draw a new epoch.
     RaiseMark,
-    /// Judge it as any record.
-    Judge,
     /// Write nothing more in the folder; keep syncing what others write.
     StopWriting,
 }
@@ -176,10 +163,6 @@ pub enum Report {
     /// An issue naming the record, by hash (and by path where the seal
     /// opened), never a device.
     IssueNamingRecord,
-    /// The clock-rule issue, which blames no device and offers the remedy:
-    /// for a peer, naming its proven device ID and both readings; for a
-    /// record, naming the device ID it claims as where it came from.
-    ClockRuleIssue,
     /// An informational issue that blames no one.
     InformationalIssue,
     /// An issue about the folder itself (it must be shared again).
@@ -191,7 +174,7 @@ pub enum Report {
 impl Cause {
     /// Every row it names, in the order of section 5's table: all but the
     /// two rows about this device's own index store.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 27] = [
         Self::Malformed,
         Self::FrameOverLimit,
         Self::UnknownCriticalType,
@@ -211,8 +194,6 @@ impl Cause {
         Self::Obsolete,
         Self::ReplacesHeld,
         Self::CleanupGroupWaiting,
-        Self::FromTheFuture,
-        Self::ClockOutOfRange,
         Self::Reset,
         Self::DigestDiffers,
         Self::EmptyPush,
@@ -220,7 +201,6 @@ impl Cause {
         Self::ChunkBusy,
         Self::ChunkNotFound,
         Self::OwnCounterAhead,
-        Self::ClockAhead,
         Self::CounterExhausted,
     ];
 
@@ -239,20 +219,17 @@ impl Cause {
             }
             Self::ProofTimeout => Outcome::Close(CloseReason::NoCommonFolder),
             Self::Forged => Outcome::Close(CloseReason::VerificationFailed),
-            Self::ClockOutOfRange => Outcome::Close(CloseReason::ClockOutOfRange),
             Self::UnknownNonCriticalType => Outcome::Keep(Keep::ReplyUnsupported),
             Self::FolderProofRejected => Outcome::Keep(Keep::ProofRejected),
             Self::Duplicate | Self::Expired | Self::Obsolete => Outcome::Keep(Keep::Ignore),
             Self::ReplacesHeld => Outcome::Keep(Keep::Replace),
             Self::CleanupGroupWaiting => Outcome::Keep(Keep::HoldWaiting),
-            Self::FromTheFuture => Outcome::Keep(Keep::Refuse),
             Self::Reset => Outcome::Keep(Keep::AnswerReset),
             Self::DigestDiffers => Outcome::Keep(Keep::Descend),
             Self::EmptyPush => Outcome::Keep(Keep::OweRound),
             Self::ChunkBusy => Outcome::Keep(Keep::BackOff),
             Self::ChunkNotFound => Outcome::Keep(Keep::AskElsewhere),
             Self::OwnCounterAhead => Outcome::Keep(Keep::RaiseMark),
-            Self::ClockAhead => Outcome::Keep(Keep::Judge),
             Self::CounterExhausted => Outcome::Keep(Keep::StopWriting),
             Self::WriterFault => Outcome::IssueAgainstRecord,
         }
@@ -261,10 +238,9 @@ impl Cause {
     /// What the outcome leaves behind. A close for the sender's fault raises
     /// an issue naming the peer (TM-10); a timeout, which an honest peer on a
     /// bad network can cause, and every difference in knowledge, a log line;
-    /// a writer fault, an issue naming the record; the clock rule, its issue,
-    /// which blames no device; a record under this device's own ID ahead of
-    /// its mark and a fast clock, an informational issue naming no one; an
-    /// exhausted counter, an issue about the folder.
+    /// a writer fault, an issue naming the record; a record under this
+    /// device's own ID ahead of its mark, an informational issue naming no
+    /// one; an exhausted counter, an issue about the folder.
     #[must_use]
     pub const fn report(self) -> Report {
         match self {
@@ -277,8 +253,7 @@ impl Cause {
             | Self::Forged
             | Self::SenderViolation => Report::IssueNamingPeer,
             Self::WriterFault => Report::IssueNamingRecord,
-            Self::FromTheFuture | Self::ClockOutOfRange => Report::ClockRuleIssue,
-            Self::OwnCounterAhead | Self::ClockAhead => Report::InformationalIssue,
+            Self::OwnCounterAhead => Report::InformationalIssue,
             Self::CounterExhausted => Report::FolderIssue,
             Self::HelloTimeout
             | Self::IdleTimeout
@@ -326,7 +301,6 @@ mod tests {
             (Cause::ReplyPageTimeout, R::Timeout),
             (Cause::ProofTimeout, R::NoCommonFolder),
             (Cause::Forged, R::VerificationFailed),
-            (Cause::ClockOutOfRange, R::ClockOutOfRange),
         ];
         for (cause, reason) in closes {
             assert_eq!(cause.outcome(), Outcome::Close(reason), "{cause:?}");
@@ -340,14 +314,12 @@ mod tests {
             (Cause::Obsolete, Keep::Ignore),
             (Cause::ReplacesHeld, Keep::Replace),
             (Cause::CleanupGroupWaiting, Keep::HoldWaiting),
-            (Cause::FromTheFuture, Keep::Refuse),
             (Cause::Reset, Keep::AnswerReset),
             (Cause::DigestDiffers, Keep::Descend),
             (Cause::EmptyPush, Keep::OweRound),
             (Cause::ChunkBusy, Keep::BackOff),
             (Cause::ChunkNotFound, Keep::AskElsewhere),
             (Cause::OwnCounterAhead, Keep::RaiseMark),
-            (Cause::ClockAhead, Keep::Judge),
             (Cause::CounterExhausted, Keep::StopWriting),
         ];
         for (cause, keep) in keeps {
@@ -366,13 +338,9 @@ mod tests {
                 Outcome::Close(CloseReason::Timeout | CloseReason::NoCommonFolder) => {
                     assert_eq!(report, Report::Log, "{cause:?}");
                 }
-                Outcome::Close(CloseReason::ClockOutOfRange) => {
-                    assert_eq!(report, Report::ClockRuleIssue);
-                }
                 Outcome::Close(_) => assert_eq!(report, Report::IssueNamingPeer, "{cause:?}"),
                 Outcome::IssueAgainstRecord => assert_eq!(report, Report::IssueNamingRecord),
-                Outcome::Keep(Keep::Refuse) => assert_eq!(report, Report::ClockRuleIssue),
-                Outcome::Keep(Keep::RaiseMark | Keep::Judge) => {
+                Outcome::Keep(Keep::RaiseMark) => {
                     assert_eq!(report, Report::InformationalIssue, "{cause:?}");
                 }
                 Outcome::Keep(Keep::StopWriting) => assert_eq!(report, Report::FolderIssue),

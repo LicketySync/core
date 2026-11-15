@@ -199,6 +199,8 @@ fn an_index_draft_signs_parses_verifies_and_opens() {
     let applied = r.open(&keys).unwrap();
     assert_eq!(applied.dot(), &dot(2, 100));
     assert!(applied.meta().is_some());
+    assert!(!applied.expirable(), "no watermark expires a version");
+    assert_eq!(applied.forget_before(), 0, "only a cleanup carries one");
     // A read key opens it too; a sealed key has no record keys.
     let read = key.read_key();
     assert!(r.open(&read.record_keys()).is_ok());
@@ -214,6 +216,7 @@ fn a_cleanup_draft_signs_parses_and_opens() {
     let key = folder(0x10);
     let c = CleanupDraft {
         dot: dot(2, 7),
+        forget_before: 6,
         groups: vec![
             Group {
                 because: Some(RecordHash([5; 32])),
@@ -258,9 +261,11 @@ fn a_cleanup_draft_signs_parses_and_opens() {
     assert_eq!(r.sealed().len(), 296, "the least cleanup bucket");
     r.verify(key.verifier()).unwrap();
     let applied = r.open(&key.record_keys()).unwrap();
-    assert!(matches!(applied, Applied::Cleanup(d) if d == dot(2, 7)));
+    assert!(matches!(applied, Applied::Cleanup(c) if c.dot == dot(2, 7) && c.forget_before == 6));
     assert!(applied.meta().is_none());
     assert_eq!(applied.dot(), &dot(2, 7));
+    assert_eq!(applied.forget_before(), 6);
+    assert!(applied.expirable(), "a watermark expires a cleanup");
     // Signed under the other label it would be forged; the keys crate's
     // signer refuses to sign a cleanup body as an index record.
     assert!(key.sign_index_record(signed.body().to_vec()).is_err());
@@ -298,6 +303,7 @@ fn step_one_binds_the_record_to_the_open_folder() {
     // A cleanup of another folder, and of another suite.
     let c = CleanupDraft {
         dot: dot(2, 1),
+        forget_before: 0,
         groups: vec![Group {
             because: None,
             forget: vec![RecordHash([1; 32])],
@@ -636,14 +642,46 @@ fn every_writer_fault_of_step_seven() {
         m.plain_hashes.clear();
     });
     assert!(forge(&key, &[], &dir_tomb).open(&keys).is_ok());
-    // A cleanup's faults: the seal, the metadata, the device ID, the counter.
-    let cm = |device: usize, counter: u64| {
+    // A cleanup's faults: the seal, the metadata, the device ID, the counter,
+    // the watermark not below the counter.
+    let cmw = |device: usize, counter: u64, forget_before: u64| {
         CleanupMeta {
             device_id: vec![2; device],
             counter,
+            forget_before,
         }
         .encode_to_vec()
     };
+    let cm = |device: usize, counter: u64| cmw(device, counter, 0);
+    assert_eq!(
+        forge_cleanup(&key, &cmw(32, 5, 5)).open(&keys).err(),
+        Some(WriterFault::Watermark {
+            forget_before: 5,
+            counter: 5
+        })
+    );
+    assert_eq!(
+        forge_cleanup(&key, &cmw(32, 5, 9)).open(&keys).err(),
+        Some(WriterFault::Watermark {
+            forget_before: 9,
+            counter: 5
+        })
+    );
+    assert!(
+        matches!(forge_cleanup(&key, &cmw(32, 5, 4)).open(&keys), Ok(Applied::Cleanup(c)) if c.forget_before == 4)
+    );
+    // The counter is judged before the watermark.
+    assert_eq!(
+        forge_cleanup(&key, &cmw(32, 0, 0)).open(&keys).err(),
+        Some(WriterFault::Counter(0))
+    );
+    assert!(
+        WriterFault::Watermark {
+            forget_before: 1,
+            counter: 1
+        }
+        .is_shared()
+    );
     assert!(forge_cleanup(&key, &cm(32, 1)).open(&keys).is_ok());
     assert_eq!(
         forge_cleanup(&key, &cm(31, 1)).open(&keys).err(),
@@ -836,7 +874,17 @@ fn the_writer_refuses_what_a_reader_would() {
     let c = |groups: Vec<Group>, counter: u64| {
         CleanupDraft {
             dot: dot(2, counter),
+            forget_before: 0,
             groups,
+        }
+        .sign(&key, &key.record_keys(), &mut fill(1))
+        .err()
+    };
+    let marked = |forget_before: u64, counter: u64| {
+        CleanupDraft {
+            dot: dot(2, counter),
+            forget_before,
+            groups: vec![],
         }
         .sign(&key, &key.record_keys(), &mut fill(1))
         .err()
@@ -847,7 +895,24 @@ fn the_writer_refuses_what_a_reader_would() {
             .map(|i| RecordHash(core::array::from_fn(|j| (i >> (8 * (j % 4))) as u8)))
             .collect(),
     };
-    assert_eq!(c(vec![], 1), Some(DraftError::Groups(0)));
+    // No group: a cleanup that carries only a watermark, or none (case
+    // (d)); a watermark not below the counter is refused.
+    assert!(c(vec![], 1).is_none());
+    assert!(marked(4, 5).is_none());
+    assert_eq!(
+        marked(5, 5),
+        Some(DraftError::Watermark {
+            forget_before: 5,
+            counter: 5
+        })
+    );
+    assert_eq!(
+        marked(6, 5),
+        Some(DraftError::Watermark {
+            forget_before: 6,
+            counter: 5
+        })
+    );
     assert_eq!(
         c(vec![g(1); MAX_CLEANUP_GROUPS + 1], 1),
         Some(DraftError::Groups(MAX_CLEANUP_GROUPS + 1))
@@ -863,6 +928,7 @@ fn the_writer_refuses_what_a_reader_would() {
     assert_eq!(
         CleanupDraft {
             dot: dot(2, 1),
+            forget_before: 0,
             groups: vec![g(1)],
         }
         .sign(&key, &folder(0x20).record_keys(), &mut fill(1))
@@ -876,6 +942,10 @@ fn the_writer_refuses_what_a_reader_would() {
         DraftError::VectorDuplicate,
         DraftError::VectorCounter,
         DraftError::Counter(0),
+        DraftError::Watermark {
+            forget_before: 1,
+            counter: 1,
+        },
         DraftError::Chunks(1),
         DraftError::StoredLen(1),
         DraftError::Groups(0),
@@ -922,6 +992,7 @@ fn the_largest_records_fit() {
         .collect();
     let c = CleanupDraft {
         dot: dot(2, MAX_COUNTER),
+        forget_before: MAX_COUNTER - 1,
         groups,
     }
     .sign(&key, &key.record_keys(), &mut fill(1))
@@ -936,6 +1007,7 @@ fn the_largest_records_fit() {
     let tomb = parsed(&key, sign(&key, &t).unwrap());
     let m = tomb.open(&key.record_keys()).unwrap();
     assert!(m.meta().unwrap().is_tombstone());
+    assert!(m.expirable(), "a watermark expires a tombstone");
     t.meta.tree = true;
     t.meta.kind = Kind::Directory;
     let tree = parsed(&key, sign(&key, &t).unwrap());

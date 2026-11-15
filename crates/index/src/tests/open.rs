@@ -12,7 +12,7 @@
 //! goes; the result is the same on any number of verifying threads.
 
 use licketysync_keys::Tier;
-use licketysync_protocol::limits::{CLOCK_AHEAD_WARNING, MAX_COUNTER, PEER_STATE_HORIZON};
+use licketysync_protocol::limits::{MARK_SLACK, MAX_COUNTER, PEER_STATE_HORIZON};
 
 use licketysync_keys::RecordHash;
 
@@ -184,7 +184,6 @@ fn a_refused_commit_leaves_the_index_as_it_was() {
             store,
             rng,
             clock,
-            memory,
             notes,
             ..
         } = &mut d;
@@ -203,7 +202,6 @@ fn a_refused_commit_leaves_the_index_as_it_was() {
         let mut fill = |b: &mut [u8]| b.fill(1);
         let mut arrival = crate::Arrival {
             peer: dev(0xe0),
-            memory,
             notes,
             clock_us: *clock,
             rng: &mut fill,
@@ -227,10 +225,10 @@ fn a_refused_commit_leaves_the_index_as_it_was() {
 fn the_stored_high_water_mark_is_checked() {
     let mut d = Dev::writer(0xd0);
     d.put("a", 1);
-    let greatest = d.ix.folder_time();
+    let greatest = d.ix.s.greatest_counter();
     // Above the greatest counter held and the clock floor by more than
-    // CLOCK_AHEAD_WARNING: corrupt, replaced.
-    for hw in [greatest.max(T0) + CLOCK_AHEAD_WARNING + 1, MAX_COUNTER] {
+    // MARK_SLACK, or above MAX_COUNTER: corrupt, replaced.
+    for hw in [greatest.max(T0) + MARK_SLACK + 1, MAX_COUNTER + 1] {
         let meta = d.store.meta().unwrap();
         d.store.set_meta(StoredMeta { hw, ..meta });
         let report = d.reopen();
@@ -238,9 +236,9 @@ fn the_stored_high_water_mark_is_checked() {
         assert_eq!(d.ix.hw(), greatest.max(T0));
         assert_eq!(report.changes.meta.map(|m| m.hw), Some(greatest.max(T0)));
     }
-    // Within the warning: kept (a write's mark, or a clock read just ahead).
+    // Within the slack: kept (a write's mark, or a clock read just ahead).
     let meta = d.store.meta().unwrap();
-    let within = greatest.max(T0) + CLOCK_AHEAD_WARNING;
+    let within = greatest.max(T0) + MARK_SLACK;
     d.store.set_meta(StoredMeta { hw: within, ..meta });
     let report = d.reopen();
     assert!(!report.hw_corrupt);

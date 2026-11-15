@@ -8,13 +8,14 @@
 //! arriving), directories made, deletes, tree deletes and renames by several
 //! devices at every tier, with deliveries in any order (replays of old
 //! records included), rounds of exchange with their notes and cleanups,
-//! clocks that move by days and by horizons, and restored stores. Signing is
+//! clocks that move by days and by horizons, write holders' checks for a
+//! watermark, and restored stores. Signing is
 //! slow in a debug build, so histories are short and cases few; the vector
 //! cap is lowered to 2 and 3, and a third of the histories are lines of
 //! versions through more writers than that, so that pruning takes place; the
 //! tests at the real cap are item 7's vectors. Every device of a history
 //! moves its clock by the same days, so the holders (e) compares share one
-//! clock; clocks apart within the clock rule are (d)'s. Files take one of
+//! clock; clocks apart by any amount are (d)'s. Files take one of
 //! three contents, directories are made at `d` and `d/e`, and a third of the
 //! histories start with every writer writing one path apart, so that twins
 //! are common (4.4, "Bases"; the R1 review of the identical-heads fix,
@@ -23,7 +24,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use licketysync_keys::{DeviceId, RecordHash};
-use licketysync_protocol::limits::{CLEANUP_HORIZON, CLOCK_RULE_LIMIT, TOMBSTONE_HORIZON};
 use licketysync_protocol::record::{Applied, Dot, Kind, Meta, Record};
 use proptest::prelude::*;
 
@@ -91,6 +91,11 @@ enum Op {
     Days {
         n: u16,
     },
+    /// A write holder's check for a watermark, its interval counted by its
+    /// wall clock (as across openings).
+    Check {
+        dev: u8,
+    },
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -105,6 +110,7 @@ fn op() -> impl Strategy<Value = Op> {
         6 => (any::<u8>(), any::<u16>()).prop_map(|(to, pick)| Op::Deliver { to, pick }),
         2 => (any::<u8>(), any::<u8>()).prop_map(|(a, b)| Op::Round { a, b }),
         1 => prop_oneof![1u16..40, Just(366u16), Just(31u16)].prop_map(|n| Op::Days { n }),
+        2 => any::<u8>().prop_map(|dev| Op::Check { dev }),
     ]
 }
 
@@ -266,14 +272,14 @@ fn on_disk(d: &Dev) -> (Vec<Meta>, Vec<Meta>) {
 }
 
 /// A drop observed at a device: what was dropped, the records that may
-/// have dropped it (the one accepted or the ones written), and the device's
-/// folder time after the change, by which expiry is judged.
+/// have dropped it (the one accepted or the ones written), and the greatest
+/// watermark the device held after the change, by which expiry is judged.
 #[derive(Clone, Debug)]
 struct Drop {
     dropped: RecordHash,
     by: Vec<RecordHash>,
     sealed: bool,
-    folder_time: u64,
+    watermark: u64,
 }
 
 /// The world of a history: its devices (writers first, then a reader and a
@@ -427,13 +433,13 @@ impl World {
             }
         }
         let by: Vec<RecordHash> = w.records.iter().map(|(h, _)| *h).collect();
-        let folder_time = self.devs[i].ix.s.folder_time();
+        let watermark = self.devs[i].ix.watermark();
         for u in w.dropped {
             self.drops.push(Drop {
                 dropped: u,
                 by: by.clone(),
                 sealed: false,
-                folder_time,
+                watermark,
             });
         }
         self.note_held(i);
@@ -446,13 +452,13 @@ impl World {
             panic!("an honest record refused");
         };
         let sealed = self.devs[i].ix.tier() == licketysync_keys::Tier::Sealed;
-        let folder_time = self.devs[i].ix.s.folder_time();
+        let watermark = self.devs[i].ix.watermark();
         for u in a.dropped {
             self.drops.push(Drop {
                 dropped: u,
                 by: vec![h],
                 sealed,
-                folder_time,
+                watermark,
             });
         }
         self.note_held(i);
@@ -573,7 +579,36 @@ impl World {
                     d.clock += u64::from(days) * DAY;
                 }
             }
+            Op::Check { dev } => {
+                let i = pick(dev, w);
+                let (written, _) = self.devs[i].check(None);
+                self.signed(i, written);
+            }
         }
+    }
+
+    /// What a check signed at `i`: its cleanup into the archive, with what
+    /// its writer knew, and the records the watermark expired.
+    fn signed(&mut self, i: usize, written: crate::Written) {
+        let seen = self.seen[i].clone();
+        for (h, _) in &written.records {
+            let s = self.devs[i].signed(h).clone();
+            self.archive.insert(*h, s);
+            self.order.push(*h);
+            self.knows.insert(*h, seen.clone());
+            self.opened(*h);
+        }
+        let by: Vec<RecordHash> = written.records.iter().map(|(h, _)| *h).collect();
+        let watermark = self.devs[i].ix.watermark();
+        for u in written.dropped {
+            self.drops.push(Drop {
+                dropped: u,
+                by: by.clone(),
+                sealed: false,
+                watermark,
+            });
+        }
+        self.note_held(i);
     }
 
     /// One round of `i`'s with `j`, observing every drop and record.
@@ -602,10 +637,10 @@ impl World {
             a.ix.tier() == licketysync_keys::Tier::Sealed,
             b.ix.tier() == licketysync_keys::Tier::Sealed,
         );
-        let (ga, gb) = (a.ix.s.folder_time(), b.ix.s.folder_time());
+        let (ga, gb) = (a.ix.watermark(), b.ix.watermark());
         let offered_by_b: BTreeSet<RecordHash> = before_b.union(&after_b).copied().collect();
         let offered_by_a: BTreeSet<RecordHash> = before_a.union(&after_a).copied().collect();
-        for (before, after, sealed, offered, folder_time) in [
+        for (before, after, sealed, offered, watermark) in [
             (before_a, after_a, sa, offered_by_b, ga),
             (before_b, after_b, sb, offered_by_a, gb),
         ] {
@@ -618,7 +653,7 @@ impl World {
                     dropped: *u,
                     by,
                     sealed,
-                    folder_time,
+                    watermark,
                 });
             }
         }
@@ -680,22 +715,18 @@ impl World {
     /// Property (a), for a read or write holder's drop: by a record that
     /// knows it, or that knows a later record of its device at its path or
     /// beneath the deleted directory; or by a name of a cleanup group whose
-    /// `because` does; or by expiry, for a deletion or a cleanup the
-    /// device's folder time after the change has passed by more than its
-    /// horizon (4.4, "Expiry"; that time only grows within a change, so one
-    /// dropped early in a change that ends past the horizon passes too).
+    /// `because` does; or by expiry, for a tombstone, tree delete or cleanup
+    /// whose counter is at most the greatest watermark the device held after
+    /// the change (4.4, "Expiry by the watermark"; only an honest write
+    /// holder signs here, so that watermark never falls within a change).
     fn justified(&self, d: &Drop) -> bool {
         let u = d.dropped;
         let Some(ud) = self.dot(&u) else {
             return true; // opaque or unknown: goes only by a name
         };
         let um = self.index_meta(&u);
-        let horizon = match um {
-            None => Some(CLEANUP_HORIZON),
-            Some(m) if m.deleted => Some(TOMBSTONE_HORIZON),
-            Some(_) => None,
-        };
-        if horizon.is_some_and(|h| d.folder_time.saturating_sub(ud.counter) > h) {
+        let expirable = um.is_none_or(|m| m.deleted);
+        if expirable && ud.counter <= d.watermark {
             return true;
         }
         let Some(um) = um else {
@@ -1063,7 +1094,7 @@ proptest! {
     /// (d) the live records, the expired ones, the heads and the records
     /// refused depend only on the records held: a read holder fed every
     /// record of a history in its order, and a fresh one fed what the first
-    /// holds in another order, with clocks apart within the clock rule, hold
+    /// holds in another order, with clocks apart by any amount, hold
     /// exactly the same records and heads, and judge every record of the
     /// history alike afterwards, one by one, staying alike (the models' K2
     /// and K4).
@@ -1074,7 +1105,7 @@ proptest! {
         let mut x = Dev::reader(0xa1);
         let mut y = Dev::reader(0xa2);
         x.clock = newest + ahead * DAY;
-        y.clock = newest.saturating_sub(behind * DAY).max(newest.saturating_sub(CLOCK_RULE_LIMIT));
+        y.clock = newest.saturating_sub(behind * 20 * DAY);
         for h in &w.order {
             x.accept(&w.archive[h]).unwrap();
         }
@@ -1104,8 +1135,7 @@ proptest! {
     /// holder meets holds what it holds after the rounds its cleanups owe,
     /// short of stale copies a cleanup it holds names in a group that no
     /// longer applies. The devices of a history share one clock, not the
-    /// spec's random clocks within the clock rule: (d) is the test of
-    /// clocks apart.
+    /// spec's random clocks: (d) is the test of clocks apart.
     #[test]
     fn caught_up_holders_agree_e_g(ops in history(24), cap in prop_oneof![Just(2usize), Just(3)]) {
         let mut w = run(&ops, WRITERS, cap);
@@ -1353,14 +1383,12 @@ impl World {
                 let s = self.archive[&h].clone();
                 let d = &mut self.devs[pick(to, n)];
                 let record = Record::parse(s, d.ix.key().verifier()).unwrap();
-                let mut memory = d.memory.clone();
                 // A budget of the dry run's own: the device's stays unspent.
                 let mut notes = licketysync_protocol::connection::NoteBudget::for_tests();
                 dry(d, "an accept", |txn, rng, clock| {
                     let mut fill = |b: &mut [u8]| rng.fill(b);
                     let mut arrival = crate::Arrival {
                         peer: super::kit::dev(0xee),
-                        memory: &mut memory,
                         notes: &mut notes,
                         clock_us: clock,
                         rng: &mut fill,
@@ -1385,6 +1413,17 @@ impl World {
                             mtime_ns: 88,
                         }],
                         clock,
+                        &mut |b| rng.fill(b),
+                    );
+                })
+            }
+            Op::Check { dev } => {
+                let d = &mut self.devs[pick(dev, wr)];
+                dry(d, "a check", |txn, rng, clock| {
+                    let _ = txn.check_watermark(
+                        clock,
+                        None,
+                        licketysync_protocol::limits::WATERMARK_INTERVAL,
                         &mut |b| rng.fill(b),
                     );
                 })

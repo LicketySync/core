@@ -26,12 +26,12 @@
 use crate::features::{is_feature_name, is_list_entry};
 use crate::limits::{
     CLEANUP_RECORD_TYPE, DEVICE_SIGNATURE_LEN, HINT_LEN, INDEX_RECORD_TYPE, MAX_CHUNKS,
-    MAX_CLEANUP_ENTRIES, MAX_CLEANUP_GROUPS, MAX_CLEANUP_SEALED_BYTES, MAX_CLOCK_DAYS,
-    MAX_CLOSE_DETAIL_BYTES, MAX_DEVICE_NAME_BYTES, MAX_FEATURE_NAME_BYTES, MAX_FEATURES,
-    MAX_INDEX_RECORD_BYTES, MAX_LIST_ENTRIES, MAX_LIST_ENTRY_BYTES, MAX_LOCAL_SEQ,
-    MAX_PAGE_RECORDS, MAX_PREFIX_NIBBLES, MAX_PROOF_SEALED, MAX_REPLACES, MAX_SEALED_BYTES,
-    MAX_STATUS_FOLDERS, MAX_STORED_LEN, MAX_SUITES, MAX_VECTOR_ENTRIES, MIN_PROOF_SEALED,
-    MIN_STORED_LEN, PRE_HELLO_LIMIT, PROOF_NONCE_LEN,
+    MAX_CLEANUP_ENTRIES, MAX_CLEANUP_GROUPS, MAX_CLEANUP_SEALED_BYTES, MAX_CLOSE_DETAIL_BYTES,
+    MAX_DEVICE_NAME_BYTES, MAX_FEATURE_NAME_BYTES, MAX_FEATURES, MAX_INDEX_RECORD_BYTES,
+    MAX_LIST_ENTRIES, MAX_LIST_ENTRY_BYTES, MAX_LOCAL_SEQ, MAX_PAGE_RECORDS, MAX_PREFIX_NIBBLES,
+    MAX_PROOF_SEALED, MAX_REPLACES, MAX_SEALED_BYTES, MAX_STATUS_FOLDERS, MAX_STORED_LEN,
+    MAX_SUITES, MAX_VECTOR_ENTRIES, MIN_PROOF_SEALED, MIN_STORED_LEN, PRE_HELLO_LIMIT,
+    PROOF_NONCE_LEN,
 };
 use crate::messages::{
     ChunkRef, ChunkReply, ChunkRequest, ChunkStatus, CleanupGroup, CleanupMeta, CleanupRecord,
@@ -125,7 +125,7 @@ impl Parse for Hello {
         let mut seen = Seen::default();
         let any = PRE_HELLO_LIMIT as usize;
         while let Some((field, wt)) = r.next_tag()? {
-            seen.check(field, &[1, 7, 8, 9, 10, 11])?;
+            seen.check(field, &[1, 7, 8, 9, 10])?;
             match field {
                 1 => m.device_public_key = to_vec(r.bytes(wt, field, "device_public_key", any)?),
                 3 => r.repeated_uint32(wt, field, "suites", MAX_SUITES, &mut m.suites)?,
@@ -136,17 +136,13 @@ impl Parse for Hello {
                 8 => m.max_requests_in_flight = r.uint32(wt, field, "max_requests_in_flight")?,
                 9 => m.nonce = to_vec(r.bytes(wt, field, "nonce", any)?),
                 10 => m.libp2p_identity = to_vec(r.bytes(wt, field, "libp2p_identity", any)?),
-                11 => m.clock_days = r.uint32(wt, field, "clock_days")?,
-                // Field 2 is reserved (it was `device_name`) and, like any
-                // unknown field, skipped.
+                // Fields 2 and 11 are reserved (they were `device_name` and
+                // `clock_days`) and, like any unknown field, skipped.
                 _ => r.skip(wt)?,
             }
         }
         if m.suites.iter().any(|s| !is_suite_number(*s)) {
             return Err(WireError::OutOfRange { what: "suites" });
-        }
-        if m.clock_days > MAX_CLOCK_DAYS {
-            return Err(WireError::OutOfRange { what: "clock_days" });
         }
         Ok(m)
     }
@@ -472,11 +468,12 @@ impl Parse for CleanupGroup {
 
 impl Parse for CleanupRecord {
     /// A cleanup body under step 1's context-free checks (4.4): the suite a
-    /// suite number, the record type 17, the folder ID of 32 bytes, 1 to
-    /// `MAX_CLEANUP_GROUPS` groups, each `because` empty or 32 bytes, 1 to
-    /// `MAX_CLEANUP_ENTRIES` names in all, each of 32 bytes and ascending
-    /// without repeats within its group, and a sealed part of 296, 552 or
-    /// 1 064 bytes.
+    /// suite number, the record type 17, the folder ID of 32 bytes, 0 to
+    /// `MAX_CLEANUP_GROUPS` groups (none in a cleanup that only carries a
+    /// watermark, case (d)), each `because` empty or 32 bytes, and, when it
+    /// has a group, 1 to `MAX_CLEANUP_ENTRIES` names in all, each of 32 bytes
+    /// and ascending without repeats within its group; and a sealed part of
+    /// 296, 552 or 1 064 bytes.
     fn parse(body: &[u8]) -> Result<Self, WireError> {
         let mut r = Reader::new(body);
         let mut m = Self::default();
@@ -506,12 +503,7 @@ impl Parse for CleanupRecord {
             });
         }
         exact(&m.folder_id, ID, "folder_id")?;
-        if m.groups.is_empty() {
-            return Err(WireError::Grammar {
-                what: "a cleanup with no group",
-            });
-        }
-        if budget == MAX_CLEANUP_ENTRIES {
+        if !m.groups.is_empty() && budget == MAX_CLEANUP_ENTRIES {
             return Err(WireError::Grammar {
                 what: "a cleanup with no name",
             });
@@ -591,16 +583,18 @@ impl Parse for SealedMeta {
 
 impl Parse for CleanupMeta {
     /// A cleanup's opened metadata (4.4 step 7): the wire format only; the
-    /// device ID's size and the counter's range are step 7's checks.
+    /// device ID's size, the counter's range and the watermark below the
+    /// counter are step 7's checks.
     fn parse(body: &[u8]) -> Result<Self, WireError> {
         let mut r = Reader::new(body);
         let mut m = Self::default();
         let mut seen = Seen::default();
         while let Some((field, wt)) = r.next_tag()? {
-            seen.check(field, &[1, 2])?;
+            seen.check(field, &[1, 2, 3])?;
             match field {
                 1 => m.device_id = to_vec(r.bytes(wt, field, "device_id", usize::MAX)?),
                 2 => m.counter = r.uint64(wt, field)?,
+                3 => m.forget_before = r.uint64(wt, field)?,
                 _ => r.skip(wt)?,
             }
         }

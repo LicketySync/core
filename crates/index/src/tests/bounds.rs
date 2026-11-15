@@ -13,7 +13,7 @@
 
 use licketysync_keys::RecordHash;
 use licketysync_protocol::connection::Judgement;
-use licketysync_protocol::limits::{CLEANUP_HORIZON, MAX_NOTE_VERIFICATIONS};
+use licketysync_protocol::limits::{MAX_NOTE_VERIFICATIONS, PEER_NAMES_WINDOW};
 
 use super::kit::{DAY, Dev, dev, garbage};
 use crate::{Change, NotNoted};
@@ -65,13 +65,13 @@ fn a_peer_at_max_peer_names_is_not_noted_until_its_window_ends() {
     // Another peer's copy is noted.
     let b = w.accept_from(dev(0xef), d.signed(&old[1])).unwrap();
     assert!(b.noted && b.not_noted.is_none());
-    // Once the window of CLEANUP_HORIZON has passed, the first peer's names
+    // Once the window of PEER_NAMES_WINDOW has passed, the first peer's names
     // count afresh.
     let (d2, mut w2, old2) = stale_copies(&["a", "b"]);
     w2.ix.bounds.peer_names = 1;
     assert!(w2.accept(d2.signed(&old2[0])).unwrap().noted);
     assert!(w2.end_round().cleanup);
-    w2.clock += CLEANUP_HORIZON + 1;
+    w2.clock += PEER_NAMES_WINDOW + 1;
     let c = w2.accept(d2.signed(&old2[1])).unwrap();
     assert!(c.noted, "a new window");
 }
@@ -84,7 +84,7 @@ fn a_peer_at_max_peer_names_is_not_noted_until_its_window_ends() {
 /// end.
 #[test]
 fn a_peers_names_window_ends_exactly_30_days_after_it_began() {
-    const PEER_NAMES_WINDOW: u64 = 30 * DAY;
+    assert_eq!(PEER_NAMES_WINDOW, 30 * DAY);
     let (d, mut w, old) = stale_copies(&["a", "b"]);
     w.ix.bounds.peer_names = 1;
     assert!(w.accept(d.signed(&old[0])).unwrap().noted);

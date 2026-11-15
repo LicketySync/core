@@ -13,19 +13,22 @@
 //! - **Step 7** ([`Record::open`]), for read and write holders: the seal under
 //!   the folder's record key and `aad = folder_id || path_tag` (or
 //!   `folder_id`, for a cleanup), the metadata's grammar, the path's tag, the
-//!   dot, the vector and the deletion marks. Failure: a [`WriterFault`], one
+//!   dot, the vector and the deletion marks, and a cleanup's watermark below
+//!   its counter. Failure: a [`WriterFault`], one
 //!   variant per check, the record then held opaque. It is a pure function of
 //!   the record and the folder's keys, cheap to call once and its [`Verdict`]
 //!   easy to keep: the index runs it at step 3, before the signature, charging
 //!   no one, and reuses the verdict at step 7 (4.4 "Coverage": coverage never
 //!   reads a vector that has not been checked).
 //!
-//! Steps 2 to 6, 8 and 9 (duplicates, names, coverage, expiry, the clock
-//! rule, the signature, what is held) are the index's: it holds the records
-//! they are about. [`Record::verify`] is step 5. The writer's side,
+//! Steps 2, 3, 5, 6, 8 and 9 (duplicates, names, coverage, expiry by the
+//! watermark, the signature, what is held) are the index's: it holds the
+//! records they are about; step 4 is empty, no record being judged by a
+//! clock. [`Record::verify`] is step 5. The writer's side,
 //! [`IndexDraft::sign`] and [`CleanupDraft::sign`], encodes, seals and signs
-//! what the index decided (dot, vector, names, groups) and never emits a
-//! record a reader's steps 1 and 7 would refuse.
+//! what the index decided (dot, vector, names, groups, a cleanup's
+//! watermark) and never emits a record a reader's steps 1 and 7 would
+//! refuse.
 //!
 //! Dots and vectors ([`Dot`], [`Vector`]) live inside the seal; what a sealed
 //! peer reads is the record's clear fields: its key in the set digests
@@ -88,7 +91,8 @@ pub(crate) enum Body {
     },
     /// A cleanup.
     Cleanup {
-        /// 1 to `MAX_CLEANUP_GROUPS` groups.
+        /// 0 to `MAX_CLEANUP_GROUPS` groups: none in a cleanup that only
+        /// carries a watermark (4.4, "Cleanup", case (d)).
         groups: Vec<Group>,
     },
 }
@@ -489,8 +493,8 @@ impl Meta {
         self.tree
     }
 
-    /// A deletion of either kind, which expires after `TOMBSTONE_HORIZON`
-    /// (the tests').
+    /// A deletion of either kind, which a watermark at or above its counter
+    /// expires (the tests').
     #[cfg(test)]
     #[must_use]
     pub(crate) const fn is_deletion(&self) -> bool {
@@ -498,13 +502,23 @@ impl Meta {
     }
 }
 
+/// A cleanup's opened metadata (4.4, `CleanupMeta`), checked by step 7.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CleanupSeal {
+    /// The issuer's device ID, as the signer claims it, and its counter.
+    pub dot: Dot,
+    /// The watermark it carries (4.4, "Expiry by the watermark"): 0 for
+    /// none, else below the dot's counter.
+    pub forget_before: u64,
+}
+
 /// What step 7 found a record to be, when every check passed.
 #[derive(Clone, Debug)]
 pub enum Applied {
     /// An index record's metadata.
     Index(Meta),
-    /// A cleanup's dot (its issuer and counter).
-    Cleanup(Dot),
+    /// A cleanup's dot and watermark.
+    Cleanup(CleanupSeal),
 }
 
 impl Applied {
@@ -513,7 +527,27 @@ impl Applied {
     pub const fn dot(&self) -> &Dot {
         match self {
             Self::Index(meta) => &meta.dot,
-            Self::Cleanup(dot) => dot,
+            Self::Cleanup(seal) => &seal.dot,
+        }
+    }
+
+    /// The watermark a cleanup carries, 0 for none; 0 for an index record.
+    #[must_use]
+    pub const fn forget_before(&self) -> u64 {
+        match self {
+            Self::Index(_) => 0,
+            Self::Cleanup(seal) => seal.forget_before,
+        }
+    }
+
+    /// Whether the watermark expires this record (4.4, "Expiry by the
+    /// watermark"): a tombstone, tree delete or cleanup expires once the
+    /// greatest watermark held is at least its counter; no version does.
+    #[must_use]
+    pub const fn expirable(&self) -> bool {
+        match self {
+            Self::Index(meta) => meta.deleted,
+            Self::Cleanup(_) => true,
         }
     }
 
@@ -632,6 +666,14 @@ pub enum WriterFault {
     DeviceId(usize),
     /// `counter` is 0 or above `MAX_COUNTER`.
     Counter(u64),
+    /// A cleanup's `forget_before` is not below its counter: no watermark of
+    /// its own may expire it (4.4, "Expiry by the watermark").
+    Watermark {
+        /// The watermark it carries.
+        forget_before: u64,
+        /// Its counter.
+        counter: u64,
+    },
     /// The vector has more than `MAX_VECTOR_ENTRIES` entries.
     VectorLength,
     /// A vector entry's `device_id` is not 32 bytes: its length.
@@ -685,6 +727,13 @@ impl fmt::Display for WriterFault {
             Self::PathTag => f.write_str("the path's tag is not the record's path tag"),
             Self::DeviceId(n) => write!(f, "a device ID of {n} bytes"),
             Self::Counter(n) => write!(f, "counter {n} is out of range"),
+            Self::Watermark {
+                forget_before,
+                counter,
+            } => write!(
+                f,
+                "a watermark of {forget_before}, not below the cleanup's counter {counter}"
+            ),
             Self::VectorLength => write!(f, "a vector of more than {MAX_VECTOR_ENTRIES} entries"),
             Self::VectorDevice(n) => write!(f, "a vector entry's device ID of {n} bytes"),
             Self::VectorCounterZero => f.write_str("a vector entry with counter 0"),
@@ -820,10 +869,20 @@ fn open_index(
     })
 }
 
-fn open_cleanup(keys: &RecordKeys, sealed: &[u8]) -> Result<Dot, WriterFault> {
+fn open_cleanup(keys: &RecordKeys, sealed: &[u8]) -> Result<CleanupSeal, WriterFault> {
     let plain = keys.open_cleanup_meta(sealed).map_err(WriterFault::Seal)?;
     let m = CleanupMeta::parse(&plain).map_err(WriterFault::Meta)?;
-    dot_of(&m.device_id, m.counter)
+    let dot = dot_of(&m.device_id, m.counter)?;
+    if m.forget_before >= dot.counter {
+        return Err(WriterFault::Watermark {
+            forget_before: m.forget_before,
+            counter: dot.counter,
+        });
+    }
+    Ok(CleanupSeal {
+        dot,
+        forget_before: m.forget_before,
+    })
 }
 
 /// Why a draft was refused: the record would break a rule a reader
@@ -844,13 +903,20 @@ pub enum DraftError {
     VectorCounter,
     /// The record's counter is 0 or above `MAX_COUNTER`.
     Counter(u64),
+    /// A cleanup's watermark is not below its counter.
+    Watermark {
+        /// The watermark.
+        forget_before: u64,
+        /// The cleanup's counter.
+        counter: u64,
+    },
     /// More than 32 768 chunks.
     Chunks(usize),
     /// A chunk's stored length is not one a reader accepts.
     StoredLen(u32),
-    /// No group, or more than `MAX_CLEANUP_GROUPS`.
+    /// More than `MAX_CLEANUP_GROUPS` groups.
     Groups(usize),
-    /// No name, or more than `MAX_CLEANUP_ENTRIES` in all.
+    /// Groups with no name, or more than `MAX_CLEANUP_ENTRIES` names in all.
     Names(usize),
     /// The metadata fails a check of step 7.
     Fault(WriterFault),
@@ -872,6 +938,13 @@ impl fmt::Display for DraftError {
             Self::VectorDuplicate => f.write_str("a vector naming one device twice"),
             Self::VectorCounter => f.write_str("a vector entry not below the record's counter"),
             Self::Counter(n) => write!(f, "counter {n} is out of range"),
+            Self::Watermark {
+                forget_before,
+                counter,
+            } => write!(
+                f,
+                "a watermark of {forget_before}, not below the counter {counter}"
+            ),
             Self::Chunks(n) => write!(f, "{n} chunks, over {MAX_CHUNKS}"),
             Self::StoredLen(n) => write!(f, "stored length {n} is not valid"),
             Self::Groups(n) => write!(f, "{n} cleanup groups"),
@@ -899,13 +972,20 @@ pub struct IndexDraft {
     pub replaces: Vec<RecordHash>,
 }
 
-/// A cleanup a write holder is about to sign: its dot and its groups. Each
-/// group's names may come in any order and may repeat.
+/// A cleanup a write holder is about to sign: its dot, the watermark it
+/// carries and its groups. Each group's names may come in any order and may
+/// repeat.
 #[derive(Clone, Debug)]
 pub struct CleanupDraft {
     /// The issuer's device ID and counter.
     pub dot: Dot,
-    /// 1 to `MAX_CLEANUP_GROUPS` groups, 1 to `MAX_CLEANUP_ENTRIES` names in all.
+    /// The watermark: the greatest the writer holds, or the one it signs
+    /// now; 0 for none, else below the dot's counter (4.4, "Expiry by the
+    /// watermark").
+    pub forget_before: u64,
+    /// 0 to `MAX_CLEANUP_GROUPS` groups, and, when there is a group, 1 to
+    /// `MAX_CLEANUP_ENTRIES` names in all; none in a cleanup that only
+    /// carries a watermark (case (d)).
     pub groups: Vec<Group>,
 }
 
@@ -1047,10 +1127,10 @@ impl IndexDraft {
 }
 
 impl CleanupDraft {
-    /// Seals the dot as `CleanupMeta` under `aad = folder_id`, encodes the
-    /// groups canonically (each group's names ascending without repeats) and
-    /// signs the body with the folder key under `sig/cleanup`; the result
-    /// passes a reader's steps 1 and 7.
+    /// Seals the dot and the watermark as `CleanupMeta` under `aad =
+    /// folder_id`, encodes the groups canonically (each group's names
+    /// ascending without repeats) and signs the body with the folder key
+    /// under `sig/cleanup`; the result passes a reader's steps 1 and 7.
     ///
     /// # Errors
     /// [`DraftError`].
@@ -1065,7 +1145,13 @@ impl CleanupDraft {
             return Err(DraftError::WrongKeys);
         }
         check_dot(&self.dot)?;
-        if self.groups.is_empty() || self.groups.len() > MAX_CLEANUP_GROUPS {
+        if self.forget_before >= self.dot.counter {
+            return Err(DraftError::Watermark {
+                forget_before: self.forget_before,
+                counter: self.dot.counter,
+            });
+        }
+        if self.groups.len() > MAX_CLEANUP_GROUPS {
             return Err(DraftError::Groups(self.groups.len()));
         }
         let groups: Vec<CleanupGroup> = self
@@ -1080,12 +1166,13 @@ impl CleanupDraft {
             })
             .collect();
         let names: usize = groups.iter().map(|g| g.forget.len()).sum();
-        if names == 0 || names > MAX_CLEANUP_ENTRIES {
+        if (names == 0 && !groups.is_empty()) || names > MAX_CLEANUP_ENTRIES {
             return Err(DraftError::Names(names));
         }
         let meta = CleanupMeta {
             device_id: self.dot.device.0.to_vec(),
             counter: self.dot.counter,
+            forget_before: self.forget_before,
         }
         .encode_to_vec();
         let sealed = keys

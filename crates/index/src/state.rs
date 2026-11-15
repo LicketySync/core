@@ -12,9 +12,10 @@
 //! else here is derived from the records held and kept in step with them by
 //! [`State::hold`] and [`State::unhold`]: the records by tag and by path, the
 //! names (`replaces` at their tag) and the cleanup groups by what they forget
-//! and by their `because`, the counters of the applied records (the folder's
-//! own time), the deletions and cleanups by counter (expiry), the chunk
-//! counts and the set digests.
+//! and by their `because`, the counters of the applied records, the applied
+//! tombstones, tree deletes and cleanups by counter, and the watermarks the
+//! applied cleanups carry (expiry by the watermark, 4.4), the chunk counts
+//! and the set digests.
 //!
 //! Every primitive logs its inverse in an undo log ([`Undo`]) when it is
 //! given one, so that a transaction that is dropped is undone exactly, with
@@ -39,6 +40,11 @@ pub(crate) struct Held {
     pub(crate) seq: u64,
     /// Step 7's verdict at a read or write holder; `None` at a sealed holder.
     pub(crate) verdict: Option<Verdict>,
+    /// At a write holder, for an applied tombstone, tree delete or cleanup:
+    /// its arrival, the wall clock's reading, in microseconds since the
+    /// epoch, taken for the commit that first held it here (4.4, "Arrival").
+    /// Local state, never sent; `None` otherwise.
+    pub(crate) arrival: Option<u64>,
 }
 
 impl Held {
@@ -53,10 +59,30 @@ impl Held {
     fn counter(&self) -> Option<u64> {
         self.applied().map(|a| a.dot().counter)
     }
+
+    /// The counter of an applied tombstone, tree delete or cleanup: what a
+    /// watermark at or above it expires.
+    fn expirable(&self) -> Option<u64> {
+        self.applied()
+            .filter(|a| a.expirable())
+            .map(|a| a.dot().counter)
+    }
+
+    /// Whether a watermark that passes this record lets a write holder sign
+    /// (4.4, "When a write holder signs one", condition (2)): a tombstone, a
+    /// tree delete, or a cleanup with a `because`, one with a group whose
+    /// `because` is not empty (cases (a) and (b)).
+    pub(crate) fn lets_sign(&self) -> bool {
+        match self.applied() {
+            Some(Applied::Index(m)) => m.deleted,
+            Some(Applied::Cleanup(_)) => self.record.groups().iter().any(|g| g.because.is_some()),
+            None => false,
+        }
+    }
 }
 
 /// A record kept only as a base: not held, not served, not counted in any
-/// digest, not pushed, not part of the folder's time (4.4, "Bases").
+/// digest, not pushed (4.4, "Bases").
 #[derive(Clone, Debug)]
 pub(crate) struct BaseRecord {
     pub(crate) record: Record,
@@ -75,8 +101,10 @@ pub(crate) enum Noted {
         dot: Dot,
         tree: bool,
     },
-    /// A tombstone, tree delete or cleanup forgotten past its horizon.
-    Forgotten,
+    /// A tombstone, tree delete or cleanup that the greatest watermark held
+    /// had expired: its counter, judged again against the watermark of the
+    /// cleanup that names it (4.4, "Cleanup", case (c)).
+    Forgotten { counter: u64 },
 }
 
 /// One note of a write holder: a record a peer offered, verified, which the
@@ -161,13 +189,17 @@ pub(crate) struct State {
     pub(crate) by_path: ByPath,
     /// Applied tree deletes held, by directory: what a record lies beneath.
     pub(crate) tree_dirs: Dirs,
-    /// The counters of applied records held, with how many: the folder's
-    /// own time is the greatest.
+    /// The counters of applied records held, with how many.
     counters: BTreeMap<u64, u32>,
-    /// Applied deletions (tombstones and tree deletes) held, by counter.
-    deletions: BTreeSet<(u64, RecordHash)>,
-    /// Applied cleanups held, by counter.
-    cleanup_counters: BTreeSet<(u64, RecordHash)>,
+    /// Applied tombstones, tree deletes and cleanups held, by counter, then
+    /// record hash: what a watermark expires, from the low end (4.4,
+    /// "Finding what expires"). Every entry lies above the greatest
+    /// watermark held.
+    expirable: BTreeSet<(u64, RecordHash)>,
+    /// The watermarks the applied cleanups held carry (0 for one that
+    /// carries none), with how many carry each: the greatest is `H` (4.4,
+    /// "The greatest watermark").
+    watermarks: BTreeMap<u64, u32>,
     /// Chunk hash → held records naming it.
     pub(crate) chunks: BTreeMap<CipherHash, u32>,
     pub(crate) trie: Trie,
@@ -235,12 +267,6 @@ impl State {
         self.held.contains_key(hash)
     }
 
-    /// The folder's own time `G`: the greatest counter of an applied record
-    /// held (4.4, "Expiry"); 0 when none is.
-    pub(crate) fn folder_time(&self) -> u64 {
-        self.counters.keys().next_back().copied().unwrap_or(0)
-    }
-
     /// The greatest counter of an applied record held or kept as a base.
     pub(crate) fn greatest_counter(&self) -> u64 {
         let bases = self
@@ -249,7 +275,61 @@ impl State {
             .map(|b| b.meta.dot.counter)
             .max()
             .unwrap_or(0);
-        self.folder_time().max(bases)
+        let held = self.counters.keys().next_back().copied().unwrap_or(0);
+        held.max(bases)
+    }
+
+    /// The greatest watermark held, `H`: the greatest `forget_before` of the
+    /// applied cleanups held, 0 when none (4.4, "The greatest watermark").
+    pub(crate) fn watermark(&self) -> u64 {
+        self.watermarks.keys().next_back().copied().unwrap_or(0)
+    }
+
+    /// The applied tombstones, tree deletes and cleanups held at or below
+    /// `h`, and the deletions kept only as bases at or below it: what a
+    /// greatest watermark of `h` expires (4.4, "Expiry by the watermark").
+    pub(crate) fn expired(&self, h: u64) -> Vec<RecordHash> {
+        let past = (h.saturating_add(1), RecordHash([0; 32]));
+        self.expirable
+            .range(..past)
+            .chain(self.base_deletions.range(..past))
+            .map(|(_, r)| *r)
+            .collect()
+    }
+
+    /// A write holder's candidate at wall-clock reading `now` (4.4, "When a
+    /// write holder signs one"): walking the applied tombstones, tree deletes
+    /// and cleanups held up from the lowest counter, every one above `H`,
+    /// it stops at the first that is young, arrived less than `horizon`
+    /// before `now` or later than `now`, or at the end; the candidate is the
+    /// greatest counter, below the stopping record's, of the old records it
+    /// passed, and whether those it passes up to the candidate hold a
+    /// tombstone, tree delete or cleanup with a `because`. `None` when no
+    /// old record lies below the first young one. A record with no arrival
+    /// counts as young, a write holder's held records all having one.
+    pub(crate) fn candidate(&self, now: u64, horizon: u64) -> Option<(u64, bool)> {
+        // The greatest counter of the old records passed below the counter
+        // being walked, and whether they let it sign; then the same for
+        // those at that counter, which a young one there leaves unpassed.
+        let (mut below, mut lets_below) = (None, false);
+        let (mut at, mut lets_at) = (None, false);
+        for (c, h) in &self.expirable {
+            if at.is_some_and(|a| a < *c) {
+                below = at;
+                lets_below |= lets_at;
+                lets_at = false;
+            }
+            let held = self.held.get(h);
+            let old = held
+                .and_then(|r| r.arrival)
+                .is_some_and(|a| a <= now && now - a >= horizon);
+            if !old {
+                return below.map(|b| (b, lets_below));
+            }
+            at = Some(*c);
+            lets_at |= held.is_some_and(Held::lets_sign);
+        }
+        at.map(|a| (a, lets_below || lets_at))
     }
 
     /// Whether a held record at `tag` names `hash`.
@@ -471,33 +551,6 @@ impl State {
             .map(Replacer::Beneath)
     }
 
-    /// The deletions and cleanups the folder's own time has passed by their
-    /// horizon: strictly more than (4.4, "Expiry").
-    pub(crate) fn expired(&self, tombstone_horizon: u64, cleanup_horizon: u64) -> Vec<RecordHash> {
-        let g = self.folder_time();
-        let mut out = Vec::new();
-        if let Some(limit) = g.checked_sub(tombstone_horizon) {
-            out.extend(
-                self.deletions
-                    .range(..(limit, RecordHash([0; 32])))
-                    .map(|(_, h)| *h),
-            );
-            out.extend(
-                self.base_deletions
-                    .range(..(limit, RecordHash([0; 32])))
-                    .map(|(_, h)| *h),
-            );
-        }
-        if let Some(limit) = g.checked_sub(cleanup_horizon) {
-            out.extend(
-                self.cleanup_counters
-                    .range(..(limit, RecordHash([0; 32])))
-                    .map(|(_, h)| *h),
-            );
-        }
-        out
-    }
-
     /// The metadata of an applied record held or kept as a base.
     pub(crate) fn base_meta(&self, hash: &RecordHash) -> Option<&Meta> {
         self.held
@@ -570,21 +623,19 @@ impl State {
         }
         if let Some(c) = held.counter() {
             *self.counters.entry(c).or_insert(0) += 1;
-            match held.meta() {
-                Some(m) => {
-                    if m.deleted {
-                        self.deletions.insert((c, hash));
-                    }
-                    self.paths.entry(m.path.clone()).or_default().insert(hash);
-                    self.by_path
-                        .insert(m.dot.device, m.path.as_bytes(), hash, m.dot.counter);
-                    if m.tree {
-                        self.tree_dirs.insert(&m.path, hash);
-                    }
+            if held.expirable().is_some() {
+                self.expirable.insert((c, hash));
+            }
+            if let Some(m) = held.meta() {
+                self.paths.entry(m.path.clone()).or_default().insert(hash);
+                self.by_path
+                    .insert(m.dot.device, m.path.as_bytes(), hash, m.dot.counter);
+                if m.tree {
+                    self.tree_dirs.insert(&m.path, hash);
                 }
-                None => {
-                    self.cleanup_counters.insert((c, hash));
-                }
+            } else {
+                let w = held.applied().map_or(0, Applied::forget_before);
+                *self.watermarks.entry(w).or_insert(0) += 1;
             }
         }
         self.held.insert(hash, held);
@@ -674,22 +725,25 @@ impl State {
                     self.counters.remove(&c);
                 }
             }
-            match held.meta() {
-                Some(m) => {
-                    self.deletions.remove(&(c, *hash));
-                    self.by_path.remove(&m.dot.device, m.path.as_bytes(), hash);
-                    if m.tree {
-                        self.tree_dirs.remove(&m.path, hash);
-                    }
-                    if let Some(set) = self.paths.get_mut(&m.path) {
-                        set.remove(hash);
-                        if set.is_empty() {
-                            self.paths.remove(&m.path);
-                        }
+            self.expirable.remove(&(c, *hash));
+            if let Some(m) = held.meta() {
+                self.by_path.remove(&m.dot.device, m.path.as_bytes(), hash);
+                if m.tree {
+                    self.tree_dirs.remove(&m.path, hash);
+                }
+                if let Some(set) = self.paths.get_mut(&m.path) {
+                    set.remove(hash);
+                    if set.is_empty() {
+                        self.paths.remove(&m.path);
                     }
                 }
-                None => {
-                    self.cleanup_counters.remove(&(c, *hash));
+            } else {
+                let w = held.applied().map_or(0, Applied::forget_before);
+                if let Some(n) = self.watermarks.get_mut(&w) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        self.watermarks.remove(&w);
+                    }
                 }
             }
         }
@@ -980,6 +1034,10 @@ impl State {
         out.put = puts
             .iter()
             .filter_map(|(s, h)| Some((self.held.get(h)?.record.signed().clone(), *s)))
+            .collect();
+        out.arrivals = puts
+            .iter()
+            .filter_map(|(_, h)| Some((*h, self.held.get(h)?.arrival?)))
             .collect();
         for (h, before) in &before_base {
             match (before, self.base_only.get(h)) {

@@ -223,6 +223,11 @@ engine_runs! {
     engine_tree_delete => "engine-tree-delete",
     engine_sealed_cleanup => "engine-sealed-cleanup",
     engine_expiry => "engine-expiry",
+    engine_watermark_offline => "engine-watermark-offline",
+    engine_watermark_late => "engine-watermark-late",
+    engine_watermark_two => "engine-watermark-two",
+    engine_watermark_replay => "engine-watermark-replay",
+    engine_watermark_sealed => "engine-watermark-sealed",
     engine_identical_edit_0 => "engine-identical-edit-0",
     engine_identical_edit_1 => "engine-identical-edit-1",
     engine_identical_later_edits => "engine-identical-later-edits",
@@ -291,7 +296,7 @@ static ALL: [NamedScenario; 11] = [
 ];
 
 /// The engine scenarios, run by name.
-static ENGINE: [NamedScenario; 25] = [
+static ENGINE: [NamedScenario; 30] = [
     NamedScenario {
         name: "engine-clean",
         about: "engines: five writers, the default workload, 1 MiB chunks",
@@ -329,12 +334,12 @@ static ENGINE: [NamedScenario; 25] = [
     },
     NamedScenario {
         name: "engine-skew",
-        about: "engines: clocks 5 min, 1 h and 23 h ahead; the same head first, no clock warning",
+        about: "engines: clocks 5 min, 1 h and 23 h ahead; the same head first, no issue",
         run: engine_skew,
     },
     NamedScenario {
         name: "engine-clock-ahead",
-        about: "engines: as engine-skew with one clock 2 days ahead; the others warn, all converge",
+        about: "engines: as engine-skew with one clock 2 years ahead; no issue, all converge",
         run: engine_clock_ahead,
     },
     NamedScenario {
@@ -379,8 +384,33 @@ static ENGINE: [NamedScenario; 25] = [
     },
     NamedScenario {
         name: "engine-expiry",
-        about: "engines: a tombstone past the horizon in folder time is forgotten; the file returns",
+        about: "engines: a tombstone held a year is forgotten by a signed watermark; the file returns",
         run: engine_expiry,
+    },
+    NamedScenario {
+        name: "engine-watermark-offline",
+        about: "engines: a write holder offline most of the year signs at its open; all forget together",
+        run: engine_watermark_offline,
+    },
+    NamedScenario {
+        name: "engine-watermark-late",
+        about: "engines: a late arrival dated below holds a write holder's watermark back",
+        run: engine_watermark_late,
+    },
+    NamedScenario {
+        name: "engine-watermark-two",
+        about: "engines: two write holders apart sign different watermarks; both held, the greater counts",
+        run: engine_watermark_two,
+    },
+    NamedScenario {
+        name: "engine-watermark-replay",
+        about: "engines: an old deletion replayed below the watermark is ignored, then named away",
+        run: engine_watermark_replay,
+    },
+    NamedScenario {
+        name: "engine-watermark-sealed",
+        about: "engines: a sealed peer keeps a deletion until the round a watermark owes names it",
+        run: engine_watermark_sealed,
     },
     NamedScenario {
         name: "engine-identical-edit-0",

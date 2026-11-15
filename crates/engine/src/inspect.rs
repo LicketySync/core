@@ -38,6 +38,9 @@ pub struct RecordView {
     pub state: RecordState,
     /// A cleanup.
     pub cleanup: bool,
+    /// The watermark an applied cleanup carries at a read or write holder,
+    /// 0 for none (`protocol.md` 4.4, "Expiry by the watermark").
+    pub forget_before: u64,
     /// Its dot (writer device ID and counter), for an applied record at a
     /// read or write holder.
     pub dot: Option<Dot>,
@@ -69,9 +72,12 @@ pub struct FolderView {
     /// wrote or applied, above which its next write's counter lies; it never
     /// falls (0 at a sealed holder).
     pub hw: u64,
-    /// The folder's own time: the greatest counter of an applied record held
-    /// (0 at a sealed holder).
-    pub folder_time: u64,
+    /// The greatest watermark held, `H` (`protocol.md` 4.4, "Expiry by the
+    /// watermark"; 0 at a sealed holder, which reads none).
+    pub watermark: u64,
+    /// The wall clock's reading when this device last signed a watermark in
+    /// the folder, kept with its metadata; `None` before its first.
+    pub last_signed_us: Option<u64>,
     /// The chunks stored, ascending.
     pub stored_chunks: Vec<CipherHash>,
     /// The chunks no held record names any more, freed at the end of the
@@ -230,6 +236,7 @@ impl Engine {
                     hash: r.hash,
                     state: r.state,
                     cleanup: r.cleanup,
+                    forget_before: r.forget_before,
                     dot: r.dot,
                     chunks: f
                         .index
@@ -241,7 +248,8 @@ impl Engine {
                 .collect(),
             extra_versions: f.index.extra_versions(),
             hw: f.index.hw(),
-            folder_time: f.index.folder_time(),
+            watermark: f.index.watermark(),
+            last_signed_us: f.index.last_signed_us(),
             stored_chunks: f.book.stored().iter().copied().collect(),
             pending_free: f.pending_free.iter().copied().collect(),
             lacking: f.book.lacking().iter().copied().collect(),
