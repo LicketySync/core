@@ -11,7 +11,9 @@
 # cases feed the check made-up .d files: what a workspace crate may name
 # (untracked compiled artifacts under the target directory, the toolchain's
 # compiled crates) beside a registry crate's .d and other tools' gcc-style
-# depfiles; a stale entry in an older .d, skipped locally and failing in CI; a
+# depfiles; another tool's depfile in deps/ naming relative files that do not
+# exist; a deleted crate's .d naming its missing root and a file elsewhere, in
+# CI; a stale entry in an older .d, skipped locally and failing in CI; a
 # missing entry in the newest; a malformed line; under the target directory a
 # generated source, a tracked file (also in another case), a bare MZ named
 # .dll, rustc's metadata named .so and a Rust source dressed as a .dll; outside
@@ -203,6 +205,27 @@ check "compiled artifacts, a registry crate's .d, other tools' depfiles, a stale
 check "the stale older .d, counted" "$t" 0 "== skipped 1 missing files named by 1 older .d files"
 check "the stale older .d, in CI" "$t" 1 \
   "== target/debug/deps/toy-2222222222222222.d: names crates/toy/src/gone.rs, which does not exist" CI=true
+
+# Another tool's depfile in deps/, in gcc's form, naming relative files that
+# do not exist from the repository's root: not a workspace crate's, skipped.
+t="$tmp/relative"
+repo "$t"
+made_up "$t" "$d"
+printf 'foo.o: foo.c \\\n  foo.h\n' > "$t/target/debug/deps/foo.d"
+check "another tool's depfile in deps/ naming relative files that do not exist" "$t" 0 "$(ok_line 1)"
+
+# A deleted crate's .d, rustc's (its rule's target is the .d itself), naming
+# its missing root and a file outside the repository: still judged.
+t="$tmp/deleted"
+repo "$t"
+made_up "$t" "$d"
+gone=target/debug/deps/gone-1111111111111111.d
+printf '%s: crates/gone/src/lib.rs %s\n\ncrates/gone/src/lib.rs:\n%s:\n' "$t/$gone" "$tmp/elsewhere/x.rs" \
+  "$tmp/elsewhere/x.rs" > "$t/$gone"
+check "a deleted crate's .d naming a file outside the repository, in CI" "$t" 1 \
+  "== $gone: read $tmp/elsewhere/x.rs, which the project rules do not scan" CI=true
+check "a deleted crate's .d naming its missing root, in CI" "$t" 1 \
+  "== $gone: names crates/gone/src/lib.rs, which does not exist" CI=true
 
 # fails <case> <expected line> <file>...: a workspace crate's .d (its newest)
 # naming the files; the check must fail with the line.

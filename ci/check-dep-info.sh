@@ -11,7 +11,9 @@
 # It reads every .d file under the target directory but in build scripts'
 # output directories, which hold other tools' depfiles (the workspace has no
 # build script). A .d file is a workspace crate's when it names, read loosely,
-# a file in this repository outside the target directory; then it is read
+# a file in this repository outside the target directory that exists, or that
+# need not when the .d is rustc's (a rule's target is the .d itself, as in
+# every .d rustc writes and in no other tool's depfile); then it is read
 # strictly: a comment, `target: deps` or `path:` and nothing else (a name with
 # a line break or other control character fails), escaped spaces unescaped.
 # Every file it names must be, resolved as rustc resolved it (from the
@@ -192,13 +194,31 @@ if under(target, root):
         if p.lower().startswith(prefix):
             print(f"== git lists a file under the target directory: {p}")
             bad = True
-def ours(text):
-    """Whether a .d file names a file in this repository outside the target
-    directory: a workspace crate's, read loosely, so that another tool's
-    depfile is told apart before it is held to rustc's form."""
+def itself(text, dfile):
+    """Whether a rule of a .d file has the file itself as its target, as every
+    .d rustc writes does (a dependency's too) and other tools' depfiles do
+    not."""
+    me = os.path.normcase(os.path.realpath(dfile))
+    for line in text.split("\n"):
+        cut = line.find(": ")
+        if cut <= 0 or control.search(line[:cut]):
+            continue
+        t = os.path.join(root, line[:cut].replace("\\ ", " "))
+        if os.path.normcase(os.path.realpath(t)) == me:
+            return True
+    return False
+
+
+def ours(text, dfile):
+    """Whether a .d file is a workspace crate's, read loosely, so that another
+    tool's depfile is told apart before it is held to rustc's form: it names a
+    file in this repository outside the target directory that exists, or that
+    need not when the .d is rustc's (another tool's relative names are not
+    from the root; a deleted crate's .d is still judged)."""
+    rustc = itself(text, dfile)
     for p in deps(text, False):
         real = os.path.realpath(os.path.join(root, p))
-        if under(real, root) and not under(real, target):
+        if under(real, root) and not under(real, target) and (rustc or os.path.lexists(real)):
             return True
     return False
 
@@ -214,7 +234,7 @@ for d, _, names in os.walk(target):
         dfile = os.path.join(d, n)
         with open(dfile, encoding="utf-8", errors="surrogateescape") as f:
             text = f.read()
-        if not ours(text):
+        if not ours(text, dfile):
             continue
         try:
             listed_deps = deps(text, True)

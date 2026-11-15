@@ -1726,21 +1726,22 @@ verification below.
   a head that is not on its disk: one that is the record of no base there, unless it is a twin of
   the version shown (holding that version's content, which a write covers with that version's base)
   and that one is on the disk; a copy with no place, or a version whose content it lacks, is such a
-  version. That write's dot would let every record built on it cover the version unseen ("Coverage";
-  "Why it is safe" 3). The refusal lasts until the content arrives, another device with the version
-  on its disk writes, deletes or renames over it, or another device puts it at the path (by a delete
-  or rename of the path, or a write there with an earlier modification time) or frees its name (a
-  write over a shared name promotes the copy that holds it). For a version whose content no device
-  has (every copy of it lost, or a record forged under the device's ID with its content withheld),
-  no other device's write, delete or rename ends it, since a version beats a tombstone and no
-  device's `S` holds it: only its content arriving, a tree delete above the path that covers it
-  ("Why it is safe" 8a), or the folder shared again does, and at the folder's root only the content
-  or a re-share. A tree delete of a directory above the path, by any device (a directory moved is
-  deleted where it was), covers a copy with no place on the disk once its join reaches a later
-  record of the copy's writer beneath that directory ("Why it is safe" 8a), and then no device has
-  the copy, none having had it on its disk. Contents are never merged (the owner's decision), so
-  every overlap of two concurrent edits leaves one such file, and the index grows with these live
-  files, one record each, never with history.
+  version while it is the record of no base there. That write's dot would let every record built on
+  it cover the version unseen ("Coverage"; "Why it is safe" 3). The refusal lasts until the content
+  arrives, another device with the version on its disk writes, deletes or renames over it, or
+  another device puts it at the path (by a delete or rename of the path, or a write there with an
+  earlier modification time) or frees its name (a write over a shared name promotes the copy that
+  holds it). For a version whose content no device has (every copy of it lost, or a record forged
+  under the device's ID with its content withheld), no other honest device's write, delete or rename
+  ends it, since a version beats a tombstone and no device's `S` holds it: only its content
+  arriving, a write holder's record that covers or names it (the forger relenting, for example), a
+  tree delete above the path that covers it ("Why it is safe" 8a), or the folder shared again does,
+  and at the folder's root only the content, such a record or a re-share. A tree delete of a
+  directory above the path, by any device (a directory moved is deleted where it was), covers a copy
+  with no place on the disk once its join reaches a later record of the copy's writer beneath that
+  directory ("Why it is safe" 8a), and then no device has the copy, none having had it on its disk.
+  Contents are never merged, so every overlap of two concurrent edits leaves one such file, and the
+  index grows with these live files, one record each, never with history.
 - So a device restored from an old backup, which still holds an old head, makes its next edit cover
   that old head and not the later versions it never held: every peer that holds the later versions
   then holds two heads, a conflict, and nothing is lost silently. A version it wrote and no longer

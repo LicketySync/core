@@ -5,6 +5,34 @@ changed and why.
 
 ## Unreleased
 
+- Spec and CI: TM-22 states how long a withheld batch takes, `protocol.md` §4.4 states which of a
+  device's own versions refuse its writes and everything that ends the refusal, and
+  `ci/check-dep-info.sh` no longer fails on another tool's depfile.
+  - TM-22 overstated how soon a withheld batch arrives. Its bound, (N + 1) × 60 + 31 s, covers about
+    the first r hashes of a batch (r: the holder's room, in requests); when the connections ahead
+    have room for the whole batch, a batch of B hashes takes up to about B / r rounds; the hashes
+    beyond their room come as fast as the holder's own room lets it ask, not at once. A holder whose
+    restarted pass does not reach the kept hash within the hold may get it only in a later round in
+    which it does, and while as many lacking hashes stay below it, every later round can end the
+    same way.
+  - §4.4's example of a version not on the disk was broader than its rule: a copy with no place, or
+    a version whose content the device lacks, is one only while it is the record of no base there (a
+    copy whose place is the path's own base is on the disk). §4.4, TM-40 and
+    `WriteFailure::OwnVersionNotOnDisk` add to what ends the refusal a write holder's record that
+    covers or names the version (its `replaces`, or a cleanup group), as when the forger relents; no
+    other honest device's write, delete or rename ends it.
+  - `ci/check-dep-info.sh` took a .d file for a workspace crate's when it named a relative path,
+    whether or not that file existed, so another tool's depfile in `deps/` naming a relative `foo.c`
+    was held to rustc's form and failed. A .d file is now judged when it names a file in the
+    repository outside the target directory that exists, or one that need not when rustc wrote the
+    .d (a rule's target is the .d itself, as in every .d rustc writes and no other tool's depfile),
+    so a deleted crate's .d is still judged and a missing file in it still fails. Taking every .d
+    rustc wrote, with no file in the repository, would also judge each dependency's, which names
+    registry sources. TM-7 says which .d files are judged. Tests, in `ci/test-check-dep-info.sh`:
+    "another tool's depfile in deps/ naming relative files that do not exist", which fails without
+    the change, and "a deleted crate's .d naming a file outside the repository, in CI" and "a
+    deleted crate's .d naming its missing root, in CI", which fail with the existence check alone.
+
 - Engine: a conflict copy with no place on the disk is never replaced unseen (severity Medium). Two
   conflict copies of one path whose names are kept whole share one name when their record hashes
   share their first four bytes, a 2^-32 chance between honest devices and one a write holder can
@@ -3603,6 +3631,10 @@ changed and why.
       its writer from writing the path until the folder is shared again (TM-40).
     And from the withheld-chunk fix: when a folder can be removed, its in-flight entries, kept
     places and kept hashes go with it (today a folder is never removed, so none outlives it).
+    And from the freed-hash fix ("a hash another connection withholds reaches an honest holder"):
+    per-batch turns. Two withholders that each have room for a whole batch can hold it by turns, so
+    the honest holder gets only about r chunks a round (r: its room, in requests): in a probe, 40
+    chunks at a holder room of 4 took 1 182 s against two ready withholders of room 1 024.
   - Dependencies: none new; the engine depends on the workspace's keys, protocol and index crates,
     dev-depends on the simulator and `proptest`; the simulator depends on the keys crate;
     `ci/geiger-baseline.txt`'s `engine` and `sim` lines now count the keys crate's dependencies.

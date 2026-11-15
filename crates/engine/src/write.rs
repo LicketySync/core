@@ -98,23 +98,25 @@ pub enum WriteFailure {
     /// More chunks than a record may name (`MAX_CHUNKS`).
     TooLarge,
     /// A version this device wrote is a head at the path and is not on its
-    /// disk: a conflict copy with no place there (no name fits, or a copy
-    /// before it in display order has its name), or a version whose content
-    /// this device lacks, as after a restored backup or a lost chunk (4.4,
-    /// "What becomes of a conflict copy"). The write would leave it a head
-    /// beside a later record of this device's, whose dot would let any
-    /// record built on that one cover the version unseen (4.4, "Coverage").
-    /// The refusal lasts until the content arrives or another device acts:
-    /// one with the version on its disk writes, deletes or renames over it,
-    /// or one puts it at the path (by a delete or rename of the path, or a
-    /// write there with an earlier modification time) or frees a shared name.
-    /// For a version whose content no device has (every copy of it lost, or
-    /// a record forged under this device's ID with its content withheld),
-    /// no other device's write, delete or rename ends it: only the content
-    /// arriving, a tree delete of a directory above the path that covers it
-    /// through a later record of this device's beneath (4.4, "Why it is
+    /// disk, being the record of no base there: a conflict copy with no
+    /// place there (no name fits, or a copy before it in display order has
+    /// its name), or a version whose content this device lacks, as after a
+    /// restored backup or a lost chunk (4.4, "What becomes of a conflict
+    /// copy"). The write would leave it a head beside a later record of this
+    /// device's, whose dot would let any record built on that one cover the
+    /// version unseen (4.4, "Coverage"). The refusal lasts until the content
+    /// arrives or another device acts: one with the version on its disk
+    /// writes, deletes or renames over it, or one puts it at the path (by a
+    /// delete or rename of the path, or a write there with an earlier
+    /// modification time) or frees a shared name. For a version whose
+    /// content no device has (every copy of it lost, or a record forged
+    /// under this device's ID with its content withheld), no other honest
+    /// device's write, delete or rename ends it: only the content arriving,
+    /// a write holder's record that covers or names it (the forger relenting,
+    /// for example), a tree delete of a directory above the path that covers
+    /// it through a later record of this device's beneath (4.4, "Why it is
     /// safe" 8a), or the folder shared again; at the folder's root, only the
-    /// content or a re-share.
+    /// content, such a record or a re-share.
     OwnVersionNotOnDisk,
     /// The next counter would pass `MAX_COUNTER`: the folder must be shared
     /// again (4.4, section 5).

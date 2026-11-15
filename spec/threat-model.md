@@ -715,12 +715,14 @@ case, as macOS and Windows read them. `ci/semgrep-scan.sh` (CI and `gate.sh`) ru
 character, a symbolic link or a cargo configuration file (which could add rustflags, environment or
 a linker) anywhere; on a second `.semgrepignore`; and on a manifest path that does not resolve to a
 `.rs` file or a crate git lists. Text cannot see a path attribute that a macro assembles from tokens
-passed one at a time, so `ci/check-dep-info.sh` reads every dep-info file under the target
-directory, strictly, and fails when a workspace crate read, resolved as rustc resolved it, any file
-but one the rules scan outside the vendored tree, an untracked compiled artifact under the target
-directory, or a compiled crate outside the repository (each known by its name and signature
-together, and by not being UTF-8, which rustc reads every source as), when a file it names is
-missing, and when git lists a file under the target directory in any case. Each .d holds only its
+passed one at a time, so `ci/check-dep-info.sh` reads, strictly, every workspace crate's dep-info
+file under the target directory but in build scripts' output directories: one that names a file in
+the repository outside the target directory that exists, or that need not when rustc wrote the .d
+(a rule's target is the .d itself). It fails when a workspace crate read, resolved as rustc resolved
+it, any file but one the rules scan outside the vendored tree, an untracked compiled artifact under
+the target directory, or a compiled crate outside the repository (each known by its name and
+signature together, and by not being UTF-8, which rustc reads every source as), when a file it names
+is missing, and when git lists a file under the target directory in any case. Each .d holds only its
 build's cfg; the check runs after the gate's builds (dev with all features, and a release check with
 default features and `-D warnings`), CI's (the same on Linux, tests with all features on Linux,
 Windows and macOS, and net with default features for Android and iOS) and `release.yml`'s release
@@ -1173,45 +1175,47 @@ more chunks stored to be asked again, or keep their own trigger from acting by l
 `CHUNK_NOT_FOUND` come now and then, even by turns, have at most one turn each a round, of at most
 the patience: N connections ahead of an honest holder delay a hash it holds by at most the turns of
 those N and of the one holding the hash, and the holder's own wait for its trigger, at most (N + 1)
-× 60 + 31 s, bounded by the connection limits, and an honest holder with room for r requests gets at
-least about r hashes of a larger batch a round, and at once every hash beyond what the connections
-ahead have room for. The hold assumes that the holder's restarted pass, which asks in hash order,
-reaches the kept hash within 31 s: with many lacking hashes below it to ask for first, at most its
-room at a time and each answered within a round trip, it may not, and gets the hash in a later
-round. A connection that cannot ask when its turn comes (its room filled, backing off, or its pass,
-past the hash, waiting without having skipped one) is passed over; the device keeps hashes for
-waiting connections before, between and after its runs of the passes, which run again in the same
-handler until the connections that may ask and those that wait stay the same (at most three changes
-per connection), so a holder whose room was full, or whose pass was past the hash, is asked for it
-once its pass waits having skipped it. While a connection waits with its skip bit set, each run of
-the passes also looks at every hash of the folder with an entry or a place, at most one per lacking
-hash, as a pass's own look at the lacking hashes does. Each hash asked for holds at most one entry
-while the device lacks it: one ask time per connection holding its request (bounded as above), its
-place, two numbers, and the connection it is kept for, with two times, about 150 bytes; once its
-requests have ended, only its place, about 80 bytes, until it is stored or no longer wanted; each at
-most about twice that with the maps' own overhead. Only the chunks of records a write key signed
-lack (and, at a sealed peer, genuine old versions another sealed peer replays, section 3.3), and the
-chunk state already holds at least about 120 bytes for each lacking chunk (its hash in the lacking
-set and its position in each record that names it, besides the record), so the table grows in
-proportion to it: 65 536 lacking chunks cost at most about 20 MB more. The freed-hash trigger lets a
-third party restart a waiting peer's pass, within the bound every trigger shares: at most once per
-`STATUS_INTERVAL` (30 s) per folder per connection, and no sooner than 1 s after that peer's latest
-`CHUNK_NOT_FOUND`. One restart costs that peer at worst one chunk request (74 bytes) and one
-`CHUNK_NOT_FOUND` (76 bytes, before the channel's own overhead) for each chunk the requester lacks
-and may ask it for, at most `max_requests_in_flight` of them outstanding at once: what an active
-folder already costs, since each chunk the peer stores restarts its pass the same way through its
-Status. Two residuals: while some hash stays held elsewhere, a waiting peer whose pass skipped it
-can be triggered for another free hash it lacks, and asked for what it lacks again, at most once per
-`STATUS_INTERVAL` per folder per connection, as above; and a peer whose latest pass never met a hash
-held elsewhere, because the pass ended before the device came to lack the hash or went on above it,
-is not counted in line for it, so a hash that peer stored before its latest `CHUNK_NOT_FOUND` waits
-for its next trigger of another kind (a Status with more chunks stored, a completed round) or for
-another holder, and in a quiet folder, held by one key holder that takes the request and never
+× 60 + 31 s, bounded by the connection limits. An honest holder with room for r requests gets at
+least about r hashes of a larger batch a round, so that bound covers about the first r hashes of a
+batch: when the connections ahead have room for the whole batch, a batch of B hashes takes up to
+about B / r rounds; every hash beyond what the connections ahead have room for, the holder gets as
+fast as its own room lets it ask. The hold assumes that the holder's restarted pass, which asks in
+hash order, reaches the kept hash within 31 s: with many lacking hashes below it to ask for first,
+at most its room at a time and each answered within a round trip, it may not, and may get it only in
+a later round in which it reaches the hash within the hold; while as many stay below it, every later
+round can end the same way. A connection that cannot ask when its turn comes (its room filled,
+backing off, or its pass, past the hash, waiting without having skipped one) is passed over; the
+device keeps hashes for waiting connections before, between and after its runs of the passes, which
+run again in the same handler until the connections that may ask and those that wait stay the same
+(at most three changes per connection), so a holder whose room was full, or whose pass was past the
+hash, is asked for it once its pass waits having skipped it. While a connection waits with its skip
+bit set, each run of the passes also looks at every hash of the folder with an entry or a place, at
+most one per lacking hash, as a pass's own look at the lacking hashes does. Each hash asked for
+holds at most one entry while the device lacks it: one ask time per connection holding its request
+(bounded as above), its place, two numbers, and the connection it is kept for, with two times, about
+150 bytes; once its requests have ended, only its place, about 80 bytes, until it is stored or no
+longer wanted; each at most about twice that with the maps' own overhead. Only the chunks of records
+a write key signed lack (and, at a sealed peer, genuine old versions another sealed peer replays,
+section 3.3), and the chunk state already holds at least about 120 bytes for each lacking chunk (its
+hash in the lacking set and its position in each record that names it, besides the record), so the
+table grows in proportion to it: 65 536 lacking chunks cost at most about 20 MB more. The freed-hash
+trigger lets a third party restart a waiting peer's pass, within the bound every trigger shares: at
+most once per `STATUS_INTERVAL` (30 s) per folder per connection, and no sooner than 1 s after that
+peer's latest `CHUNK_NOT_FOUND`. One restart costs that peer at worst one chunk request (74 bytes)
+and one `CHUNK_NOT_FOUND` (76 bytes, before the channel's own overhead) for each chunk the requester
+lacks and may ask it for, at most `max_requests_in_flight` of them outstanding at once: what an
+active folder already costs, since each chunk the peer stores restarts its pass the same way through
+its Status. Two residuals: while some hash stays held elsewhere, a waiting peer whose pass skipped
+it can be triggered for another free hash it lacks, and asked for what it lacks again, at most once
+per `STATUS_INTERVAL` per folder per connection, as above; and a peer whose latest pass never met a
+hash held elsewhere, because the pass ended before the device came to lack the hash or went on above
+it, is not counted in line for it, so a hash that peer stored before its latest `CHUNK_NOT_FOUND`
+waits for its next trigger of another kind (a Status with more chunks stored, a completed round) or
+for another holder, and in a quiet folder, held by one key holder that takes the request and never
 answers, may never come from it. A key holder of any tier, under any number of device identities,
 can still make a device queue up to `MAX_SEND_QUEUE` (128 MiB) of chunk replies per connection by
-reading them
-slowly, for as long as it keeps the connection alive (a reader that trickles is never closed by
-`IDLE_TIMEOUT`), so what bounds the total is the phase 1 connection limit; and a write
+reading them slowly, for as long as it keeps the connection alive (a reader that trickles is never
+closed by `IDLE_TIMEOUT`), so what bounds the total is the phase 1 connection limit; and a write
 holder can make every peer store as many concurrent versions, tombstones and tree deletes as it
 signs (section 3.6), and keep every deletion held past its year, without bound, by holding
 forgetting back (section 3.6; a peer that is a write holder's only link, or a network attacker that
@@ -1981,13 +1985,14 @@ also keep an honest device from writing a path, with no grinding: one record sig
 device's ID at the path, its content withheld, is a version of that device's that is not on its
 disk, so the device refuses to write, delete or rename the path (`protocol.md` §4.4), at the cost of
 one record per path; where no name fits, or for two copies that share a name, the display order also
-decides which writer is refused. Since no device has that content, no other device's write, earlier
-or later, delete or rename ends the refusal (a version beats a tombstone, and no device's `S` holds
-it): only the content arriving, a tree delete above the path that covers it through a later record
+decides which writer is refused. Since no device has that content, no other honest device's write,
+earlier or later, delete or rename ends the refusal (a version beats a tombstone, and no device's
+`S` holds it): only the content arriving, a write holder's record that covers or names it (the
+forger relenting, for example), a tree delete above the path that covers it through a later record
 under the device's ID beneath it (`protocol.md` §4.4, "Why it is safe" 8a), or sharing the folder
-again; at the folder's root, only the content or a re-share. That is within §3.6: a write holder can
-write over or delete the file anyway, other devices can still write the path, and counter
-exhaustion, already accepted, is worse. The modification time is only ever compared, never
+again; at the folder's root, only the content, such a record or a re-share. That is within §3.6: a
+write holder can write over or delete the file anyway, other devices can still write the path, and
+counter exhaustion, already accepted, is worse. The modification time is only ever compared, never
 subtracted, and a value the local file system cannot set is an issue raised against the record,
 never a panic (TM-23). A device's clock enters the index in two places only, and neither orders
 versions nor decides by itself what another device holds. First, a new record's counter is at least
