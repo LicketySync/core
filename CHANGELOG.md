@@ -5,6 +5,15 @@ changed and why.
 
 ## Unreleased
 
+- Spec: Tauri's cryptography, which the app's phone shell brings, gets a row in `suites.md` 3.1:
+  AES-256-GCM in `tauri-utils` for the isolation pattern's IPC, under a key drawn at each start,
+  and SHA-256 in `tauri-codegen` and `wry` for the content security policy's hashes. It protects
+  only IPC inside the app's process, is not suite 1, may not be used first-party, and Tauri's TLS
+  features may not be on. TM-27 now says that the capability's command list is the boundary, since
+  the isolation pattern authenticates a message's arguments and not its command name; TM-31 lists
+  what the Android System WebView still contacts on the app's behalf (its fonts through Google Play
+  services, which downloads any it lacks; its variations seed; Google Play services' binds; remote
+  debugging in debug builds).
 - Engine: a write refused because this device's next counter in the folder would pass
   `MAX_COUNTER` raises an issue, `IssueKind::CounterExhausted`, saying that the folder must be shared
   again (unlink it keeping its files, then share the same directory as a new folder with new keys),

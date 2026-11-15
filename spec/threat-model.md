@@ -1821,9 +1821,13 @@ exhausting it, and a port opened without its person's consent. Enforced by `net`
 
 **TM-27. The Tauri shell uses the isolation pattern, a content security policy and per-window
 capabilities with the smallest command set.** Frontend code reaches the native core only through
-commands a window's capability lists, through the isolation application that validates each message.
-Stops frontend dependencies reaching the native core through IPC (Tauri 2 security documentation).
-Enforced by `app`.
+commands a window's capability lists; Tauri's API also passes each message through the isolation
+application, whose check is defence in depth. Stops frontend dependencies reaching the native core
+through IPC (Tauri 2 security documentation). The capability's command list is the boundary: Tauri's
+isolation pattern encrypts and so authenticates a message's arguments, not its command name, and the
+page's own scripts can resend an encrypted message under another name (`suites.md` 3.1, Tauri's
+row). If `ipc:` is ever added to the content security policy's `connect-src`, iOS's custom-protocol
+IPC path, which skips decryption for a message with no body, must be revisited. Enforced by `app`.
 
 **TM-28. Each release publishes a signed manifest of the browser bundle's hashes.** The manifest is
 signed with the release key, the native app can verify a served bundle against it, and the site
@@ -1872,7 +1876,15 @@ the string, so a URL that begins with it passes, and the reviewers confirm that 
 parses and writes join links, never requests it. Any other URL on those domains needs its line in
 the list like any other host. Stops telemetry, update checks and any contact the user did not
 choose. Enforced by `gate.sh` and CI, and the settings' starting values by `daemon` and `cli` from
-phase 1, and by `app`.
+phase 1, and by `app`. Residuals on Android, where the app shows its page in the Android System
+WebView: each time the WebView starts it asks Google Play services' font provider for its fonts
+("Google Sans" at weights 400, 500 and 700, "Google Sans Flex", "Noto Color Emoji Compat"); Google
+Play services downloads any it lacks from fonts.gstatic.com (about 3 MB on a fresh device) and
+counts the bytes against the app; the page's own fonts are not the trigger. Also the WebView's
+variations seed, which the WebView's own package fetches and the app reads; Google Play services'
+binds that the system and the WebView make for the app; and the WebView's remote debugging in debug
+builds, which `adb` reaches over USB or the emulator's bridge. The app turns off what it can (the
+WebView's Safe Browsing lookups and metrics, emoji2's font request) and adds no host itself.
 
 **TM-32. Each side proves it holds a key to the folder without sending it.** The handshake's folder
 proof is one proof for every tier (ruling S-1): a payload sealed under a key derived from the
