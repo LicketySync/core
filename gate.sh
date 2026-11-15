@@ -16,10 +16,11 @@
 #
 # What the gate leaves to CI, besides the other operating systems:
 # - nextest here skips the tests of the crates in `covered` below (keys,
-#   protocol, index and engine). The coverage loop at the end runs them, once:
-#   each crate with -p, so with only the features it and its dependencies ask
-#   for (with --workspace, cargo unifies features across every crate), and
-#   under cfg(coverage), which cargo-llvm-cov sets. CI runs them both ways.
+#   protocol, index, engine and fs). The coverage loop at the end runs them,
+#   once: each crate with -p, so with only the features it and its
+#   dependencies ask for (with --workspace, cargo unifies features across
+#   every crate), and under cfg(coverage), which cargo-llvm-cov sets. CI runs
+#   them both ways.
 # - ci/geiger.sh skips the cargo-geiger scan when its inputs are those of a
 #   scan that passed (its header lists them). LICKETYSYNC_GEIGER_FULL=1 scans
 #   anyway; CI always scans.
@@ -29,7 +30,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 # The crates whose tests the coverage loop at the end runs, and nextest not.
-covered=(keys protocol index engine)
+covered=(keys protocol index engine fs)
 
 step() { echo "== $*"; "$@"; }
 
@@ -299,11 +300,11 @@ step ci/check-downloads.sh
 step ci/test-rustc-wrapper.sh
 # ci/check-dep-info.sh, which runs after the builds below, on toy crates.
 step ci/test-check-dep-info.sh
-# 90% line coverage on each of the crates the plan names, and on the index
+# 90% line coverage on each of the crates the plan names, on the index
 # crate, which TM-17, TM-40 and TM-41 name as their enforcer (review ruling of
-# 2026-10-22), measured per crate: only that crate's own files count, so a
-# well-tested neighbour cannot mask it. These are the gate's only runs of
-# those crates' tests (nextest above leaves them out).
+# 2026-10-22), and on fs, TM-4's, measured per crate: only that crate's own
+# files count, so a well-tested neighbour cannot mask it. These are the gate's
+# only runs of those crates' tests (nextest above leaves them out).
 # The clean comes first. cargo-llvm-cov reports on every test binary of a
 # workspace crate in target/llvm-cov-target, but before a run it removes only
 # the crate it measures, so a binary of another crate from an earlier gate run

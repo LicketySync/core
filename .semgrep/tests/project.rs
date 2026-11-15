@@ -25,7 +25,7 @@ use blake3::{Hasher as Blake, hash as blake_hash};
 use blake3 as b3;
 // ruleid: no-blake3-imports
 use ::blake3::Hasher as AnotherHasher;
-// ruleid: no-blake3-imports
+// ruleid: no-blake3-imports, resolver_re-exports-only-its-own-types
 pub(crate) use blake3::keyed_hash;
 // ruleid: no-blake3-imports
 use {
@@ -118,49 +118,280 @@ pub fn compare(a: [u8; 32], b: [u8; 32]) -> bool {
 
 // no-follow-symlinks: the resolver opens with no-follow semantics instead.
 pub fn resolve(path: &std::path::Path) {
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = std::fs::canonicalize(path);
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = std::fs::read_link(path);
     // ok: no-follow-symlinks
+    // ruleid: disk_by_path-only-in-resolver
     let _ = std::fs::symlink_metadata(path);
 }
 
 // The same through an import, and Path's methods (the gate review's finding
 // S3: the method forms were not flagged).
+// ruleid: disk_by_path-only-in-resolver
 use std::fs;
+// ok: disk_by_path-only-in-resolver
 use std::path::{Path, PathBuf};
 
 pub fn resolve_by_method(path: &Path, owned: PathBuf) {
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = fs::canonicalize(path);
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = fs::read_link(path);
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = path.canonicalize();
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = path.read_link();
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = owned.canonicalize();
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = path.join("sub").canonicalize();
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = Path::canonicalize(path);
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = std::path::Path::read_link(path);
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = PathBuf::canonicalize(&owned);
     // ok: no-follow-symlinks
+    // ruleid: disk_by_path-only-in-resolver
     let _ = path.symlink_metadata();
 }
 
 // The same passed as function values, not called.
 pub fn resolve_as_values(paths: &[PathBuf]) {
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = paths.iter().map(fs::canonicalize).count();
-    // ruleid: no-follow-symlinks
+    // ruleid: no-follow-symlinks, disk_by_path-only-in-resolver
     let _ = paths.iter().map(Path::read_link).count();
 }
+
+// disk_by_path-only-in-resolver: in fs and engine, outside the resolver,
+// nothing reaches the disk by a path (TM-4); the no-follow cases above are
+// its cases too. Every way in by a path, through imports and aliases too.
+// ruleid: disk_by_path-only-in-resolver
+use rustix::fs::openat;
+// ruleid: disk_by_path-only-in-resolver
+use std::fs::File;
+// ruleid: disk_by_path-only-in-resolver
+use std::fs::{OpenOptions, read_to_string};
+// ruleid: disk_by_path-only-in-resolver
+use std::os::unix::fs::symlink as link_to;
+
+pub fn by_path(p: &Path, owned: PathBuf, fd: std::os::fd::OwnedFd) {
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::fs::read(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = fs::write(p, b"x");
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = read_to_string(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::fs::remove_dir_all(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = File::open(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = File::create_new(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = File::options().read(true).open(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = OpenOptions::new().write(true).open(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::fs::DirBuilder::new().recursive(true).create(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = link_to(p, p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::os::windows::fs::symlink_file(p, p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = p.exists();
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = owned.is_dir();
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = p.join("a").metadata();
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = owned.read_dir();
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = Path::try_exists(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = [owned.clone()].iter().map(PathBuf::is_file).count();
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = [p].iter().map(fs::read_to_string).count();
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = openat(&fd, "a", rustix::fs::OFlags::RDONLY, rustix::fs::Mode::empty());
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = rustix::fs::Dir::read_from(&fd);
+    // Raw identifiers, turbofishes and qualified paths.
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::fs::r#read(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::fs::read::<&Path>(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::fs::copy::<&Path, &Path>(p, p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = <std::fs::File>::open(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = File::r#open(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = p.r#exists();
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = <std::path::Path>::exists(p);
+    // Other modules that reach the disk by a path.
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::os::wasi::fs::symlink_path(p, p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::os::unix::net::UnixListener::bind(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::os::unix::net::UnixStream::connect(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::process::Command::new(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::env::set_current_dir(p);
+    // A method of one of those names on another type is flagged too.
+    let file = File::from(fd);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = file.metadata();
+    // What reaches no disk: a type, a value made from bits, a path's own text.
+    // ok: disk_by_path-only-in-resolver
+    let _ = std::fs::Permissions::from_mode(0o644);
+    // ok: disk_by_path-only-in-resolver
+    let _: Option<std::fs::File> = None;
+    // ok: disk_by_path-only-in-resolver
+    let _ = p.join("a").is_absolute();
+    // ok: disk_by_path-only-in-resolver
+    let _ = owned.file_name();
+}
+
+// The imports Semgrep cannot see through: std renamed, a module of the way
+// to the disk renamed, globbed, or renamed in braces.
+// ruleid: disk_by_path-only-in-resolver
+use std as renamed_std;
+// ruleid: disk_by_path-only-in-resolver
+use std::{self as also_std};
+// ruleid: disk_by_path-only-in-resolver
+use std::os as renamed_os;
+// ruleid: disk_by_path-only-in-resolver
+use std::os::{self as also_os};
+// ruleid: disk_by_path-only-in-resolver
+use std::process as renamed_process;
+// ruleid: disk_by_path-only-in-resolver
+use std::fs::*;
+// ruleid: disk_by_path-only-in-resolver
+use std::{fs::{self as files}, path::Component};
+// ruleid: disk_by_path-only-in-resolver, resolver_re-exports-only-its-own-types
+pub(crate) use rustix::fs::*;
+// Any use item naming fs, process or net in std or rustix, a type included.
+// ruleid: disk_by_path-only-in-resolver
+use std::fs::{File as Handle, Permissions};
+// ruleid: disk_by_path-only-in-resolver
+use std::{
+    fmt,
+    fs::Permissions as Perms,
+};
+// ruleid: disk_by_path-only-in-resolver
+use std::os::unix::net::UnixListener;
+// ruleid: disk_by_path-only-in-resolver
+use std::process::Command as Runner;
+// ruleid: disk_by_path-only-in-resolver, resolver_re-exports-only-its-own-types
+pub use rustix::net::bind_unix;
+// ruleid: disk_by_path-only-in-resolver
+use rustix::process::chdir;
+// ruleid: disk_by_path-only-in-resolver
+use std::r#fs::read;
+// std::os and its modules but fd, so that their fs and net cannot be
+// reached through them.
+// ruleid: disk_by_path-only-in-resolver
+use std::os;
+// ruleid: disk_by_path-only-in-resolver, resolver_re-exports-only-its-own-types
+pub use std::os::unix;
+// ruleid: disk_by_path-only-in-resolver
+use std::os::{fd::OwnedFd, windows};
+// ruleid: disk_by_path-only-in-resolver
+use std::{os::wasi};
+// ok: disk_by_path-only-in-resolver
+use std::os::fd::{AsFd, BorrowedFd};
+// ok: disk_by_path-only-in-resolver
+use std::{fmt, io::{self, Read}};
+// ok: disk_by_path-only-in-resolver
+use std::path::Component;
+// ok: disk_by_path-only-in-resolver
+use std::net::IpAddr;
+
+// Type aliases of the types that open by a path; a path type is free.
+// ruleid: disk_by_path-only-in-resolver
+type Handle2 = std::fs::File;
+// ruleid: disk_by_path-only-in-resolver
+pub type Opener = std::fs::OpenOptions;
+// ruleid: disk_by_path-only-in-resolver
+type Maker = std::fs::DirBuilder;
+// ruleid: disk_by_path-only-in-resolver
+type Listing = rustix::fs::Dir;
+// ruleid: disk_by_path-only-in-resolver
+type Runner = std::process::Command;
+// ruleid: disk_by_path-only-in-resolver
+type Socket = std::os::unix::net::UnixStream;
+// ruleid: disk_by_path-only-in-resolver
+type Address = std::os::unix::net::SocketAddr;
+// ok: disk_by_path-only-in-resolver
+type Owned = std::path::PathBuf;
+// ok: disk_by_path-only-in-resolver
+type Borrowed<'a> = &'a std::path::Path;
+
+// What Semgrep does not parse, caught by the text backstop: macro arguments
+// and raw identifiers in a path.
+pub fn hidden_in_macros(p: &Path, fd: std::os::fd::BorrowedFd<'_>) {
+    // ruleid: disk_by_path-only-in-resolver
+    assert!(std::fs::read(p).is_ok());
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = format!("{:?}", p.metadata());
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = std::r#fs::read(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = r#std::fs::read(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = rustix::net::bind_unix(fd, p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = rustix::process::chdir(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = vec![std::os::unix::fs::symlink(p, p)];
+    // ruleid: disk_by_path-only-in-resolver
+    assert!(unix::fs::symlink(p, p).is_ok());
+    // ruleid: disk_by_path-only-in-resolver
+    let open_file = <std::fs::File>::open;
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = Path::exists(p);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = [p].iter().copied().all(Path::exists);
+    // ruleid: disk_by_path-only-in-resolver
+    let _ = <PathBuf>::is_dir(&p.to_path_buf());
+    // ok: disk_by_path-only-in-resolver
+    assert!(p.is_absolute());
+    // ok: disk_by_path-only-in-resolver
+    let _ = format!("{}", p.display());
+    // ok: disk_by_path-only-in-resolver
+    let _ = Command::A;
+    // ok: disk_by_path-only-in-resolver
+    let _ = Path::new("a").join("b");
+}
+
+// An engine's own enum named Command is free; std's is not.
+pub enum Command {
+    A,
+}
+
+// resolver_re-exports-only-its-own-types: in the resolver's files, a pub use
+// names one of its own modules, and nothing else, across line breaks too.
+// ruleid: resolver_re-exports-only-its-own-types, disk_by_path-only-in-resolver
+pub use std::fs as g;
+// ruleid: resolver_re-exports-only-its-own-types
+pub(super) use crate::name::Name;
+// ruleid: resolver_re-exports-only-its-own-types
+pub use super::fs_alias::read;
+// ruleid: resolver_re-exports-only-its-own-types
+pub
+use crate::name::IndexPath;
+// ok: resolver_re-exports-only-its-own-types
+pub use unix::{Dir, Entries, Root};
+// ok: resolver_re-exports-only-its-own-types
+pub use self::other::Root as Stub;
 
 // no-expect-on-remote-data: in crates/protocol and crates/net (and here) every
 // `expect` is flagged, since what it unwraps may come from a peer (TM-23).

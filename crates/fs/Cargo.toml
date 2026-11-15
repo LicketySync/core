@@ -1,0 +1,35 @@
+[package]
+name = "licketysync-fs"
+description = "A folder's disk: which names it may hold, how a name on the disk becomes part of an index path, and the one resolver beneath its root, which never follows a symbolic link."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+# The grammar of an index path (`check_path`) and the longest name every device
+# can store (`MAX_NAME_BYTES`), protocol.md 4.4: every name the policy admits
+# is one an index path may hold.
+licketysync-protocol = { path = "../protocol" }
+# NFC, the form protocol.md 4.4 step 7 has a writer give every path component.
+# The only maintained crate with the Unicode tables that is not ICU4X, which
+# deny.toml bans (idna stays ASCII-only).
+unicode-normalization = "0.1.26"
+
+# The resolver's system calls on descriptors (openat2, openat, mkdirat, statx,
+# statat, fstat, fchmod, reading a directory), with its fs feature, and the
+# effective user's ID (geteuid), with its process feature, to refuse a hidden
+# directory another user owns; so that this crate keeps forbid(unsafe_code).
+# Unix only: Windows has no resolver until phase 3. Already in Cargo.lock,
+# beneath async-io (net).
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.6", features = ["fs", "process"] }
+
+[dev-dependencies]
+# The property test of the name policy against check_path (plan: Tests).
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 # Mutation testing, weekly as the plan's checks table says: cargo-mutants on
-# the key, protocol, index and engine crates finds the code the tests do not check
-# (a change to it that every test still passes). Also on demand. Until
-# 2026-10-22 it ran nightly in one job (nightly.yml), against the plan.
+# the key, protocol, index, engine and fs crates finds the code the tests do
+# not check (a change to it that every test still passes). Also on demand.
+# Until 2026-10-22 it ran nightly in one job (nightly.yml), against the plan.
 name: Mutants
 
 on:
@@ -81,7 +81,7 @@ jobs:
   # revisited. A shard fails when the unmutated tree does not build or its
   # tests fail, when it runs past its budget, or on any cargo-mutants error.
   mutants:
-    name: cargo-mutants (keys, protocol, index, engine), shard ${{ strategy.job-index }} of ${{ strategy.job-total }}
+    name: cargo-mutants (keys, protocol, index, engine, fs), shard ${{ strategy.job-index }} of ${{ strategy.job-total }}
     runs-on: ubuntu-latest
     timeout-minutes: 210
     strategy:
@@ -105,6 +105,15 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
           fallback: none
+      # The fs crate's namespace tests (a bind mount and a casefold tmpfs
+      # beneath a root, under unshare -Urm) need unprivileged user namespaces,
+      # which Ubuntu's AppArmor restricts on GitHub's runners. Without them
+      # the tests are skipped, saying why.
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - run: ci/test-mutants.sh
       - name: Mutants of this shard
         env:

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One shard of the weekly mutation test (mutants.yml):
-# cargo-mutants over the crates the plan names (keys, protocol, engine) and the
-# index crate, which TM-17, TM-40 and TM-41 name as their enforcer, shard
+# cargo-mutants over the crates the plan names (keys, protocol, engine), the
+# index crate, which TM-17, TM-40 and TM-41 name as their enforcer, and fs,
+# TM-4's, shard
 # <k>/<n> of their mutants dealt round-robin, stopped after <budget> (a
 # duration as timeout(1) reads it, such as 180m). cargo-mutants first builds and
 # tests the unmutated tree (its baseline), with no time limit but the budget,
@@ -125,7 +126,8 @@ esac
 . "$ci_dir/rustc-wrapper.sh"
 
 picked=(--package licketysync-keys --package licketysync-protocol --package licketysync-index
-  --package licketysync-engine --no-shuffle --sharding round-robin --shard "$shard")
+  --package licketysync-engine --package licketysync-fs --no-shuffle --sharding round-robin
+  --shard "$shard")
 # The shard's mutants, numbered in the order the run below tests them (the
 # same selection, unshuffled), folded on GitHub.
 echo "::group::The mutants of shard $shard, in the order they are tested"

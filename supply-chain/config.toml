@@ -597,7 +597,7 @@ notes = "Phase 1 exemption (licketysync-daemon, the store): SQLite 3.54.1 itself
 [[exemptions.linux-raw-sys]]
 version = "0.12.1"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-net, spike A): Linux system-call bindings beneath rustix (Linux only); sunfishcode. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-net, spike A): Linux system-call bindings beneath rustix (Linux only), which licketysync-fs also uses directly for TM-4's resolver; sunfishcode. Not covered by the imported audits at this version."
 
 [[exemptions.lock_api]]
 version = "0.4.14"
@@ -887,7 +887,7 @@ notes = "Phase 0 exemption (licketysync-net, spike A): parser macros beneath x50
 [[exemptions.rustix]]
 version = "1.1.6"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-net, spike A): POSIX system calls beneath async-io and polling; bytecodealliance, sunfishcode, whom the Mozilla set trusts. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-net, spike A): POSIX system calls beneath async-io and polling; licketysync-fs also uses it directly, with its fs feature, for TM-4's resolver (openat2, openat, mkdirat, statx, statat, fstat, reading a directory); bytecodealliance, sunfishcode, whom the Mozilla set trusts. Not covered by the imported audits at this version."
 
 [[exemptions.rustls]]
 version = "0.23.37"
@@ -1083,6 +1083,11 @@ notes = "Phase 0 exemption (licketysync-keys): type-level numbers beneath hybrid
 version = "1.0.27"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-keys): build-time only, beneath proc-macro2 and syn; dtolnay. Not covered by the imported audits at this version."
+
+[[exemptions.unicode-normalization]]
+version = "0.1.26"
+criteria = "safe-to-deploy"
+notes = "Phase 1 exemption (licketysync-fs): NFC normalisation of path components (protocol.md 4.4 step 7); its one dependency, tinyvec, is covered by the imported audits; unicode-rs (Manish Goregaokar, kwantam). Its code the compiler cannot check is in the Hangul arithmetic: five char::from_u32_unchecked calls, three in decompose_hangul (an unsafe fn whose callers check that the character is a Hangul syllable) and two in compose_hangul, each read and in range. Not covered by the imported audits at this version."
 
 [[exemptions.universal-hash]]
 version = "0.5.1"

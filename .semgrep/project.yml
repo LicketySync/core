@@ -82,6 +82,151 @@ rules:
       - pattern: std::path::PathBuf::read_link
       - pattern: $P.canonicalize()
       - pattern: $P.read_link()
+  # TM-4: the resolver (crates/fs/src/resolver.rs and crates/fs/src/resolver/)
+  # is the one way to the disk, so in fs and engine nothing else reaches it by
+  # a path. Flagged, called or passed as a value, a raw identifier (r#read)
+  # and a turbofish (read::<P>) included:
+  # - every function of std::fs, std::os::unix::fs, std::os::windows::fs,
+  #   std::os::wasi::fs and rustix::fs;
+  # - File::open, create, create_new and options, OpenOptions, DirBuilder and
+  #   rustix's Dir, also called as <std::fs::File>::open(...) (a qualified
+  #   path is matched only as a call: as a pattern, <T>::$F also matches the
+  #   type in Option<T>);
+  # - every associated function of std::os::unix::net's types (a bind makes
+  #   a file by its path, a connect looks one up), std::process::Command (it
+  #   runs a program by its path) and std::env::set_current_dir; every
+  #   function of rustix::net (bind_unix) and rustix::process (chdir);
+  # - a type alias of File, OpenOptions, DirBuilder, rustix's Dir, Command or
+  #   one of std::os::unix::net's types (a path type stays free to alias);
+  # - the methods of Path and PathBuf that read the disk (exists, metadata,
+  #   read_dir and their kin), as methods or by path. Semgrep matches a method
+  #   by its name, not its type, so another type's method of one of those
+  #   names (File::metadata, FileType::is_dir) is flagged too, outside the
+  #   resolver: name it otherwise or move it there;
+  # - a use item, a re-export included, that names std::fs, std::process,
+  #   std::os or a module of it but std::os::fd (unix, windows, wasi, and so
+  #   their fs and net), rustix::fs, rustix::net or rustix::process, or
+  #   renames std (Semgrep does not follow `std as s` into s::fs::read) or
+  #   one of os, unix, windows, wasi, fs, net, process and rustix, or takes a
+  #   glob of one, or renames one in braces with `self as`; outside the
+  #   resolver such a type is named by its full path;
+  # - as text, a backstop for what Semgrep does not parse (macro arguments,
+  #   such as assert!(std::fs::read(p).is_ok()), and raw identifiers in a
+  #   path, such as std::r#fs::read): a path to a function of std::fs,
+  #   std::process, std::os::*::fs or ::net, rustix::fs, rustix::net or
+  #   rustix::process, or of unix::fs, windows::fs or wasi::fs; File's opening
+  #   functions, also as <..::File>::open, a value; OpenOptions, DirBuilder,
+  #   process::Command and set_current_dir; std::os::unix::net's types; Path
+  #   or PathBuf followed by :: and a function named as above (Path::exists,
+  #   also as a value); and a call of a method named as above with no
+  #   arguments. Comments and strings too: prose says it otherwise.
+  # Path types (std::path::PathBuf) and std::fs::File by its full path stay
+  # free to name. What no pattern sees is left to review and to TM-8
+  # (threat-model.md TM-4): a macro that builds such a call from parts, a
+  # dependency that opens by a path, and std's functions that take a path
+  # outside these modules. The rule below keeps the resolver from
+  # re-exporting a way in. `.semgrep/tests/**` as in the blake3 rules.
+  - id: disk_by_path-only-in-resolver
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      In the fs and engine crates only the resolver (crates/fs/src/resolver*)
+      reaches the disk, through descriptors and *at calls that never follow a
+      symbolic link (TM-4). Resolve the path with Root::parent and use the
+      Dir it gives, or add what is missing to the resolver.
+    paths:
+      include: ["/crates/fs/**", "/crates/engine/**", "/.semgrep/tests/**"]
+      exclude: ["/crates/fs/src/resolver.rs", "/crates/fs/src/resolver/**"]
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: std::fs::$F
+              - pattern: std::fs::$F::<$T>
+              - pattern: std::fs::$F::<$T, $U>
+              - pattern: std::os::unix::fs::$F
+              - pattern: std::os::unix::fs::$F::<$T>
+              - pattern: std::os::unix::fs::$F::<$T, $U>
+              - pattern: std::os::windows::fs::$F
+              - pattern: std::os::windows::fs::$F::<$T>
+              - pattern: std::os::windows::fs::$F::<$T, $U>
+              - pattern: std::os::wasi::fs::$F
+              - pattern: std::os::wasi::fs::$F::<$T>
+              - pattern: std::os::wasi::fs::$F::<$T, $U>
+              - pattern: rustix::fs::$F
+              - pattern: rustix::fs::$F::<$T>
+              - pattern: rustix::fs::$F::<$T, $U>
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(r#)?[a-z][a-z0-9_]*$
+      - patterns:
+          - pattern-either:
+              - pattern: std::fs::File::$F
+              - pattern: <std::fs::File>::$F(...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(r#)?(open|create|create_new|options|open_buffered|create_buffered)$
+      - pattern: std::fs::OpenOptions::$F
+      - pattern: <std::fs::OpenOptions>::$F(...)
+      - pattern: std::fs::DirBuilder::$F
+      - pattern: <std::fs::DirBuilder>::$F(...)
+      - pattern: rustix::fs::Dir::$F
+      - pattern: <rustix::fs::Dir>::$F(...)
+      - pattern: std::os::unix::net::$T::$F
+      - pattern: <std::os::unix::net::UnixListener>::$F(...)
+      - pattern: <std::os::unix::net::UnixStream>::$F(...)
+      - pattern: <std::os::unix::net::UnixDatagram>::$F(...)
+      - pattern: <std::os::unix::net::SocketAddr>::$F(...)
+      - pattern: std::process::Command::$F
+      - pattern: <std::process::Command>::$F(...)
+      - pattern: std::env::set_current_dir
+      - patterns:
+          - pattern-either:
+              - pattern: rustix::net::$F
+              - pattern: rustix::process::$F
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(r#)?[a-z][a-z0-9_]*$
+      - pattern: type $A = std::fs::File;
+      - pattern: type $A = std::fs::OpenOptions;
+      - pattern: type $A = std::fs::DirBuilder;
+      - pattern: type $A = rustix::fs::Dir;
+      - pattern: type $A = std::process::Command;
+      - pattern: type $A = std::os::unix::net::UnixListener;
+      - pattern: type $A = std::os::unix::net::UnixStream;
+      - pattern: type $A = std::os::unix::net::UnixDatagram;
+      - pattern: type $A = std::os::unix::net::SocketAddr;
+      - patterns:
+          - pattern-either:
+              - pattern: $P.$M()
+              - pattern: std::path::Path::$M
+              - pattern: std::path::PathBuf::$M
+              - pattern: <std::path::Path>::$M(...)
+              - pattern: <std::path::PathBuf>::$M(...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(r#)?(exists|try_exists|is_file|is_dir|is_symlink|metadata|symlink_metadata|read_dir|read_link|canonicalize)$
+      - pattern-regex: '(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?use\s[^;]*?(?:\bstd\s*as\b|\b(?:os|unix|windows|wasi|fs|net|process|rustix)\s*as\b|\b(?:std|os|unix|windows|wasi|fs|net|process|rustix)\s*::\s*\*|\b(?:std|os|unix|windows|wasi|fs|net|process|rustix)\s*::\s*\{[^{};]*(?:\bself\s*as\b|\*))'
+      - pattern-regex: '(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?use\s[^;]*?(?:\b(?:r#)?std\b[^;]*?\b(?:r#)?(?:fs|process)\b|\b(?:r#)?rustix\b[^;]*?\b(?:r#)?(?:fs|net|process)\b)'
+      - pattern-regex: '(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?use\s[^;]*?\b(?:r#)?std\b[^;]*?\b(?:r#)?os\b(?!\s*::\s*(?:r#)?fd\b)'
+      - pattern-regex: '\b(?:r#)?std\s*::\s*(?:(?:r#)?os\s*::\s*(?:r#)?\w+\s*::\s*(?:r#)?(?:fs|net)|(?:r#)?(?:fs|process))\s*::\s*(?:r#)?[a-z_]\w*\b|\b(?:r#)?rustix\s*::\s*(?:r#)?(?:fs|net|process)\s*::\s*(?:r#)?[a-z_]\w*\b|\b(?:r#)?(?:unix|windows|wasi)\s*::\s*(?:r#)?fs\s*::\s*(?:r#)?[a-z_]\w*\b'
+      - pattern-regex: '\bFile\s*>?\s*::\s*(?:r#)?(?:open|create|create_new|options|open_buffered|create_buffered)\b|\b(?:OpenOptions|DirBuilder|set_current_dir|UnixListener|UnixStream|UnixDatagram)\b|\bprocess\s*::\s*Command\b'
+      - pattern-regex: '\b(?:Path|PathBuf)\s*>?\s*::\s*(?:r#)?(?:exists|try_exists|is_file|is_dir|is_symlink|metadata|symlink_metadata|read_dir|read_link|canonicalize)\b'
+      - pattern-regex: '\.\s*(?:r#)?(?:exists|try_exists|is_file|is_dir|is_symlink|metadata|symlink_metadata|read_dir|read_link|canonicalize)\s*\(\s*\)'
+  # TM-4: the resolver's files re-export nothing but their own types, so that
+  # no way to the disk by a path leaves them under another name (pub use
+  # std::fs as g; then crate::resolver::g::read). A `pub use` there names one
+  # of the resolver's own modules (unix, other, walk, linux), with or without
+  # `self::`. `.semgrep/tests/**` as in the blake3 rules.
+  - id: resolver_re-exports-only-its-own-types
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      The resolver's files re-export only their own modules' items (TM-4): a
+      re-export of anything else could hand a way to the disk by a path to
+      the code outside, where disk_by_path-only-in-resolver cannot see it.
+    paths:
+      include: ["/crates/fs/src/resolver.rs", "/crates/fs/src/resolver/**", "/.semgrep/tests/**"]
+    pattern-regex: '(?m)^[ \t]*pub(?:\([^)]*\))?\s+use\s+(?!(?:self::)?(?:unix|other|walk|linux)::)'
   - id: no-expect-on-remote-data
     languages: [rust]
     severity: ERROR

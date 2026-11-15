@@ -18,7 +18,15 @@
 #   left-to-right mark before its =), and path attributes macros build from
 #   parts, and the keyword extern (empty, linking and unsafe blocks, and the
 #   keyword passed to a macro, and in a new file of the vendored tree); and
-#   four files that must not be flagged (the vendored bindings.rs among them).
+#   four files that must not be flagged (the vendored bindings.rs among them);
+#   a read of the disk by a path in fs and engine, flagged in each but in
+#   the resolver's files (resolver.rs and resolver/), and not in another crate;
+#   a re-export of std::fs, flagged in a resolver file (where its own
+#   types' re-export is not) and, as a renamed module, outside it; a read in
+#   a macro's arguments, flagged in engine and not in the resolver; a
+#   re-export written across a line break in a resolver file; std::os
+#   re-exported in engine, flagged; and an IP address and an enum named
+#   Command in engine, not flagged.
 # - A copy of the script beside a stand-in tomllib.py must still use the
 #   standard module.
 # - Each other tree holds one fault and asserts exit 1 and its line, one per
@@ -138,6 +146,8 @@ exits() {
 flag() { echo "== finding: $1 at $2"; }
 u=unsafe_code-only-in-ffi-crates
 o=other_files-only-as-data
+d=disk_by_path-only-in-resolver
+r=resolver_re-exports-only-its-own-types
 
 # A clean tree.
 tree "$tmp/clean"
@@ -212,6 +222,26 @@ mkdir -p "$v"
 printf 'extern "C" {}\n' > "$v/bindings.rs"
 printf 'extern "C" {}\n' > "$v/new.rs"
 printf 'The word %s, outside the scope.\n' "$word" > "$t/docs/notes.md"
+# A read of the disk by a path: in fs and engine but the resolver's files.
+read='pub fn r(p: &std::path::Path) -> bool { std::fs::read(p).is_ok() }'
+mkdir -p "$t/crates/fs/src/resolver" "$t/crates/fs/tests" "$t/crates/engine/src" "$t/crates/net/src"
+for f in fs/src/scan.rs fs/src/resolvers.rs fs/tests/disk.rs engine/src/disk.rs fs/src/resolver.rs \
+  fs/src/resolver/unix.rs net/src/disk.rs; do
+  printf '%s\n' "$read" > "$t/crates/$f"
+done
+# A re-export from a resolver file: flagged there; its own types are not.
+printf 'pub use unix::{Dir, Root};\npub use std::fs as g;\n' > "$t/crates/fs/src/resolver/other.rs"
+printf 'pub use std::fs as g;\n' > "$t/crates/fs/src/lib.rs"
+# A read in a macro's arguments, which only the text backstop sees, and a
+# re-export written across a line break.
+printf 'pub fn m(p: &std::path::Path) {\n    assert!(std::fs::read(p).is_ok());\n}\n' > "$t/crates/engine/src/check.rs"
+# What the rule leaves alone in engine (an IP address, its own enum), and
+# std::os re-exported, which it does not.
+printf 'use std::net::IpAddr;\npub enum Command {\n    A,\n}\npub fn c(_: IpAddr) -> Command {\n    Command::A\n}\n' \
+  > "$t/crates/engine/src/own.rs"
+printf 'pub use std::os::unix;\n' > "$t/crates/engine/src/os.rs"
+printf 'pub fn m(p: &std::path::Path) {\n    assert!(std::fs::read(p).is_ok());\n}\npub\nuse crate::name::Name;\n' \
+  > "$t/crates/fs/src/resolver/walk.rs"
 launch "$t"
 
 # One fault per tree: exit 1, and the fault's own line.
@@ -346,6 +376,22 @@ has "$(flag extern_keyword-only-in-ffi-crates crates/a/src/blocks.rs:6)" "the ke
 has "$(flag extern_keyword-only-in-ffi-crates browser-tests/webtransport/vendor/libp2p-webtransport-websys-0.6.0/src/new.rs:1)" \
   "a new file in the vendored tree"
 lacks "/src/bindings.rs" "the vendored bindings.rs, left out"
+has "$(flag $d crates/fs/src/scan.rs:1)" "a read by a path in fs"
+has "$(flag $d crates/fs/src/resolvers.rs:1)" "a read by a path in fs, in a file only named like the resolver's"
+has "$(flag $d crates/fs/tests/disk.rs:1)" "a read by a path in fs's tests"
+has "$(flag $d crates/engine/src/disk.rs:1)" "a read by a path in engine"
+lacks "crates/fs/src/resolver.rs" "a read by a path in the resolver, left out"
+lacks "crates/fs/src/resolver/unix.rs" "a read by a path beneath the resolver, left out"
+lacks "crates/net/src/disk.rs" "a read by a path in another crate, out of scope"
+has "$(flag $r crates/fs/src/resolver/other.rs:2)" "a re-export of std::fs from a resolver file"
+lacks "$(flag $r crates/fs/src/resolver/other.rs:1)" "a re-export of the resolver's own types"
+lacks "$(flag $r crates/fs/src/lib.rs:1)" "a re-export outside the resolver, not this rule's"
+has "$(flag $d crates/fs/src/lib.rs:1)" "a renamed std::fs outside the resolver"
+has "$(flag $d crates/engine/src/check.rs:2)" "a read in a macro's arguments in engine"
+lacks "== finding: $d at crates/fs/src/resolver/walk.rs" "a read in a macro's arguments in the resolver, left out"
+has "$(flag $r crates/fs/src/resolver/walk.rs:4)" "a re-export across a line break in a resolver file"
+lacks "crates/engine/src/own.rs" "an IP address and an enum named Command in engine, left alone"
+has "$(flag $d crates/engine/src/os.rs:1)" "std::os re-exported in engine"
 
 use "$tmp/shadow"
 exits 1 "a tomllib.py beside the script: exit 1"

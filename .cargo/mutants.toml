@@ -24,6 +24,14 @@
 # gate.sh and CI still deny the lints.
 cap_lints = true
 
+# Files no build on the weekly job's Linux runner compiles, whose every
+# mutant would pass the tests there and be counted missed: the fs crate's
+# resolver where there is none yet (Windows: no root opens, so each of its
+# functions is unreachable or refuses), and its opener for the Unix systems
+# without openat2 (macOS: the walk alone, which the Linux tests take through
+# the same walk_open).
+exclude_globs = ["crates/fs/src/resolver/other.rs", "crates/fs/src/resolver/walk.rs"]
+
 # Mutants that cannot change behaviour (each tested by a run of the crate).
 exclude_re = [
   # padme(2): the formula gives mask 0 and returns 2, as the early return does.

@@ -5,6 +5,168 @@ changed and why.
 
 ## Unreleased
 
+- Disk: a new crate, `licketysync-fs` (`crates/fs`), for what phase 1 reads and writes on a folder's
+  disk, with the name policy and the beneath-root path resolver (TM-4), the one way into the disk.
+  - **The name policy:** which names a device can store, and how a name read from the disk becomes a
+    component of an index path, for Linux, macOS and Windows, as pure functions that the tests check
+    on every platform. A name it refuses cannot be stored here: the changes that use it keep such a
+    file on the disk and never read it as deleted. Refused everywhere: a path `check_path` refuses,
+    and a disk name that is not UTF-8 or holds a `/`; a component not in NFC (`protocol.md` §4.4
+    step 7); a component over `MAX_NAME_BYTES`, counted in bytes on Linux and macOS (APFS counts
+    bytes, stricter than HFS+'s UTF-16 units) and in UTF-16 units on Windows; and any component a
+    file system that folds names could take for `.licketysync`, at any depth: one that, once every
+    `Default_Ignorable_Code_Point` is removed (Linux's casefold directories and HFS+ ignore them;
+    the table is Unicode 16.0's) and trailing dots and spaces are trimmed (vfat and exFAT drop
+    them), is `.licketysync` in Unicode's upper or lower case (`.licketyſync` with the long s
+    counts), or is Windows' short name for it, `LICKET~` and digits, as git refuses `.git`'s
+    aliases. Without that fold, on a casefold directory a write holder could send
+    `.lick\u{200C}etysync/tmp0/x` into the hidden directory, or freeze any subtree by making a
+    nested folder's marker there. Refused on Windows also: `< > : " \ | ? *`, U+0001 to U+001F, a
+    trailing dot or space, and the device names `CON`, `PRN`, `AUX`, `NUL`, `COM0` to `COM9` and
+    `LPT0` to `LPT9` (with `¹`, `²` and `³` too), `CONIN$` and `CONOUT$`, in any case, with any
+    extension and with spaces before it. On macOS, whose file systems take every Unicode form of a
+    name for one name and may list it decomposed, a disk name is normalised to NFC (one over three
+    times the limit, which cannot fit once composed, is refused first, to bound the work); on Linux
+    and Windows a disk name not in NFC is refused instead: there its NFC form names another file, so
+    a path made from it would not lead back to the file. A `Name` carries the policy that admitted
+    it.
+  - **The resolver:** `Root::open` opens the folder's root (its own path may lead through links,
+    being the person's choice), makes its hidden directory `.licketysync` (mode `0o700`) when it is
+    missing, wherever it is pointed, narrows one with a looser mode (a copy's `0o755`) to `0o700`,
+    and holds it open by descriptor and file ID. A root this user cannot write does not open, and
+    neither does one whose `.licketysync` is a link, a file or a mount point (`Hidden`), belongs to
+    another user (`HiddenNotOwned`: a local user who can write the folder could otherwise swap in
+    their own, where later changes keep temporary and archived files; this fails closed where a file
+    system invents or remaps owners, such as an NFS export's `nobody`, or CIFS or FUSE mounted
+    without `uid=`), or can still be written by group or others after narrowing (`HiddenWritable`:
+    vfat and exFAT refuse `fchmod` and take modes from the mount). The root itself has no owner
+    rule, since a folder a group shares is a person's choice. `Root::parent` first checks, by a
+    no-follow look, that the hidden directory's name still leads to the directory it holds and that
+    the one it holds is still linked (one removed, whose inode number a new directory took, is not),
+    where its file system counted links when the root opened (some FUSE and network file systems
+    report none); one removed or replaced makes the root refuse, `RootChanged`, until it is opened
+    again, while a `Dir` handed out before keeps working. It then opens the directory that holds an
+    index path's last component one component at a time, each in the descriptor of the one before,
+    and refuses a symbolic link at any component (never followed, inside the root or out), a mount
+    point (`OtherFileSystem`: one switch, `CROSSES_MOUNTS`, since places and renames need one mount
+    and an unmounted disk must not read as mass deletion), a FIFO, socket or device (`Special`), a
+    directory holding `.licketysync` (`NestedFolder`, another folder's root), and the hidden
+    directory reached by another name, by its file ID (`HiddenDirectory`). A missing directory on
+    the way is made with `mkdirat` when the caller asks. The last component is reached only through
+    the parent's `Dir`: `Dir::stat` never follows it (kind, file ID, size, times, mode, link count),
+    `Dir::open_file` opens it no-follow and non-blocking and must find the file `stat` found, else
+    `Changed`, and `Dir::entries` lists raw names for `NamePolicy::from_disk`. A path or name
+    admitted by another platform's policy is judged again by the root's.
+  - **Mounts:** on Linux every look is `statx` (with `AT_NO_AUTOMOUNT`), and a component is on the
+    root's mount when its mount ID (`STATX_MNT_ID`, 5.8 and later) is the root's, so a bind mount of
+    the root's own file system is refused like any other mount, for a directory on the way, a last
+    component and an opened file. Before 5.8, and on macOS, only devices are compared, which misses
+    such a bind mount. Whether `statx` can be used is decided once for the process, by its first
+    answer, as Rust's std decides: where the kernel lacks it (before 4.11) or a seccomp filter
+    refuses it (`EPERM`), `stat` is used, with no mount ID; once it has worked, its `EPERM` is that
+    look's refusal. Since a FUSE server can answer one look with `EPERM` or `ENOSYS`, such an answer
+    turns `statx` off only once a `statx` of the same descriptor that asks the file system nothing
+    (`AT_STATX_DONT_SYNC`) fails too, and never once another look found it working. A `statx` answer
+    that leaves out the type, mode, inode, link count, owner, size or either time is refused, never
+    read as zeros.
+  - **The two ways on Linux:** each component is opened with `openat2` and `RESOLVE_BENEATH`,
+    `RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS` and `RESOLVE_NO_XDEV`, so that the kernel refuses
+    a link or a mount in the call that opens the directory. `Root::open` decides the way once, by
+    one `openat2` of the root: where it fails (`ENOSYS` before 5.6, `EPERM` under a seccomp filter)
+    the root walks with `openat`, `O_DIRECTORY`, `O_NOFOLLOW` and `O_CLOEXEC`, checking each
+    directory's mount itself; any other failure of that `openat2` fails the open. A later `EPERM` is
+    that directory's refusal, and a component that meets `EAGAIN` three times is walked. macOS
+    always walks. One component at a time on both rather than the whole parent in one `openat2`, so
+    that every directory on the way is checked for a nested folder and the hidden directory's file
+    ID. Windows has no resolver yet: `Root::open` returns `Unsupported` (phase 3, on a platform-FFI
+    crate); its name policy runs as everywhere.
+  - **What remains** (the module's documentation): a directory a local process moves out of the root
+    while its descriptor is held takes the next call along; a FIFO any local user who can write in a
+    directory swaps in between `stat` and `open_file` is opened without blocking before it is
+    refused (a device needs `CAP_MKNOD`); a hard link to a file outside the root is read like any
+    file, its link count saying so; naming an automount trigger beneath the root starts its mount
+    before it is refused.
+  - **Tests:** the name policy has one test per rule and per alias class, each on every policy, a
+    test of the ignorable table's every range, the length boundaries, and two property tests: the
+    policy admits no path that `check_path` refuses, and refuses it with `check_path`'s own reason;
+    and a disk name it admits is one component that `check_path` admits, in NFC, admitted again
+    unchanged. The resolver's run on real directories, on both Linux ways (a test-only switch,
+    compiled only in the crate's own test build, `cfg(test)`, makes a root walk, and a test-only
+    count shows that the other used `openat2`): `tm_4_symlink_then_directory` (`a` links outside;
+    resolving `a/x`, making `a` and `a/b`, a deeper link, a link inside the root and a link to a
+    file outside are refused, and nothing appears outside); its race on Linux, which swaps `a`
+    between a directory and a link outside with `RENAME_EXCHANGE` while each root resolves `a/b/x`,
+    making `b`, until each has gone through and been refused at least 20 times (bounded by counts:
+    200 000 resolutions, 20 000 000 swaps), and nothing lands outside; a FIFO, a socket and
+    `/dev/null`; `/dev` beneath a root at `/` (with a test-only root that makes no hidden
+    directory); the hidden directory made, held, and removed, replaced, or moved away and back; a
+    component checked for its mount and the hidden directory's ID; `..` and absolute components; the
+    deepest path an index holds, 2 048 components in 4 095 bytes; a nested folder; files examined,
+    opened, and refused once replaced, changed, linked again or turned into a link; and the rest of
+    each call's refusals. Two run again in a child under a new user and mount namespace (`unshare
+    -Urm`), where they may mount, and are skipped with the reason printed where none can be made: a
+    bind mount beneath the root, refused on both ways; and a casefold tmpfs (Linux 6.13 and later;
+    skipped too, saying why, without it or without `chattr`), where the policy refuses case variants
+    and names with ignorable characters, a root whose hidden directory is made again refuses, and an
+    oracle apart from the policy sweeps about 3 million names, each code point of U+0020 to U+2FFFF
+    and U+E0000 to U+E0FFF put before, after, inside and in place of each character of
+    `.licketysync`, and checks that every policy refuses each one the kernel folds onto the hidden
+    directory (on Linux 7.0, 12 544 of 2 979 345 names; about 4 s in a test build). CI's Linux jobs
+    that run these tests (the tests and coverage jobs, the weekly mutants and the nightly
+    cargo-careful) first allow unprivileged user namespaces
+    (`kernel.apparmor_restrict_unprivileged_userns=0`, where the setting exists), which Ubuntu's
+    AppArmor restricts on GitHub's runners; the casefold test needs Linux 6.13, which those runners
+    may not have, and then says so. A hidden directory of another user's is refused, on stub
+    metadata (with the writability rule) and, in a namespace, with a directory of the host's root
+    (`/usr`, which shows there as `nobody`) bound in as it. On Windows a test checks that no root
+    opens. macOS's CI runs the rest on its walk.
+  - **Fuzzing (TM-3):** `fuzz/fuzz_targets/disk_names.rs` makes names as a directory listing gives
+    them into an index path by each policy, and takes the whole input as an index path, with an
+    oracle for the hidden directory's aliases written apart from the policy's; 34 seeds in
+    `fuzz/seeds/disk_names/`. It ran 120 s locally (103 745 inputs) without a crash.
+  - **Semgrep:** `disk_by_path-only-in-resolver` flags, in `fs` and `engine` outside the resolver's
+    files, the functions of `std::fs`, `std::process`, `std::os::{unix,windows,wasi}::fs`,
+    `rustix::fs`, `rustix::net` and `rustix::process` (called, passed as values, raw identifiers and
+    turbofishes included), `File::open`, `create`, `create_new` and `options` (also as
+    `<std::fs::File>::open(...)` and as the value `<std::fs::File>::open`), `OpenOptions`,
+    `DirBuilder`, rustix's `Dir`, `std::os::unix::net`'s sockets, `std::process::Command`,
+    `std::env::set_current_dir`, the functions of `Path` and `PathBuf` that read the disk (on a
+    value, by path such as `Path::exists(p)`, as a value, and through an alias whose `use` is in the
+    file), type aliases of those types (a path type is free), every `use` item that names `std::fs`,
+    `std::process`, `std::os` or one of its modules but `std::os::fd`, `rustix::fs`, `rustix::net`
+    or `rustix::process` (re-exports included; `std::net` and an enum of one's own named `Command`
+    are free), and the imports Semgrep cannot see through (a renamed `std`, a renamed, globbed or
+    brace-renamed module of the way to the disk); and, as a text backstop for what Semgrep does not
+    parse, the same calls in a macro's arguments (`assert!(std::fs::read(p).is_ok())`,
+    `assert!(unix::fs::symlink(p, p).is_ok())`) and with raw identifiers in a path
+    (`std::r#fs::read`). `resolver_re-exports-only-its-own-types` keeps the resolver's files from
+    re-exporting anything but their own types, across line breaks too. Their cases are in
+    `.semgrep/tests/project.rs`, and `ci/test-semgrep-scan.sh` checks their paths on a made-up tree.
+    TM-4 names `fs` as its enforcer, says exactly what the rules flag and what is left to review and
+    TM-8 (a macro that builds such a call from parts, a dependency that opens a path, a function of
+    `std` outside those modules that takes a path), and says how a mount point is found.
+  - **CI:** `gate.sh`, CI's coverage job and `codecov.yml` hold `fs` to 90% of lines, measured on
+    its own files, as keys, protocol, index and engine are; `ci/mutants.sh` (the weekly
+    `mutants.yml`) adds it to the crates whose mutants are tested, its survivors reported and not
+    failing, as theirs are. `.cargo/mutants.toml` leaves out `resolver/other.rs` (Windows) and
+    `resolver/walk.rs` (macOS), which no Linux build compiles, so that their every mutant is not
+    counted missed. A cargo-mutants run on `fs` under `ci/mutants.sh`'s caps: 174 mutants, 135
+    caught, 39 unviable, none missed.
+  - **Dependencies (TM-8):** `unicode-normalization` 0.1.26 (tagged 2026-10-16, the newest release),
+    for NFC's tables: the maintained crate for them that is not ICU4X, which `deny.toml` bans to
+    keep `idna` ASCII-only; its one dependency, `tinyvec` 1.13.3, was already in `Cargo.lock`.
+    `supply-chain/config.toml` exempts it, which no imported audit covers: the code the compiler
+    cannot check is five `char::from_u32_unchecked` calls in the Hangul arithmetic, three of them in
+    `decompose_hangul`, each read and in range. `rustix` 1.1.6 (tagged 2026-10-27, the newest
+    release) with its `fs` and `process` features, on Unix only, already in `Cargo.lock` beneath
+    `async-io`: safe `openat2`, `openat`, `mkdirat`, `statx`, `statat`, `fstat` and `fchmod`, and
+    `geteuid` to refuse a hidden directory another user owns, so the crate keeps
+    `forbid(unsafe_code)`; it and the crates beneath it were already vetted for `net`, and their
+    notes now say that `fs` uses rustix directly. `fuzz/Cargo.lock` gains them all, with `errno`
+    held at 0.3.14, as in `Cargo.lock` (0.3.15 is from 2026-11-12). `ci/geiger-baseline.txt` gets
+    the line `fs 162 5797 32 3 111`: protocol's counts, unicode-normalization's, rustix's with its
+    `fs` and `process` features, and linux-raw-sys's.
+
 - Daemon: the store, as CI first ran it on macOS and Windows.
   - Openers of one fresh path in six processes at once could fail
     (`openers_in_other_processes_at_once_each_open_it_or_are_refused`): all refused as `Locked`,

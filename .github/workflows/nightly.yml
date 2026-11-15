@@ -133,6 +133,15 @@ jobs:
         with:
           tool: cargo-careful@0.4.10
           fallback: none
+      # The fs crate's namespace tests (a bind mount and a casefold tmpfs
+      # beneath a root, under unshare -Urm) need unprivileged user namespaces,
+      # which Ubuntu's AppArmor restricts on GitHub's runners. Without them
+      # the tests are skipped, saying why.
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - run: cargo +nightly-2026-10-27 careful test --workspace
 
   miri:

@@ -84,7 +84,7 @@ group. The groups:
    copy of a version in a workflow or in `ci/geiger-baseline.txt` (below, "Pins
    and the weekly refresh"); `ci/toolchains.sh`.
 2. **Rust**: `cargo fmt`, clippy pedantic with `-D warnings` (all targets, all
-   features), nextest on every crate but the four of group 8, doc-tests,
+   features), nextest on every crate but the five of group 8, doc-tests,
    rustdoc with warnings denied.
 3. **Dependencies**: `cargo deny` (and the production bans of
    `deny-production.toml`), `cargo audit` on core's lockfile and on `fuzz/`'s,
@@ -120,7 +120,7 @@ group. The groups:
    sccache (`ci/test-rustc-wrapper.sh`); and the dep-info check on toy crates
    (`ci/test-check-dep-info.sh`).
 8. **Coverage**: at least 90% of lines in each of the keys, protocol,
-   index and engine crates, measured per crate, after
+   index, engine and fs crates, measured per crate, after
    `cargo llvm-cov clean --workspace`. These are the gate's only runs of those
    crates' tests; CI runs them under nextest too.
 9. **What the builds read**, last: a release `cargo check`, then every file
@@ -141,11 +141,11 @@ code of that run, and its coverage map counts the old code against the new
 files: the index measurement failed for no reason (twice, 2026-11-08).
 `cargo llvm-cov clean --workspace` removes every workspace crate's artifacts
 and the profile data there, and keeps the build of the dependencies. It takes
-under a second and the four measurements take about as long after it as before
-(124 s against 119 s on the development machine, half of it engine's tests); a
-plain `cargo llvm-cov clean`, which removes the whole directory, adds about
-30 s for the dependencies' rebuild. Run the clean first before a coverage command of
-your own, too.
+under a second and the measurements take about as long after it as before
+(the four of keys to engine: 124 s against 119 s on the development machine,
+half of it engine's tests); a plain `cargo llvm-cov clean`, which removes the
+whole directory, adds about 30 s for the dependencies' rebuild. Run the clean
+first before a coverage command of your own, too.
 
 `ci/geiger.sh` prints the cargo-geiger report and fails when any of a crate's
 five used unsafe counts differs from its line in `ci/geiger-baseline.txt`, up

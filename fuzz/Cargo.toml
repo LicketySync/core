@@ -13,6 +13,7 @@ resolver = "2"
 
 [dependencies]
 libfuzzer-sys = "0.4"
+licketysync-fs = { path = "../crates/fs" }
 licketysync-index = { path = "../crates/index" }
 licketysync-keys = { path = "../crates/keys" }
 licketysync-protocol = { path = "../crates/protocol" }
@@ -147,6 +148,13 @@ bench = false
 [[bin]]
 name = "index_ops"
 path = "fuzz_targets/index_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "disk_names"
+path = "fuzz_targets/disk_names.rs"
 test = false
 doc = false
 bench = false

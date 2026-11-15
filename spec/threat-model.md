@@ -659,13 +659,31 @@ Enforced by `fuzz/` and CI; a decoder without a target does not merge.
 
 **TM-4. One beneath-root path resolver; symlinks are never followed.** Every subsystem that touches
 the disk, including versioning, trash, temporary downloads, conflict copies, the ignore file and the
-marker, resolves paths through one function that normalises, refuses traversal, reserved and
-platform-invalid names, and refuses to follow a symlink at any component; the symlink-then-directory
-sequence (a peer sends a symlink, then a directory of the same name, then a file beneath it) is a
-committed test. Stops path traversal and symlink escape through a second code path (Syncthing 2016
-traversal; CVE-2017-1000420 in versioning). Enforced by `engine`; `.semgrep/project.yml` forbids
+marker, resolves paths through one function that takes names only in NFC (macOS's disk names are
+normalised to it), refuses traversal, reserved and platform-invalid names and every name a file
+system could take for the hidden directory, refuses to follow a symlink at any component, and stays
+on the root's mount (by mount ID on Linux 5.8 and later; by device on macOS and older Linux, which
+does not see a bind mount of the root's own file system); the symlink-then-directory sequence (a
+peer sends a symlink, then a directory of the same name, then a file beneath it) is a committed
+test. Stops path traversal and symlink escape through a second code path (Syncthing 2016 traversal;
+CVE-2017-1000420 in versioning). Enforced by `fs`, whose resolver (`Root` and `Dir`) is that
+function, and by `engine`, which has no access to the disk. `.semgrep/project.yml` forbids
 `std::fs::canonicalize` and `read_link` throughout the workspace, the resolver included, which opens
-with no-follow semantics instead.
+with no-follow semantics instead. In `fs` and `engine` outside the resolver's files,
+`disk_by_path-only-in-resolver` flags: the functions of `std::fs`, `std::process`,
+`std::os::{unix,windows,wasi}::fs`, `rustix::fs`, `rustix::net` and `rustix::process`; `File`'s
+opening functions (also as a value of `<File>`), `OpenOptions`, `DirBuilder`, rustix's `Dir`,
+`std::os::unix::net`'s types, `std::process::Command` and `std::env::set_current_dir`; `Path`'s and
+`PathBuf`'s functions that read the disk, called on a value, by path or through an alias whose `use`
+is in the file, and any method of their names; a type alias of one of those types; every `use` item
+that names `std::fs`, `std::process`, `std::os` or one of its modules but `std::os::fd`,
+`rustix::fs`, `rustix::net` or `rustix::process`, renames `std`, or renames or globs such a module;
+and, as text, the same calls inside a macro's arguments and with raw identifiers.
+`resolver_re-exports-only-its-own-types` keeps the resolver's files from re-exporting anything but
+their own types. Left to review, with TM-8: a macro that builds such a call from parts; a
+dependency, or another crate, that opens a path or re-exports one of those modules; `Path`'s
+functions called through a type alias or a re-export the rule cannot see; and a function of `std`
+outside those modules that takes a path.
 
 **TM-5. Cryptography comes only from `suites.md`.** No primitive, combiner, key derivation, padding
 scheme or random generator whose output reaches a key, a nonce, an identifier or any byte a peer

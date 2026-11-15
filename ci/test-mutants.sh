@@ -712,9 +712,9 @@ if [ "$fails" = "$lint_fails" ]; then
 fi
 
 # What reaches cargo-mutants, and what reaches the job summary.
-picked="--package licketysync-keys --package licketysync-protocol --package licketysync-index --package licketysync-engine --no-shuffle --sharding round-robin --shard 3/16"
+picked="--package licketysync-keys --package licketysync-protocol --package licketysync-index --package licketysync-engine --package licketysync-fs --no-shuffle --sharding round-robin --shard 3/16"
 if [ "$(cat "$tmp/1/args")" = "mutants --list $picked"$'\n'"mutants $picked --timeout-multiplier 2 --minimum-test-timeout 300 --caught --unviable" ]; then
-  echo "ok   cargo-mutants lists, then tests, the four crates' shard, each mutant's limit twice the baseline's, at least 300 s, and every outcome printed"
+  echo "ok   cargo-mutants lists, then tests, the five crates' shard, each mutant's limit twice the baseline's, at least 300 s, and every outcome printed"
 else
   echo "FAIL cargo-mutants arguments:"
   sed 's/^/  | /' "$tmp/1/args"
