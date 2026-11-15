@@ -16,5 +16,11 @@ licketysync-keys = { path = "../keys" }
 # The section 5 rows the engine counts, which the watermark scenarios read.
 licketysync-protocol = { path = "../protocol" }
 
+[dev-dependencies]
+# The storage conformance suite (runtime::conformance), run on SimStorage.
+licketysync-engine = { path = "../engine", features = ["testkit"] }
+# The suite's model test (plan: Tests).
+proptest = { version = "1", default-features = false, features = ["std"] }
+
 [lints]
 workspace = true

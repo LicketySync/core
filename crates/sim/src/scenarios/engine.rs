@@ -51,6 +51,7 @@ use crate::member::{Action, Ledger, Member, Step, content, default_workload};
 use crate::network::{NetworkConfig, Partition};
 use crate::oracle::{self, Expect};
 use crate::scenario::{Fault, Outcome, Scenario, Sim};
+use crate::storage::{FailureMode, SimStorage};
 use crate::world::{MAIN, World};
 
 /// Simulated time a run may take.
@@ -605,6 +606,51 @@ fn disk_full_expect(run: &Run) -> Result<(), String> {
     } else {
         Err("peer 0 did not pause for its store and resume".to_owned())
     }
+}
+
+/// Peer 1's second write (`big.bin`, at 1.3 s) meets a store whose commit
+/// puts the batch on the disk and then fails, as SQLite's does when the
+/// log's `fsync` fails ([`FailureMode::PersistsThenFails`]): the engine rolls
+/// back, sends nothing, and pauses; peer 1 crashes a microsecond later and
+/// restarts at 8 s over the batch it was told had failed. The oracle's checks
+/// of every run cover the rest: convergence, no high-water mark that fell and
+/// no counter given to two records.
+fn commit_persists(seed: u64) -> Run {
+    let write = Instant::ZERO.saturating_add(FIRST + GAP);
+    let micros = Duration::from_micros;
+    let mut plan = Plan::new(5, SMALL_CHUNK).with_extra(commit_persists_expect);
+    plan.expect.store_failure = true;
+    plan.build("engine-commit-persists", seed, |s| {
+        s.fault(Fault::CommitsFail {
+            peer: p(1),
+            from: Instant::from_nanos(write.as_nanos() - 1_000),
+            until: write.saturating_add(micros(2)),
+            mode: FailureMode::PersistsThenFails,
+        })
+        .fault(Fault::Crash {
+            peer: p(1),
+            at: write.saturating_add(micros(1)),
+        })
+        .fault(Fault::Restart {
+            peer: p(1),
+            at: Instant::from_secs(8),
+        })
+    })
+}
+
+/// The failed commit was peer 1's write, and the restart found it.
+fn commit_persists_expect(run: &Run) -> Result<(), String> {
+    let kept = run
+        .sim
+        .storage(p(1))
+        .map_or(0, SimStorage::failed_batches_kept);
+    if kept != 1 {
+        return Err(format!("{kept} failed commits kept, not 1"));
+    }
+    if run.written(p(1), "p1/big.bin").is_none() {
+        return Err("peer 1's big.bin is not in the ledger".to_owned());
+    }
+    Ok(())
 }
 
 /// 0 and 2 hold write, 1 and 3 read, 4 sealed; {0,1} never meet {2,3}, and
@@ -1170,7 +1216,7 @@ fn expiry_expect(run: &Run) -> Result<(), String> {
 pub type Builder = fn(u64) -> Run;
 
 /// Every engine scenario's name and builder.
-pub const ALL: [(&str, Builder); 30] = [
+pub const ALL: [(&str, Builder); 31] = [
     ("engine-clean", clean),
     ("engine-drops", drops),
     ("engine-drops-stress", drops_stress),
@@ -1181,6 +1227,7 @@ pub const ALL: [(&str, Builder); 30] = [
     ("engine-skew", skew),
     ("engine-clock-ahead", clock_ahead),
     ("engine-disk-full", disk_full),
+    ("engine-commit-persists", commit_persists),
     ("engine-sealed-relay", sealed_relay),
     ("engine-late-joiner", late_joiner),
     ("engine-pacing", pacing),

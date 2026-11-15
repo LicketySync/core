@@ -127,6 +127,10 @@ pub struct Ledger {
     pub counters: BTreeMap<(PeerId, u64), RecordHash>,
     /// Each counter a member gave to two different records.
     pub counters_reused: Vec<(PeerId, u64)>,
+    /// The steps whose write failed for the store, by peer: a store whose
+    /// failed commit reached the disk (`FailureMode::PersistsThenFails`)
+    /// leaves such a step done, which the next start finds.
+    pub unconfirmed: BTreeSet<(PeerId, usize)>,
 }
 
 /// What a member has copied into the ledger so far.
@@ -290,23 +294,20 @@ impl Member {
                     | Action::Mkdir { path } => path,
                     Action::Rename { to, .. } => to,
                 };
-                let dot = self.engine().and_then(|e| e.dot(&folder, &hash));
-                let mut ledger = self.ledger.borrow_mut();
-                ledger.bytes.insert(hash, bytes);
-                ledger.written.push((self.peer, path.clone(), hash));
-                if let Some(d) = dot {
-                    let given = *ledger
-                        .counters
-                        .entry((self.peer, d.counter))
-                        .or_insert(hash);
-                    if given != hash {
-                        ledger.counters_reused.push((self.peer, d.counter));
-                    }
-                }
-                drop(ledger);
+                self.record(&folder, path, hash, bytes);
+                self.ledger
+                    .borrow_mut()
+                    .unconfirmed
+                    .remove(&(self.peer, self.next));
                 self.advance(cx);
             }
-            Err(WriteFailure::Paused | WriteFailure::Store(_)) => {
+            Err(failure @ (WriteFailure::Paused | WriteFailure::Store(_))) => {
+                if matches!(failure, WriteFailure::Store(_)) {
+                    self.ledger
+                        .borrow_mut()
+                        .unconfirmed
+                        .insert((self.peer, self.next));
+                }
                 cx.storage().rollback();
                 self.arm(cx, RETRY);
             }
@@ -318,6 +319,63 @@ impl Member {
                     return;
                 }
                 self.advance(cx);
+            }
+        }
+    }
+
+    /// Enters a record this member wrote into the ledger: its bytes, its path
+    /// and its counter, noting a counter given to two records.
+    fn record(&self, folder: &FolderId, path: &str, hash: RecordHash, bytes: Vec<u8>) {
+        let dot = self.engine().and_then(|e| e.dot(folder, &hash));
+        let mut ledger = self.ledger.borrow_mut();
+        ledger.bytes.insert(hash, bytes);
+        ledger.written.push((self.peer, path.to_owned(), hash));
+        if let Some(d) = dot {
+            let given = *ledger
+                .counters
+                .entry((self.peer, d.counter))
+                .or_insert(hash);
+            if given != hash {
+                ledger.counters_reused.push((self.peer, d.counter));
+            }
+        }
+    }
+
+    /// At a start: each step whose write failed for the store but which the
+    /// store kept, its progress committed with it, is done. Only a `Write`
+    /// step's record enters the ledger, when it reads back as the step's
+    /// content: the one kind a scenario fails this way. A kept rename's,
+    /// delete's or directory's would not, and the oracle would miss its
+    /// bytes or its counter.
+    fn confirm(&self, cx: &mut dyn Context) {
+        let Some(folder) = self.folder else {
+            return;
+        };
+        let done: Vec<usize> = self
+            .ledger
+            .borrow()
+            .unconfirmed
+            .iter()
+            .filter(|(peer, step)| *peer == self.peer && *step < self.next)
+            .map(|(_, step)| *step)
+            .collect();
+        for step in done {
+            self.ledger
+                .borrow_mut()
+                .unconfirmed
+                .remove(&(self.peer, step));
+            let Some(Action::Write { path, content }) = self.steps.get(step).map(|s| &s.action)
+            else {
+                continue;
+            };
+            let Some(hash) = self.current(&folder, path) else {
+                continue;
+            };
+            let kept = self
+                .engine()
+                .and_then(|e| e.read_file(&*cx.storage(), &folder, &hash).ok());
+            if kept.as_ref() == Some(content) {
+                self.record(&folder, path, hash, content.clone());
             }
         }
     }
@@ -377,6 +435,7 @@ impl Peer for Member {
             .and_then(|v| <[u8; 8]>::try_from(v.as_slice()).ok())
             .and_then(|b| usize::try_from(u64::from_le_bytes(b)).ok())
             .unwrap_or(0);
+        self.confirm(cx);
         let checking = self.started_checking();
         self.ledger.borrow_mut().starts.push((self.peer, checking));
         let delay = self

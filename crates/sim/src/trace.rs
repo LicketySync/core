@@ -144,6 +144,10 @@ pub enum EventKind {
     ClockStep(u64),
     /// The peer's device resumed from sleep; `on_resumed` ran.
     Resume,
+    /// The peer's commits fail from now on.
+    CommitsFail,
+    /// The peer's commits succeed again.
+    CommitsWork,
 }
 
 /// One event of the run.
@@ -195,6 +199,8 @@ impl fmt::Display for TraceEvent {
             EventKind::DiskFreed => f.write_str("disk freed"),
             EventKind::ClockStep(secs) => write!(f, "wall clock steps {secs} s ahead"),
             EventKind::Resume => f.write_str("resumes from sleep"),
+            EventKind::CommitsFail => f.write_str("commits fail"),
+            EventKind::CommitsWork => f.write_str("commits work"),
         }
     }
 }
@@ -325,6 +331,8 @@ impl TraceEvent {
                 h.write_u64(*secs);
             }
             EventKind::Resume => h.write(&[24]),
+            EventKind::CommitsFail => h.write(&[25]),
+            EventKind::CommitsWork => h.write(&[26]),
         }
     }
 }
@@ -531,6 +539,8 @@ mod tests {
             EventKind::DiskFreed,
             EventKind::ClockStep(86_400),
             EventKind::Resume,
+            EventKind::CommitsFail,
+            EventKind::CommitsWork,
         ]
     }
 

@@ -49,8 +49,9 @@
 //! whatever the stored metadata says (4.7 item 1). Such a store is reopened
 //! ([`crate::Index::open`]) before its folder resumes after a store failure,
 //! since the failed commit may have stopped between those writes; an atomic
-//! store left nothing of the failed change and resumes without it (4.7
-//! item 1).
+//! store left the failed change absent (whole, if the process ends before a
+//! later commit writes, which the next open checks) and resumes without it
+//! (4.7 item 1).
 
 use std::collections::BTreeMap;
 

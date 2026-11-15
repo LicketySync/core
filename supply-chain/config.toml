@@ -589,6 +589,11 @@ version = "0.48.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
 
+[[exemptions.libsqlite3-sys]]
+version = "0.39.1"
+criteria = "safe-to-deploy"
+notes = "Phase 1 exemption (licketysync-daemon, the store): SQLite 3.54.1 itself, the C amalgamation its build script compiles with the system C compiler (feature bundled; outside cargo-geiger's count, a TM-7 residual), and its pregenerated bindings; the rusqlite project. Not covered by the imported audits at this version."
+
 [[exemptions.linux-raw-sys]]
 version = "0.12.1"
 criteria = "safe-to-deploy"
@@ -863,6 +868,11 @@ notes = "Phase 0 exemption (licketysync-net, spike A): beneath libp2p-tls, rcgen
 version = "0.20.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): Linux route netlink beneath if-watch; rust-netlink. Not covered by the imported audits at this version."
+
+[[exemptions.rusqlite]]
+version = "0.41.1"
+criteria = "safe-to-deploy"
+notes = "Phase 1 exemption (licketysync-daemon, the store): the SQLite bindings the engine's Storage runs on, features bundled and cache only; the rusqlite project. Not covered by the imported audits at this version."
 
 [[exemptions.rustc-hash]]
 version = "2.1.3"

@@ -3,12 +3,30 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! A peer's simulated disk: an in-memory key-value store with the staged and
-//! committed halves the engine's [`Storage`] trait describes, a capacity, and a
-//! "disk full" switch for fault injection.
+//! committed halves the engine's [`Storage`] trait describes, a capacity, a
+//! "disk full" switch and failing commits for fault injection, and what a
+//! failure leaves ([`FailureMode`]) as the stores the engine runs on leave it.
 
 use std::collections::BTreeMap;
 
 use licketysync_engine::runtime::{Entry, Storage, StorageError};
+
+/// What a failed `put`, `delete` or `commit` leaves, each a way a real store
+/// fails within the [`Storage`] contract.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FailureMode {
+    /// The staged writes stay staged, and the store works on.
+    #[default]
+    KeepsStaged,
+    /// Every staged write goes, and every call fails until a rollback: SQLite,
+    /// which rolls its transaction back.
+    DropsStaged,
+    /// As `DropsStaged`, and a commit that fails has already put its batch on
+    /// the disk: the next open finds it whole, unless a later commit that
+    /// writes succeeded first (an empty one leaves it). SQLite, when the log's
+    /// frames are written but its `fsync` fails.
+    PersistsThenFails,
+}
 
 /// A peer's persistent store. `committed` is what survives a crash; `staged`
 /// holds the writes since the last commit (a `None` value is a staged delete).
@@ -25,6 +43,15 @@ pub struct SimStorage {
     projected_size: u64,
     capacity: Option<u64>,
     full: bool,
+    commit_fails: bool,
+    mode: FailureMode,
+    /// A failure dropped the staged writes: every call fails until a rollback.
+    refusing: bool,
+    /// The batch of a failed commit that the next open (a crash here) finds
+    /// ([`FailureMode::PersistsThenFails`]).
+    limbo: Option<BTreeMap<Vec<u8>, Option<Vec<u8>>>>,
+    /// How many crashes found such a batch.
+    limbo_applied: u64,
 }
 
 fn entry_size(key: &[u8], value: &[u8]) -> u64 {
@@ -59,15 +86,49 @@ impl SimStorage {
         self.full = full;
     }
 
+    /// Switches failing commits on or off: while on, every `commit` fails
+    /// with [`StorageError::Io`].
+    pub fn set_commit_fails(&mut self, fails: bool) {
+        self.commit_fails = fails;
+    }
+
+    /// What a failure leaves from now on.
+    pub fn set_failure_mode(&mut self, mode: FailureMode) {
+        self.mode = mode;
+    }
+
+    /// How many crashes found a failed commit's batch on the disk and kept it.
+    #[must_use]
+    pub const fn failed_batches_kept(&self) -> u64 {
+        self.limbo_applied
+    }
+
     /// Whether the "disk full" fault is on.
     #[must_use]
     pub const fn is_full(&self) -> bool {
         self.full
     }
 
-    /// Simulates a crash: staged writes are gone, committed ones remain.
+    /// Simulates a crash: staged writes are gone, committed ones remain, and
+    /// so does a failed commit's batch that reached the disk
+    /// ([`FailureMode::PersistsThenFails`]).
     pub fn crash(&mut self) {
         self.staged.clear();
+        self.refusing = false;
+        if let Some(batch) = self.limbo.take() {
+            for (key, value) in batch {
+                let before = self.committed.get(&key).map_or(0, |v| entry_size(&key, v));
+                self.committed_size = self.committed_size.saturating_sub(before);
+                if let Some(value) = value {
+                    self.committed_size =
+                        self.committed_size.saturating_add(entry_size(&key, &value));
+                    self.committed.insert(key, value);
+                } else {
+                    self.committed.remove(&key);
+                }
+            }
+            self.limbo_applied += 1;
+        }
         self.projected_size = self.committed_size;
     }
 
@@ -99,6 +160,24 @@ impl SimStorage {
         }
     }
 
+    /// Fails while a failure has dropped the staged writes.
+    fn refuse(&self) -> Result<(), StorageError> {
+        if self.refusing {
+            return Err(StorageError::Io("refusing until a rollback".into()));
+        }
+        Ok(())
+    }
+
+    /// What a failure leaves, as the mode says: `e`, the failure, returned.
+    fn fail(&mut self, e: StorageError) -> Result<(), StorageError> {
+        if self.mode != FailureMode::KeepsStaged {
+            self.staged.clear();
+            self.projected_size = self.committed_size;
+            self.refusing = true;
+        }
+        Err(e)
+    }
+
     /// Whether the store may hold `bytes` in all.
     fn check_room(&self, bytes: u64) -> Result<(), StorageError> {
         if self.full {
@@ -113,6 +192,7 @@ impl SimStorage {
 
 impl Storage for SimStorage {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
+        self.refuse()?;
         Ok(match self.staged.get(key) {
             Some(staged) => staged.clone(),
             None => self.committed.get(key).cloned(),
@@ -120,6 +200,7 @@ impl Storage for SimStorage {
     }
 
     fn scan(&self, prefix: &[u8]) -> Result<Vec<Entry>, StorageError> {
+        self.refuse()?;
         let mut view: BTreeMap<Vec<u8>, Vec<u8>> = self
             .committed
             .range(prefix.to_vec()..)
@@ -140,17 +221,21 @@ impl Storage for SimStorage {
     }
 
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<(), StorageError> {
+        self.refuse()?;
         let after = self
             .projected_size
             .saturating_sub(self.projected_entry_size(key))
             .saturating_add(entry_size(key, value));
-        self.check_room(after)?;
+        if let Err(e) = self.check_room(after) {
+            return self.fail(e);
+        }
         self.staged.insert(key.to_vec(), Some(value.to_vec()));
         self.projected_size = after;
         Ok(())
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<(), StorageError> {
+        self.refuse()?;
         self.projected_size = self
             .projected_size
             .saturating_sub(self.projected_entry_size(key));
@@ -159,7 +244,21 @@ impl Storage for SimStorage {
     }
 
     fn commit(&mut self) -> Result<(), StorageError> {
-        self.check_room(self.projected_size)?;
+        self.refuse()?;
+        if let Err(e) = self.check_room(self.projected_size) {
+            return self.fail(e);
+        }
+        if self.commit_fails {
+            if self.mode == FailureMode::PersistsThenFails {
+                self.limbo = Some(self.staged.clone());
+            }
+            return self.fail(StorageError::Io("commit failed".into()));
+        }
+        // What a failed commit left on the disk is overwritten by the next
+        // commit that writes; an empty commit writes nothing.
+        if !self.staged.is_empty() {
+            self.limbo = None;
+        }
         for (k, v) in std::mem::take(&mut self.staged) {
             match v {
                 Some(v) => self.committed.insert(k, v),
@@ -171,6 +270,7 @@ impl Storage for SimStorage {
     }
 
     fn rollback(&mut self) {
+        self.refusing = false;
         self.staged.clear();
         self.projected_size = self.committed_size;
     }
@@ -178,7 +278,137 @@ impl Storage for SimStorage {
 
 #[cfg(test)]
 mod tests {
+    use licketysync_engine::runtime::conformance::{self, Subject};
+    use proptest::prelude::*;
+
     use super::*;
+
+    /// The simulator's store in one failure mode, restarted by a crash.
+    struct Sim(FailureMode);
+
+    impl Subject for Sim {
+        type Store = SimStorage;
+        fn fresh(&mut self) -> SimStorage {
+            let mut store = SimStorage::new();
+            store.set_failure_mode(self.0);
+            store
+        }
+        fn reopen(&mut self, mut store: SimStorage) -> SimStorage {
+            store.crash();
+            store
+        }
+        fn set_full(&mut self, store: &mut SimStorage, full: bool) {
+            store.set_full(full);
+        }
+        fn set_commit_fails(&mut self, store: &mut SimStorage, fails: bool) {
+            store.set_commit_fails(fails);
+        }
+    }
+
+    #[test]
+    fn the_simulated_store_conforms_in_every_failure_mode() {
+        for mode in [
+            FailureMode::KeepsStaged,
+            FailureMode::DropsStaged,
+            FailureMode::PersistsThenFails,
+        ] {
+            assert_eq!(conformance::run(&mut Sim(mode)), Ok(()), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn dropping_staged_writes_refuses_every_call_until_a_rollback() {
+        let mut s = SimStorage::new();
+        s.set_failure_mode(FailureMode::DropsStaged);
+        assert_eq!(s.put(b"k", b"v"), Ok(()));
+        assert_eq!(s.commit(), Ok(()));
+        assert_eq!(s.put(b"a", b"1"), Ok(()));
+        s.set_full(true);
+        assert_eq!(s.put(b"b", b"2"), Err(StorageError::Full));
+        s.set_full(false);
+        let refused = Err(StorageError::Io("refusing until a rollback".into()));
+        assert_eq!(s.get(b"a"), refused.clone().map(|()| None));
+        assert_eq!(s.scan(b""), refused.clone().map(|()| Vec::new()));
+        assert_eq!(s.put(b"c", b"3"), refused.clone());
+        assert_eq!(s.delete(b"k"), refused.clone());
+        assert_eq!(s.commit(), refused);
+        assert_eq!(s.staged_len(), 0);
+        s.rollback();
+        assert_eq!(s.get(b"a"), Ok(None));
+        assert_eq!(s.put(b"c", b"3"), Ok(()));
+        assert_eq!(s.commit(), Ok(()));
+        assert_eq!(s.committed().len(), 2);
+        assert_eq!(s.committed_bytes(), 4);
+    }
+
+    #[test]
+    fn a_batch_persisted_by_a_failed_commit_is_found_by_the_next_start() {
+        let mut s = SimStorage::new();
+        s.set_failure_mode(FailureMode::PersistsThenFails);
+        assert_eq!(s.put(b"k", b"v"), Ok(()));
+        assert_eq!(s.commit(), Ok(()));
+        assert_eq!(s.put(b"a", b"12"), Ok(()));
+        assert_eq!(s.delete(b"k"), Ok(()));
+        s.set_commit_fails(true);
+        assert!(matches!(s.commit(), Err(StorageError::Io(_))));
+        s.set_commit_fails(false);
+        s.rollback();
+        // Absent while the process runs.
+        assert_eq!(s.get(b"a"), Ok(None));
+        assert_eq!(s.get(b"k"), Ok(Some(b"v".to_vec())));
+        s.crash();
+        assert_eq!(s.get(b"a"), Ok(Some(b"12".to_vec())));
+        assert_eq!(s.get(b"k"), Ok(None));
+        assert_eq!(s.committed_bytes(), 3);
+        assert_eq!(s.failed_batches_kept(), 1);
+        // An empty commit that succeeds first leaves it.
+        assert_eq!(s.put(b"e", b"5"), Ok(()));
+        s.set_commit_fails(true);
+        assert!(s.commit().is_err());
+        s.set_commit_fails(false);
+        s.rollback();
+        assert_eq!(s.commit(), Ok(()));
+        s.crash();
+        assert_eq!(s.get(b"e"), Ok(Some(b"5".to_vec())));
+        assert_eq!(s.failed_batches_kept(), 2);
+        assert_eq!(s.delete(b"e"), Ok(()));
+        assert_eq!(s.commit(), Ok(()));
+        // A commit that writes, succeeding first, overwrites it.
+        assert_eq!(s.put(b"b", b"2"), Ok(()));
+        s.set_commit_fails(true);
+        assert!(s.commit().is_err());
+        s.set_commit_fails(false);
+        s.rollback();
+        assert_eq!(s.put(b"c", b"3"), Ok(()));
+        assert_eq!(s.commit(), Ok(()));
+        s.crash();
+        assert_eq!(s.get(b"b"), Ok(None));
+        assert_eq!(s.failed_batches_kept(), 2);
+        assert_eq!(s.committed_bytes(), 5);
+        // A failed commit for want of room puts nothing on the disk.
+        assert_eq!(s.put(b"d", b"4"), Ok(()));
+        s.set_full(true);
+        assert_eq!(s.commit(), Err(StorageError::Full));
+        s.set_full(false);
+        s.crash();
+        assert_eq!(s.get(b"d"), Ok(None));
+        assert_eq!(s.failed_batches_kept(), 2);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 256,
+            rng_seed: proptest::test_runner::RngSeed::Fixed(0x6c69_636b_6574_7379),
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn the_simulated_store_matches_the_model(
+            script in proptest::collection::vec(any::<u8>(), 0..256),
+        ) {
+            prop_assert_eq!(conformance::model(&mut Sim(FailureMode::KeepsStaged), &script), Ok(()));
+        }
+    }
 
     #[test]
     fn staged_writes_are_visible_but_a_crash_loses_them() {

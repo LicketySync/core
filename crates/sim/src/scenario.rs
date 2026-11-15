@@ -17,7 +17,7 @@ use licketysync_engine::runtime::{
 
 use crate::network::{Links, NetworkConfig, Partition, Piece, Probability, Stream};
 use crate::rng::SimRng;
-use crate::storage::SimStorage;
+use crate::storage::{FailureMode, SimStorage};
 use crate::trace::{DropReason, EventKind, StorageOp, Trace, TraceEvent};
 
 /// Builds the peer with the given id, at the start and again after each restart.
@@ -90,6 +90,18 @@ pub enum Fault {
         from: Instant,
         /// When it has room again.
         until: Instant,
+    },
+    /// The peer's commits fail from `from` until `until`, leaving what `mode`
+    /// says ([`FailureMode`]), which stays the peer's from then on.
+    CommitsFail {
+        /// Which peer.
+        peer: PeerId,
+        /// When commits start to fail.
+        from: Instant,
+        /// When they work again.
+        until: Instant,
+        /// What a failure leaves.
+        mode: FailureMode,
     },
     /// The peer's wall clock jumps `secs` seconds ahead at `at` and stays
     /// ahead (its monotonic clock does not move): a clock set forward, or a
@@ -462,6 +474,8 @@ enum FaultEvent {
     PartitionEnd(u64),
     DiskFull(PeerId),
     DiskFreed(PeerId),
+    CommitsFail(PeerId, FailureMode),
+    CommitsWork(PeerId),
     ClockStep(PeerId, u64),
     /// From a `Fault::Resume`.
     Resume(PeerId),
@@ -1039,6 +1053,16 @@ impl<P: Peer> Sim<P> {
                 self.schedule_fault_event(from, FaultEvent::DiskFull(peer));
                 self.schedule_fault_event(until, FaultEvent::DiskFreed(peer));
             }
+            Fault::CommitsFail {
+                peer,
+                from,
+                until,
+                mode,
+            } => {
+                let (from, until) = window(from, until);
+                self.schedule_fault_event(from, FaultEvent::CommitsFail(peer, mode));
+                self.schedule_fault_event(until, FaultEvent::CommitsWork(peer));
+            }
             Fault::Reconnect { a, b, at } => {
                 self.schedule_fault_event(at, FaultEvent::Reconnect(a, b));
             }
@@ -1504,6 +1528,19 @@ impl<P: Peer> Sim<P> {
                 if let Some(node) = self.nodes.get_mut(&p) {
                     node.storage.set_full(false);
                     self.record(Some(p), EventKind::DiskFreed);
+                }
+            }
+            FaultEvent::CommitsFail(p, mode) => {
+                if let Some(node) = self.nodes.get_mut(&p) {
+                    node.storage.set_failure_mode(mode);
+                    node.storage.set_commit_fails(true);
+                    self.record(Some(p), EventKind::CommitsFail);
+                }
+            }
+            FaultEvent::CommitsWork(p) => {
+                if let Some(node) = self.nodes.get_mut(&p) {
+                    node.storage.set_commit_fails(false);
+                    self.record(Some(p), EventKind::CommitsWork);
                 }
             }
             FaultEvent::Reconnect(a, b) => self.connect(a, b),

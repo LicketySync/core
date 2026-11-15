@@ -66,6 +66,123 @@ changed and why.
     signing per open; section 2 gives the largest Hello as it is, 2 583 bytes.
   - Test vectors and fuzz seeds are regenerated; the fuzz targets cover field 11, the watermark
     below the counter, and checks for a watermark.
+- Daemon: the device's store, `store::SqliteStorage`, the engine's `Storage` on SQLite. One
+  key-value table of binary keys and values, `WITHOUT ROWID`, so a scan by prefix is a range of the
+  key's B-tree; write-ahead logging with `synchronous = FULL` (and `fullfsync` and
+  `checkpoint_fullfsync` for macOS), so a commit is on the disk when `commit` returns (`protocol.md`
+  §4.5, "Durability before transmission"); exclusive locking, so a second connection or process is
+  refused and no `-shm` file is made. A put or delete stages into an open transaction, which `get`
+  and `scan` see; a full disk is `StorageError::Full`. When SQLite rolls the transaction back
+  itself, as it does on a full disk, an I/O error (a failed read inside the transaction included) or
+  a failed commit, every call fails until a rollback, so no read shows the committed state in place
+  of staged writes and no later write commits on its own.
+  - Opening: `SqliteStorage::open` takes the caller's path and decides no location. It reads the
+    main file's first 100 bytes itself, not following a link, and hands SQLite only a file whose
+    header says `SQLite format 3`, application ID `LkSy` and user version 1; anything else is
+    refused unopened and unchanged, saying what it is (empty, not SQLite, another program's, another
+    format), so another program's database is never recovered, checkpointed or written, its log and
+    journal included. Once SQLite has read the file, its log included, the connection checks the IDs
+    again and that the schema is the store's one table (`Foreign::OtherSchema`, judged after SQLite
+    may have recovered the file's own log or journal), and that the path is still the file judged
+    (device and inode); a connection refused then closes without a checkpoint
+    (`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`), so another log is never written into the file. A second
+    open in the same process is refused by device and inode before it opens any of the store's
+    files, since closing a handle to one would drop the first connection's POSIX lock.
+  - Creating: openers create one at a time, under an exclusive lock on a hidden `.<name>.lock`
+    beside the store (a file of its own, so the database's POSIX locks are never touched), and a
+    store another made meanwhile is opened instead. A `-wal` or `-journal` left at the names of a
+    store that is gone is refused, named and untouched (`OpenError::Leftover`), since SQLite would
+    read it into the new store: starting over means removing them too. A temporary file a crash left
+    (`.<name>.new`, empty or starting as an SQLite database does) is removed under the lock, and
+    anything else there is refused. The store is built under that name, closed with its IDs,
+    flushed, and renamed into place without replacing anything (`renameat2`'s `RENAME_NOREPLACE` on
+    Linux and Android, `renameatx_np`'s `RENAME_EXCL` on macOS and iOS; a hard link, which fails
+    rather than replace, on Windows, whose `MoveFileExW` needs the platform crate of phase 3, and on
+    file systems that refuse the flag), once its device and inode show it is still the file built.
+    So the path never holds half a store, and concurrent openers each open it or are refused as
+    `Locked`.
+  - Links and owners: the directories the caller gives may be reached through links (iOS's `/var`,
+    Fedora Atomic's `/home`). From the first that exists on the way down, each must be the user's or
+    root's and closed to writes by group and others unless sticky, and the store's own directory the
+    user's and closed to group and others whatever its sticky bit, as one the store creates is (mode
+    0700; a directory made under a user-private-group umask of 002 is 0775, and refused); nothing is
+    created before these checks. A link on the way must be the user's or root's (in a sticky shared
+    directory another user could plant one), and a directory the store makes must be one, not a link
+    put there meanwhile. This module opens the database, `-wal`, `-journal`, temporary file and lock
+    with `O_NOFOLLOW` and refuses a link at any of those names, its target untouched; SQLite opens
+    the log and journal with `O_NOFOLLOW`, but would resolve a link at the database's own name,
+    which the device and inode check after it opens catches. On Linux and Android a name is examined
+    (`O_PATH`) before it is opened to read, so a device node is never opened, and a FIFO is refused
+    without waiting for a writer. On Unix the database, `-wal` and `-journal` must be regular files
+    of the user's with one name; their group and other bits are taken away (0600; a store its owner
+    made read-only stays so, and is refused). On Windows SQLite follows links and the store checks
+    no owner and sets no access list, until phase 3.
+  - Defences: `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema = OFF` and `cell_size_check = ON` before
+    the first read; the open fails when the SQLite linked is not the bundled version or is built
+    with `NO_SYNC` or `DISABLE_DIRSYNC`. `secure_delete = FAST`, and `auto_vacuum = INCREMENTAL`
+    from creation, the incremental vacuum left to the daemon. The store holds no key; its module
+    documentation says what a delete leaves on the disk, that nothing may open its files through
+    another handle while it is open (POSIX locks), that the daemon never reopens it beneath a live
+    engine (a failed commit's batch may be replayed then), that the format is read from the header
+    and again through SQLite, and that a corrupt page fails the reads that meet it, so its folder
+    does not open.
+  - Tests: the conformance suite and its model test on the store; the settings and modes; a link
+    planted at each of the store's names, refused with its target untouched; a directory reached
+    through a link; directories above a new store open to others (refused, unless sticky) and the
+    store's own (refused, sticky or not); files others could change; another program's files (a WAL
+    database with frames in its log, one with a hot journal, an empty file, databases without the
+    IDs) left byte for byte; a store whose log alone says another schema, format or program, refused
+    with its log kept; a `-wal` and a `-journal` left at a missing store's names; a FIFO and a
+    read-only store; creations cut short at each step; a placement only where nothing is and only as
+    built; eight threads and six processes opening one fresh path at once, each opening it or
+    refused; a second open in the same process, after which another process is still refused; a full
+    disk (made by `max_page_count`, since a small file system needs root) and a failed commit (made
+    by a commit hook), each refusing until a rollback; a second process refused; a writer killed
+    with SIGKILL sixteen times at points that vary (staging, beginning a commit, after one), after
+    which every batch it acknowledged is whole and none after it is there even in part (it fails
+    when each write commits on its own); and one killed with a batch larger than SQLite's page cache
+    staged, its pages already in the log, which leaves none of it. These prove atomicity across a
+    process crash; durability across a power loss rests on `synchronous = FULL`.
+  - New dependencies (TM-8): `rusqlite` 0.41.1, `bundled` and its statement cache only, the newest
+    release at least 7 days old (0.42.0 came out on 2026-11-11). Its `libsqlite3-sys` 0.39.1
+    compiles SQLite 3.54.1 from its own copy, so every platform runs the one version the lockfile
+    pins; SQLite lists no open CVE against it, and cargo-audit none against either crate. With them
+    come `fallible-iterator`, `fallible-streaming-iterator` and, at build time, `vcpkg`, which the
+    imported audits cover; `rusqlite` and `libsqlite3-sys` are cargo-vet exemptions, their reasons
+    in `supply-chain/config.toml`. On Unix, `rustix` (already beneath `async-io`, and exempted at
+    this version) with `fs` and `process`, for `O_NOFOLLOW` and `O_NONBLOCK` and the effective user,
+    which std does not offer. SQLite's C is outside cargo-geiger's count, and so are the
+    declarations of its functions that `libsqlite3-sys`'s build script copies into its `OUT_DIR`
+    (`bindgen.rs`, now a `generated` line of `ci/geiger-baseline.txt`, read: declarations, constants
+    and types, no function body): TM-7 names both as a residual, and the build-environment inputs
+    that shape that SQLite. The daemon's geiger line rises from nothing to `193 9366 77 5 237`,
+    engine's counts, rusqlite's and rustix's. rusqlite needs Rust 1.89, so the daemon's
+    `rust-version` is 1.89; the workspace's other crates keep 1.88.
+- Engine: `Storage`'s contract is what the stores it runs on keep: after any error (a failed `get`
+  or `scan` inside a transaction included), every staged write may be gone and every call may fail
+  until `rollback`, and the caller rolls back; a failed commit leaves its batch absent, or, if the
+  process ends before a later commit that writes succeeds, wholly durable at the next open, never in
+  part. It said a failed commit kept the staged writes, which SQLite cannot keep, and that it left
+  nothing, which a commit whose log reached the disk before its `fsync` failed does not; the engine
+  already rolled back after every storage error and sent nothing before the next successful commit.
+  `protocol.md` §4.4's note on resuming after a store failure and section 5's "Store failure" row,
+  and the index's note on atomic stores, say the same in a few words.
+- Engine: `runtime::conformance`, a suite every `Storage` must pass, for this crate's tests and,
+  with the new `testkit` feature, other crates' (no shipped build has it): reads, scans by prefix in
+  key order, staged visibility, rollback, durable and atomic commits across a restart, the empty key
+  and value, binary keys with 0x00 and 0xff, prefix edges such as 0xff…, values up to the largest the
+  engine stores (a chunk blob, 4 325 416 bytes), a full disk, a put after a failed commit, and a
+  model test that replays a script of operations against a map with a staged overlay. It accepts
+  each way a failure may leave a store under the contract and nothing else. The engine's unit-test
+  double and the simulator's store pass it, and each check fails on a store with the flaw it names.
+- Simulator: `SimStorage` fails in each way the contract allows (`FailureMode`): keeping its staged
+  writes, dropping them and refusing every call until a rollback (SQLite's), or persisting a failed
+  commit's batch for the next open unless a later commit that writes succeeds first (SQLite's when
+  the log's `fsync` fails), with failing commits as a fault (`Fault::CommitsFail`). The new
+  `engine-commit-persists` scenario fails peer 1's second write that way, crashes it a microsecond
+  later and restarts it over the batch it was told had failed: it converges, no high-water mark
+  falls and no counter is given twice. A member counts such a write as written when the next start
+  finds it; only a `Write` step's, the one kind a scenario fails this way.
 
 - Docs: phase 0 is complete; the addendum in `gates/phase-0.md` records the phone shell's evidence.
   The README describes phase 1. Code comments, READMEs, CONTRIBUTING and CI names no longer call

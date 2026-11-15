@@ -30,14 +30,20 @@
 # read 2026-11-03) writes private.rs, five lines re-exporting its private
 # module, no unsafe code; oid-registry (0.8.1 read 2026-11-03) writes oid_db.rs,
 # 540 lines of `pub const` object identifiers built with asn1-rs's `oid!`
-# macro, no unsafe code.
+# macro, no unsafe code. libsqlite3-sys (0.39.1 read 2026-11-15; daemon's
+# store) writes bindgen.rs, a copy of its own sqlite3/bindgen_bundled_version.rs:
+# 3 691 lines of SQLite's C API, its constants and types and 331 function
+# declarations in foreign-function blocks, with no function body, impl or
+# unsafe block. Those declarations are uncounted, as SQLite's C itself is
+# (threat-model.md TM-7); every call to them is unsafe code in rusqlite, which
+# the daemon's line counts.
 #
 # Format: one `cargo-geiger <version>` line, then
 #   <directory under crates/> <functions> <expressions> <impls> <traits> <methods>
 #   generated <package> <file>
 cargo-geiger 0.14.0
 cli 0 0 0 0 0
-daemon 0 0 0 0 0
+daemon 193 9366 77 5 237
 decrypt 0 0 0 0 0
 engine 94 4333 23 2 63
 index 94 4333 23 2 63
@@ -45,6 +51,7 @@ keys 94 4333 23 2 63
 net 261 20643 336 22 574
 protocol 94 4333 23 2 63
 sim 94 4333 23 2 63
+generated libsqlite3-sys bindgen.rs
 generated oid-registry oid_db.rs
 generated serde private.rs
 generated serde_core private.rs

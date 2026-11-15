@@ -25,5 +25,10 @@ licketysync-sim = { path = "../sim" }
 # Property tests of the chunker (plan: Tests).
 proptest = { version = "1", default-features = false, features = ["std"] }
 
+[features]
+# The storage conformance suite (`runtime::conformance`) for the stores of
+# other crates' tests; no shipped build turns it on.
+testkit = []
+
 [lints]
 workspace = true

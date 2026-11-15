@@ -99,6 +99,7 @@ gate! {
     skew => "engine-skew",
     clock_ahead => "engine-clock-ahead",
     disk_full => "engine-disk-full",
+    commit_persists => "engine-commit-persists",
     sealed_relay => "engine-sealed-relay",
     late_joiner => "engine-late-joiner",
     pacing => "engine-pacing",

@@ -4,9 +4,12 @@
 
 //! The service: folders, the local API over a Unix socket or named pipe and localhost HTTP, settings with Apply and Discard, issues and peer status.
 //!
-//! Status: skeleton. The plan ("LicketySync: Project Plan") is the specification
-//! this crate implements; `spec/` in this repository carries the protocol and the
+//! Status: the device's store ([`store::SqliteStorage`]); the rest is to
+//! come. The plan ("LicketySync: Project Plan") is the specification this
+//! crate implements; `spec/` in this repository carries the protocol and the
 //! threat model as they are written down.
+
+pub mod store;
 
 /// The crate's name as it appears in logs and diagnostics.
 pub const CRATE: &str = "licketysync-daemon";

@@ -18,11 +18,13 @@
 //! seeds.
 
 // The simulator library uses the keys and protocol crates for its engine
-// scenarios; these tests of the toy peers do not.
+// scenarios, and its unit tests proptest; these tests of the toy peers use
+// none of them.
 use core::cell::RefCell;
 use core::time::Duration;
 use licketysync_keys as _;
 use licketysync_protocol as _;
+use proptest as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 

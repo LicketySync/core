@@ -184,9 +184,9 @@ impl fmt::Display for TimerId {
     }
 }
 
-/// Why a storage operation did not happen. The store is unchanged after an
-/// error: a failed `put` staged nothing and a failed `commit` left the staged
-/// writes staged, so the peer may retry or roll back.
+/// Why a storage operation did not happen. What an error leaves is the
+/// [`Storage`] trait's to say: the staged writes may be gone, and the peer
+/// rolls back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StorageError {
@@ -365,42 +365,57 @@ pub type Entry = (Vec<u8>, Vec<u8>);
 /// `put` and `delete` stage writes that this process sees at once (a `get`
 /// after a `put` returns the new value) but that survive a crash only after
 /// `commit`, which makes everything staged durable at once or not at all.
+///
+/// After any error, every staged write may be gone (a failed `get` or `scan`
+/// inside a transaction can drop them too, as a failed `put`, `delete` or
+/// `commit` can) and every call may fail until [`Storage::rollback`]; the
+/// caller rolls back after any error. A failed commit leaves its batch
+/// absent; if the process ends before a later commit that writes succeeds,
+/// the next open may find it wholly durable instead. Never in part.
 pub trait Storage {
     /// The value at `key`, staged or committed, or `None`.
     ///
     /// # Errors
-    /// [`StorageError::Io`] when the store cannot be read.
+    /// [`StorageError::Io`] when the store cannot be read, or refuses until a
+    /// rollback.
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError>;
 
     /// Every key-value pair whose key starts with `prefix`, in key order,
     /// staged writes included.
     ///
     /// # Errors
-    /// [`StorageError::Io`] when the store cannot be read.
+    /// [`StorageError::Io`] when the store cannot be read, or refuses until a
+    /// rollback.
     fn scan(&self, prefix: &[u8]) -> Result<Vec<Entry>, StorageError>;
 
     /// Stages `value` at `key`.
     ///
     /// # Errors
-    /// [`StorageError::Full`] when the disk has no room for it; nothing is staged then.
+    /// [`StorageError::Full`] when the disk has no room for it,
+    /// [`StorageError::Io`] for any other failure; the value is not staged,
+    /// and what else is left is the trait's to say.
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<(), StorageError>;
 
     /// Stages the removal of `key`.
     ///
     /// # Errors
-    /// [`StorageError::Io`] when the store cannot be written.
+    /// [`StorageError::Full`] or [`StorageError::Io`] when the store cannot
+    /// be written; what is left is the trait's to say.
     fn delete(&mut self, key: &[u8]) -> Result<(), StorageError>;
 
     /// Makes every staged write durable, atomically.
     ///
     /// # Errors
-    /// [`StorageError::Full`] or [`StorageError::Io`]; the writes stay staged,
-    /// so the peer may retry after the disk has room or call [`Storage::rollback`].
+    /// [`StorageError::Full`] or [`StorageError::Io`]; the batch is absent, or
+    /// whole after a restart (the trait says when), and the caller rolls back.
     fn commit(&mut self) -> Result<(), StorageError>;
 
     /// Discards every staged write.
     fn rollback(&mut self);
 }
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod conformance;
 
 /// Random bytes. The daemon backs this with the operating system's generator
 /// through the approved crates; the simulator with its seeded one, so that a

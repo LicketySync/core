@@ -750,9 +750,15 @@ review: cargo configuration outside the repository; the build environment the wo
 set no checked build has (the workspace crates other than net and its dependencies on Android and
 iOS, other targets, and release builds with other features); and the builds that leave no checked .d
 file, all test-only: doc-tests, the fuzz builds (`cfg(fuzzing)`) and the coverage build
-(`cfg(coverage)`). Stops memory-safety bugs reachable from untrusted input. Enforced by
-`core/Cargo.toml` (the lint), the rules, `ci/semgrep-scan.sh` and `ci/check-dep-info.sh`,
-`ci/geiger.sh` (the counts) and review (each change to them).
+(`cfg(coverage)`). SQLite, the C library that `libsqlite3-sys` compiles from its bundled copy for
+`daemon`'s store, is outside cargo-geiger's count and the rules, as are the declarations of its
+functions that the crate's build script copies in: its memory safety is left to SQLite's own
+testing and to the advisory feed (TM-8). The build environment shapes that SQLite too
+(`LIBSQLITE3_SYS_USE_PKG_CONFIG` links the system's instead, `LIBSQLITE3_FLAGS` and `SQLITE_MAX_*`
+change its options, `CC` and `CFLAGS` its compiler); the store refuses another runtime version and a
+`NO_SYNC` build when it opens, and the rest is left to review. Stops memory-safety bugs reachable
+from untrusted input. Enforced by `core/Cargo.toml` (the lint), the rules, `ci/semgrep-scan.sh` and
+`ci/check-dep-info.sh`, `ci/geiger.sh` (the counts) and review (each change to them).
 
 **TM-8. A dependency enters only by a reviewed change with a written reason.** A new dependency needs
 the reason in the changelog and the report, an active upstream, a clean `cargo deny check`,
