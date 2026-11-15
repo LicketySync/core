@@ -40,8 +40,8 @@ use licketysync_engine::inspect::FileView;
 use licketysync_engine::runtime::{Instant, PeerId};
 use licketysync_keys::RecordHash;
 
-use super::{p, Plan, Run, FIRST, SMALL_CHUNK};
-use crate::member::{content, Action, Member, Step};
+use super::{FIRST, Plan, Run, SMALL_CHUNK, p};
+use crate::member::{Action, Member, Step, content};
 use crate::network::Partition;
 use crate::scenario::Fault;
 

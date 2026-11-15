@@ -15,7 +15,7 @@ use licketysync_keys::RecordHash;
 use licketysync_protocol::connection::Judgement;
 use licketysync_protocol::limits::{CLEANUP_HORIZON, MAX_NOTE_VERIFICATIONS};
 
-use super::kit::{dev, garbage, Dev, DAY};
+use super::kit::{DAY, Dev, dev, garbage};
 use crate::{Change, NotNoted};
 
 /// A writer `d` with three versions at each of `paths`, and a write holder

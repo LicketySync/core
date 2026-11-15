@@ -428,9 +428,10 @@ fn the_ancestor_lookup_of_a_4096_byte_path_walks_it_once() {
     );
     // A path that leaves the trie stops the walk there.
     dirs.walked.set(0);
-    assert!(dirs
-        .at_and_above(&format!("b/{}", "a/".repeat(2000)))
-        .is_empty());
+    assert!(
+        dirs.at_and_above(&format!("b/{}", "a/".repeat(2000)))
+            .is_empty()
+    );
     assert_eq!(dirs.walked.get(), 2, "one component");
     // Removing them all leaves an empty trie.
     for k in 1..parts.len() {

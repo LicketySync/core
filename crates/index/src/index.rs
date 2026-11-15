@@ -12,13 +12,13 @@ use licketysync_keys::sealed_meta::RecordKeys;
 use licketysync_keys::{
     DeviceId, FolderId, FolderKey, FolderVerifier, PathTag, RandomFill, RecordHash, Tier,
 };
+use licketysync_protocol::Cause;
 use licketysync_protocol::connection::{FolderMemory, Judgement, NoteBudget};
 use licketysync_protocol::limits::{
     CLEANUP_HORIZON, CLOCK_AHEAD_WARNING, CLOCK_FLOOR_MAX, CLOCK_RULE_LIMIT, MAX_COUNTER,
     MAX_LOCAL_SEQ, MAX_PEER_NAMES, MAX_STALE_KNOWN, TOMBSTONE_HORIZON,
 };
 use licketysync_protocol::record::{Applied, Record, Verdict, WriterFault};
-use licketysync_protocol::Cause;
 
 use crate::state::{Held, Note, Noted, Replacer, State, Undo};
 use crate::store::{ChangeSet, PeerState, Stored, StoredMeta};
@@ -251,10 +251,10 @@ impl Accepted {
 
     fn judged(&mut self, judgement: Judgement) {
         self.judgement = judgement;
-        if let Some(c) = judgement.cause() {
-            if !self.rows.contains(&c) {
-                self.rows.push(c);
-            }
+        if let Some(c) = judgement.cause()
+            && !self.rows.contains(&c)
+        {
+            self.rows.push(c);
         }
     }
 }
@@ -605,12 +605,12 @@ impl Txn<'_> {
         let applied = verdict.as_ref().and_then(|v| v.as_ref().ok());
         // Step 3. Expiry first: it reads only the folder's time, whatever
         // the record replaces (the coordinator's ruling IS-1(a)).
-        if let Some(app) = applied {
-            if self.expired(app) {
-                let mut out = Accepted::new(hash, Judgement::Expired);
-                (out.noted, out.not_noted) = self.note(&record, applied, false, a)?;
-                return Ok(out);
-            }
+        if let Some(app) = applied
+            && self.expired(app)
+        {
+            let mut out = Accepted::new(hash, Judgement::Expired);
+            (out.noted, out.not_noted) = self.note(&record, applied, false, a)?;
+            return Ok(out);
         }
         // Then obsolete, when it replaces nothing held: for a tree delete,
         // judged through the index by path, never by a walk.
@@ -618,12 +618,12 @@ impl Txn<'_> {
             if self.ix.s.named(&record) {
                 return Ok(Accepted::new(hash, Judgement::Obsolete));
             }
-            if let (Some(tag), Some(meta)) = (record.path_tag(), applied.and_then(Applied::meta)) {
-                if self.ix.s.covered(&tag, meta, None).is_some() {
-                    let mut out = Accepted::new(hash, Judgement::Obsolete);
-                    (out.noted, out.not_noted) = self.note(&record, applied, false, a)?;
-                    return Ok(out);
-                }
+            if let (Some(tag), Some(meta)) = (record.path_tag(), applied.and_then(Applied::meta))
+                && self.ix.s.covered(&tag, meta, None).is_some()
+            {
+                let mut out = Accepted::new(hash, Judgement::Obsolete);
+                (out.noted, out.not_noted) = self.note(&record, applied, false, a)?;
+                return Ok(out);
             }
         }
         if let Some(app) = applied {

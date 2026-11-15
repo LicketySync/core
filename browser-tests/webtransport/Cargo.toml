@@ -6,6 +6,7 @@
 # Run through ../../ci/webtransport-chrome.sh, never on its own. Its own
 # supply-chain/ store for cargo-vet; deny.toml is core's (gate.sh, ci.yml).
 [workspace]
+resolver = "2"
 # The vendored crate below is a dependency, not a member, so that fmt and
 # clippy leave it as published.
 exclude = ["vendor"]
@@ -13,7 +14,7 @@ exclude = ["vendor"]
 [package]
 name = "licketysync-webtransport-browser-tests"
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 license = "MPL-2.0"
 rust-version = "1.88"
 publish = false

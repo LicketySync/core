@@ -75,10 +75,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use licketysync_index::{Change, RecordsReply, SinceReply};
 use licketysync_keys::chunk::SealedChunk;
 use licketysync_keys::{DeviceId, FolderId, RecordHash};
+use licketysync_protocol::Cause;
 use licketysync_protocol::connection::{Judgement, Page, ReconcileServe};
 use licketysync_protocol::exchange::Prefix;
 use licketysync_protocol::record::Record;
-use licketysync_protocol::Cause;
 
 use crate::runtime::PeerId;
 
@@ -262,10 +262,10 @@ impl ConnSync {
     /// `folders`: the reset goes without it.
     pub(crate) fn undo_redraws(&mut self, folders: &BTreeSet<FolderId>) {
         for (folder, reply) in &mut self.replies {
-            if let Serving::Reset { redrew, .. } = &mut reply.serving {
-                if folders.contains(folder) {
-                    *redrew = false;
-                }
+            if let Serving::Reset { redrew, .. } = &mut reply.serving
+                && folders.contains(folder)
+            {
+                *redrew = false;
             }
         }
     }

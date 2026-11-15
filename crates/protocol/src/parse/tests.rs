@@ -11,8 +11,8 @@
 )]
 
 use proptest::prelude::*;
-use prost::encoding::{encode_key, encode_varint, WireType as PWT};
 use prost::Message as _;
+use prost::encoding::{WireType as PWT, encode_key, encode_varint};
 
 use super::*;
 use crate::frame::MessageType;
@@ -1175,22 +1175,26 @@ fn status_and_chunks() {
     bytes_field(&mut body, 1, &bad_bool);
     assert!(Status::parse(&body).is_err(), "paused 2");
 
-    assert!(ChunkRequest::parse(
-        &ChunkRequest {
-            folder_id: vec![1; 32],
-            cipher_hash: vec![],
-        }
-        .encode_to_vec()
-    )
-    .is_err());
-    assert!(ChunkRequest::parse(
-        &ChunkRequest {
-            folder_id: vec![1; 32],
-            cipher_hash: vec![2; 31],
-        }
-        .encode_to_vec()
-    )
-    .is_err());
+    assert!(
+        ChunkRequest::parse(
+            &ChunkRequest {
+                folder_id: vec![1; 32],
+                cipher_hash: vec![],
+            }
+            .encode_to_vec()
+        )
+        .is_err()
+    );
+    assert!(
+        ChunkRequest::parse(
+            &ChunkRequest {
+                folder_id: vec![1; 32],
+                cipher_hash: vec![2; 31],
+            }
+            .encode_to_vec()
+        )
+        .is_err()
+    );
     let reply = |status: u32, data: usize| ChunkReply {
         folder_id: vec![1; 32],
         cipher_hash: vec![2; 32],

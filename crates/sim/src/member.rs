@@ -35,7 +35,7 @@ use std::rc::Rc;
 
 use licketysync_engine::runtime::{Context, Peer, PeerId, TimerId};
 use licketysync_engine::{
-    ConfigError, Engine, EngineConfig, FolderState, Issue, WriteFailure, HARNESS_TIMERS,
+    ConfigError, Engine, EngineConfig, FolderState, HARNESS_TIMERS, Issue, WriteFailure,
 };
 use licketysync_keys::{FolderId, RecordHash};
 

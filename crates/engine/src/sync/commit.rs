@@ -22,16 +22,16 @@ use std::collections::BTreeSet;
 use licketysync_index::{Arrival, Change, ChangeSet, Pending, Txn, WriteError};
 use licketysync_keys::chunk::SealedChunk;
 use licketysync_keys::{CipherHash, FolderId, RecordHash};
+use licketysync_protocol::Cause;
 use licketysync_protocol::connection::{Judgement, Page};
 use licketysync_protocol::record::Record;
-use licketysync_protocol::Cause;
 
 use super::{Judged, Op, SyncWork};
 use crate::chunks::ChunkBook;
 use crate::conn::Conn;
-use crate::engine::{tick, Engine};
+use crate::engine::{Engine, tick};
 use crate::folder::Folder;
-use crate::issues::{bump, Counters, Issue, IssueKind, Issues, Subject};
+use crate::issues::{Counters, Issue, IssueKind, Issues, Subject, bump};
 use crate::runtime::{Context, PeerId, StorageError};
 use crate::store::{free_key, stage_changes, stage_chunk, stage_chunk_delete};
 use crate::work::Work;
@@ -184,10 +184,8 @@ impl Engine {
                     f.pending_free.clear();
                     f.free_due = false;
                 }
-                if took_open {
-                    if let Some(open) = f.open_changes.take() {
-                        f.pending_free.extend(open.freed);
-                    }
+                if took_open && let Some(open) = f.open_changes.take() {
+                    f.pending_free.extend(open.freed);
                 }
                 f.pending_free.extend(freed);
                 // Each deleted blob marks the book; what the transaction

@@ -45,7 +45,7 @@ use libp2p_swarm::{Stream, SwarmEvent};
 use licketysync_keys::device::Libp2pIdentity;
 use licketysync_keys::secret::DeviceSeed;
 use licketysync_net::limits::Limits;
-use licketysync_net::node::{self, dial_opts::DialOpts, Event, Swarm};
+use licketysync_net::node::{self, Event, Swarm, dial_opts::DialOpts};
 use licketysync_net::pieces::{Delivery, Pieces};
 use licketysync_net::sync;
 
@@ -72,11 +72,7 @@ fn is_quic(addr: &Multiaddr) -> bool {
 }
 
 fn transport_of(addr: &Multiaddr) -> &'static str {
-    if is_quic(addr) {
-        "QUIC"
-    } else {
-        "TCP"
-    }
+    if is_quic(addr) { "QUIC" } else { "TCP" }
 }
 
 /// `/ip4/127.0.0.1/udp/0/quic-v1`: QUIC on loopback, any port.
@@ -204,11 +200,12 @@ fn loopback_address(text: &str) -> Result<(Multiaddr, PeerId), String> {
     let parts: Vec<Protocol<'_>> = address.iter().collect();
     let peer = match parts.as_slice() {
         [Protocol::Ip4(ip), Protocol::Tcp(port), Protocol::P2p(peer)]
-        | [Protocol::Ip4(ip), Protocol::Udp(port), Protocol::QuicV1, Protocol::P2p(peer)]
-            if *ip == Ipv4Addr::LOCALHOST && *port != 0 =>
-        {
-            *peer
-        }
+        | [
+            Protocol::Ip4(ip),
+            Protocol::Udp(port),
+            Protocol::QuicV1,
+            Protocol::P2p(peer),
+        ] if *ip == Ipv4Addr::LOCALHOST && *port != 0 => *peer,
         _ => return Err(format!("only {FORMS} is dialed")),
     };
     Ok((address, peer))
@@ -230,7 +227,7 @@ async fn dial(text: &str) -> Result<(), String> {
                 SwarmEvent::NewListenAddr { .. } => break,
                 SwarmEvent::ListenerError { error, .. } => return Err(error.to_string()),
                 SwarmEvent::ListenerClosed { reason, .. } => {
-                    return Err(format!("the loopback listener closed: {reason:?}"))
+                    return Err(format!("the loopback listener closed: {reason:?}"));
                 }
                 _ => {}
             }
@@ -269,7 +266,7 @@ async fn dial(text: &str) -> Result<(), String> {
                 break stream;
             }
             SwarmEvent::Behaviour(Event::Sync(sync::Event::OpenFailed { error, .. })) => {
-                return Err(error.to_string())
+                return Err(error.to_string());
             }
             _ => {}
         }

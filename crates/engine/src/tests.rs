@@ -22,10 +22,10 @@ use licketysync_protocol::frame::Frame;
 use licketysync_protocol::{Cause, CloseReason};
 
 use crate::issues::{IssueKind, StoreFailureCause, Subject};
-use crate::runtime::{Peer, PeerId, Storage, TimerId, MAX_SEND_QUEUE};
+use crate::runtime::{MAX_SEND_QUEUE, Peer, PeerId, Storage, TimerId};
 use crate::store::{record_key, stage_changes};
-use crate::testkit::{config, folder_key, records_of, with_signature, FakeStorage, Net};
-use crate::{FolderState, WriteFailure, HARNESS_TIMERS};
+use crate::testkit::{FakeStorage, Net, config, folder_key, records_of, with_signature};
+use crate::{FolderState, HARNESS_TIMERS, WriteFailure};
 
 pub(crate) fn folder() -> FolderId {
     folder_key(1, 1).folder_id()

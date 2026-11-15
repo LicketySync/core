@@ -27,11 +27,11 @@ use licketysync_index::{Change, Index, Put};
 use licketysync_keys::records::SignedRecord;
 use licketysync_keys::secret::{DeviceSeed, WriteSecret};
 use licketysync_keys::{CipherHash, DeviceId, FolderKey, Suite, WriteKey};
+use licketysync_protocol::Parse;
 use licketysync_protocol::frame::{Frame, FrameDecoder, FrameKind, MessageType};
 use licketysync_protocol::limits::MAX_MESSAGE_SIZE;
 use licketysync_protocol::messages::{ChunkReply, ChunkRequest};
 use licketysync_protocol::record::Kind;
-use licketysync_protocol::Parse;
 
 use crate::config::EngineConfig;
 use crate::engine::Engine;
@@ -216,11 +216,12 @@ impl Storage for FakeStorage {
         if self.full {
             return Err(StorageError::Full);
         }
-        if let Some((prefix, left)) = &mut self.fail_prefix {
-            if key.starts_with(prefix) && *left > 0 {
-                *left = left.saturating_sub(1);
-                return Err(StorageError::Full);
-            }
+        if let Some((prefix, left)) = &mut self.fail_prefix
+            && key.starts_with(prefix)
+            && *left > 0
+        {
+            *left = left.saturating_sub(1);
+            return Err(StorageError::Full);
         }
         self.staged.insert(key.to_vec(), Some(value.to_vec()));
         Ok(())

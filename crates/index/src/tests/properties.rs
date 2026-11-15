@@ -27,7 +27,7 @@ use licketysync_protocol::limits::{CLEANUP_HORIZON, CLOCK_RULE_LIMIT, TOMBSTONE_
 use licketysync_protocol::record::{Applied, Dot, Kind, Meta, Record};
 use proptest::prelude::*;
 
-use super::kit::{converge, round, take_own_held, take_unexplained, write_key, Dev, DAY, T0};
+use super::kit::{DAY, Dev, T0, converge, round, take_own_held, take_unexplained, write_key};
 use super::open::snapshot;
 use crate::{Change, Place};
 
@@ -525,26 +525,26 @@ impl World {
                 let (f, t) = (PATHS[usize::from(from)], PATHS[usize::from(to)]);
                 self.devs[i].apply(f);
                 self.devs[i].apply(t);
-                if f != t {
-                    if let Some(c) = self.devs[i].ix.current(f).filter(|c| !c.deleted) {
-                        let put = crate::Put {
-                            path: t.into(),
-                            kind: c.kind,
-                            size: c.size,
-                            mtime_ns: 99,
-                            mode: 0,
-                            chunks: c.chunks,
-                            plain_hashes: c.plain_hashes,
-                            deleted: false,
-                        };
-                        self.write(
-                            i,
-                            &[Change::Rename {
-                                from: f.into(),
-                                to: put,
-                            }],
-                        );
-                    }
+                if f != t
+                    && let Some(c) = self.devs[i].ix.current(f).filter(|c| !c.deleted)
+                {
+                    let put = crate::Put {
+                        path: t.into(),
+                        kind: c.kind,
+                        size: c.size,
+                        mtime_ns: 99,
+                        mode: 0,
+                        chunks: c.chunks,
+                        plain_hashes: c.plain_hashes,
+                        deleted: false,
+                    };
+                    self.write(
+                        i,
+                        &[Change::Rename {
+                            from: f.into(),
+                            to: put,
+                        }],
+                    );
                 }
             }
             Op::Apply { dev } => {

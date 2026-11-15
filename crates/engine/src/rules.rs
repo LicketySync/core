@@ -25,7 +25,7 @@ use crate::inspect::{FileView, Place};
 use crate::issues::IssueKind;
 use crate::runtime::Peer as _;
 use crate::sync::disk::copy_name;
-use crate::testkit::{config, folder_key, FakeStorage, Hold, Net};
+use crate::testkit::{FakeStorage, Hold, Net, config, folder_key};
 use crate::tests::{engine_over, folder, pair, state, write};
 use crate::{FolderState, WriteFailure};
 
@@ -1365,8 +1365,8 @@ fn crafted(
     vector: &[(u8, u64)],
     chunk: Option<u8>,
 ) -> licketysync_keys::records::SignedRecord {
-    use licketysync_keys::chunk::PlainHash;
     use licketysync_keys::DeviceId;
+    use licketysync_keys::chunk::PlainHash;
     use licketysync_protocol::record::{Chunk, Dot, IndexDraft, Kind, Meta, Vector};
     let key = crate::testkit::write_key(1);
     let dot = |d: u8, counter: u64| Dot {

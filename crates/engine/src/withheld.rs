@@ -29,7 +29,7 @@ use licketysync_protocol::frame::{Frame, MessageType};
 use crate::config::EngineConfig;
 use crate::regressions::{first_chunk, key_config, read, requested};
 use crate::runtime::PeerId;
-use crate::testkit::{chunk_hash, config, folder_key, write_key, Net};
+use crate::testkit::{Net, chunk_hash, config, folder_key, write_key};
 use crate::tests::{folder, write};
 
 /// A second, in the net's nanoseconds.

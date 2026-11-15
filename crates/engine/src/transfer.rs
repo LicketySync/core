@@ -33,14 +33,14 @@
 use core::cell::Cell;
 
 use licketysync_keys::{CipherHash, FolderId};
+use licketysync_protocol::Cause;
 use licketysync_protocol::connection::{ChunkAnswer, SendError};
 use licketysync_protocol::limits::{MAX_REQUESTS_IN_FLIGHT, MAX_STORED_LEN};
-use licketysync_protocol::Cause;
 
 use crate::chunks::Finding;
-use crate::engine::{tick, Engine};
-use crate::inflight::{hold, patience, Ask, Asker, Waiting};
-use crate::issues::{bump, Issue, IssueKind, Subject};
+use crate::engine::{Engine, tick};
+use crate::inflight::{Ask, Asker, Waiting, hold, patience};
+use crate::issues::{Issue, IssueKind, Subject, bump};
 use crate::pacing::{chunk_estimate, within_budget};
 use crate::runtime::{Context, PeerId};
 use crate::store::{chunk_key, stage_chunk};
@@ -590,7 +590,7 @@ mod tests {
 
     use crate::issues::StoreFailureCause;
     use crate::runtime::PeerId;
-    use crate::testkit::{config, folder_key, write_key, Hold, Net};
+    use crate::testkit::{Hold, Net, config, folder_key, write_key};
     use crate::tests::{folder, pair, state, write};
     use crate::{FolderState, WriteFailure};
 

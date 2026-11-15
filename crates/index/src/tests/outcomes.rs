@@ -11,16 +11,16 @@
 //! nothing held, verified and dropping what they replace otherwise.
 
 use licketysync_keys::RecordHash;
+use licketysync_protocol::Cause;
 use licketysync_protocol::connection::Judgement;
 use licketysync_protocol::limits::{CLOCK_AHEAD_WARNING, CLOCK_RULE_LIMIT, TOMBSTONE_HORIZON};
 use licketysync_protocol::record::{Kind, WriterFault};
-use licketysync_protocol::Cause;
 use prost::Message as _;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::kit::{
-    chunk, cleanup, dev, entry, forge, forged, garbage, judgement, row, sealed_file, Dev, DAY, SEC,
-    T0,
+    DAY, Dev, SEC, T0, chunk, cleanup, dev, entry, forge, forged, garbage, judgement, row,
+    sealed_file,
 };
 use super::vectors::{check, h};
 use crate::{Accepted, Change};
@@ -160,7 +160,10 @@ fn vector_outcomes() {
         case(
             "writer-fault-in-the-seal",
             "a vector entry equal to the counter: held opaque, counted in the digest; the next write at the path names it",
-            vec![accepted(&a), json!({ "next_write": h(&next.0), "names_it": true })],
+            vec![
+                accepted(&a),
+                json!({ "next_write": h(&next.0), "names_it": true }),
+            ],
         );
     }
 
@@ -271,7 +274,12 @@ fn vector_outcomes() {
         case(
             "from-the-future",
             "a year and a microsecond ahead (refused, verified, remembered on the connection), again with a garbage signature (ignored), forged on a fresh connection (closed), exactly a year (held)",
-            vec![accepted(&a), accepted(&again), refused(Cause::Forged), accepted(&b)],
+            vec![
+                accepted(&a),
+                accepted(&again),
+                refused(Cause::Forged),
+                accepted(&b),
+            ],
         );
     }
 
@@ -396,7 +404,9 @@ fn vector_outcomes() {
         case(
             "the-counters-of-one-commit",
             "a version, a tree delete (with its cleanup), two tombstones: consecutive counters in the writer's order",
-            vec![json!(dots.iter().map(|(c, k)| json!([c, k])).collect::<Vec<_>>())],
+            vec![json!(
+                dots.iter().map(|(c, k)| json!([c, k])).collect::<Vec<_>>()
+            )],
         );
     }
 

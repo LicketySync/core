@@ -498,21 +498,25 @@ mod tests {
             subject,
         };
         assert!(issue(Subject::Record(RecordHash([1; 32]))).blames());
-        assert!(issue(Subject::Peer {
-            peer: PeerId::new(1),
-            device: None,
-            holder: false,
-        })
-        .blames());
+        assert!(
+            issue(Subject::Peer {
+                peer: PeerId::new(1),
+                device: None,
+                holder: false,
+            })
+            .blames()
+        );
         assert!(!issue(Subject::None).blames());
         assert!(!issue(Subject::Chunk(CipherHash([1; 32]))).blames());
         assert!(!issue(Subject::Device(DeviceId([1; 32]))).blames());
-        assert!(!issue(Subject::Clock {
-            device: DeviceId([1; 32]),
-            ours: 1,
-            theirs: 900
-        })
-        .blames());
+        assert!(
+            !issue(Subject::Clock {
+                device: DeviceId([1; 32]),
+                ours: 1,
+                theirs: 900
+            })
+            .blames()
+        );
     }
 
     #[test]

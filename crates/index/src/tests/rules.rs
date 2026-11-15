@@ -15,7 +15,7 @@ use licketysync_protocol::exchange::Prefix;
 use licketysync_protocol::limits::{MAX_COUNTER, MAX_REPLACES, TOMBSTONE_HORIZON};
 use licketysync_protocol::record::{PathError, Record};
 
-use super::kit::{cleanup, dev, file, forge, round, sealed_file, Dev, Rng, DAY, SEC, T0};
+use super::kit::{DAY, Dev, Rng, SEC, T0, cleanup, dev, file, forge, round, sealed_file};
 use licketysync_protocol::connection::ReconcileServe;
 
 use crate::{Change, Place, StoredMeta, WriteError};

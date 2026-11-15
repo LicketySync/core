@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use licketysync_engine::runtime::{Context, Instant, Peer, PeerId, TimerId};
 
-use crate::frame::{frame, Deframer};
+use crate::frame::{Deframer, frame};
 use crate::scenario::Sim;
 
 /// The gossip tick.

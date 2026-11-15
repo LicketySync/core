@@ -17,10 +17,10 @@ use std::collections::BTreeSet;
 use licketysync_keys::RecordHash;
 use licketysync_protocol::connection::Judgement;
 use licketysync_protocol::limits::{CLEANUP_HORIZON, MAX_CLEANUP_ENTRIES, TOMBSTONE_HORIZON};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::kit::{
-    chunk, cleanup, dev, forge, forged, garbage, round, sealed_file, write_key, Dev, DAY, SEC, T0,
+    DAY, Dev, SEC, T0, chunk, cleanup, dev, forge, forged, garbage, round, sealed_file, write_key,
 };
 use super::vectors::{check, h};
 
@@ -131,9 +131,10 @@ fn groups() -> Value {
     let mut s = Dev::sealed(0xa2);
     s.take(&d, &[v1]);
     let a = s.accept(&c).unwrap();
-    assert!(a
-        .rows
-        .contains(&licketysync_protocol::Cause::CleanupGroupWaiting));
+    assert!(
+        a.rows
+            .contains(&licketysync_protocol::Cause::CleanupGroupWaiting)
+    );
     assert!(s.holds(&v1), "never before");
     let mut fresh = Dev::sealed(0xa3);
     fresh.accept(&c).unwrap();
@@ -558,10 +559,12 @@ fn file_ids() -> Value {
     ];
     let tags: BTreeSet<[u8; 32]> = paths.iter().map(|p| keys.path_tag(p).0).collect();
     assert_eq!(tags.len(), paths.len(), "byte for byte: six tags");
-    json!(paths
-        .iter()
-        .map(|p| json!({ "path": p, "path_tag": h(&keys.path_tag(p).0) }))
-        .collect::<Vec<_>>())
+    json!(
+        paths
+            .iter()
+            .map(|p| json!({ "path": p, "path_tag": h(&keys.path_tag(p).0) }))
+            .collect::<Vec<_>>()
+    )
 }
 
 #[test]

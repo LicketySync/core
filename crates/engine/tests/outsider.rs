@@ -30,10 +30,10 @@ use licketysync_engine::runtime::{Instant, PeerId};
 use licketysync_engine::{Engine, EngineConfig};
 use licketysync_keys::Tier;
 use licketysync_protocol::CloseReason;
-use licketysync_sim::member::{default_workload, Action, Ledger, Member, Step};
+use licketysync_sim::member::{Action, Ledger, Member, Step, default_workload};
 use licketysync_sim::scenario::{Scenario, Sim};
 use licketysync_sim::scenarios::engine::SMALL_CHUNK;
-use licketysync_sim::world::{World, MAIN};
+use licketysync_sim::world::{MAIN, World};
 use support::peers::{Sniffed, Sniffer, TestPeer};
 
 const NO_KEY: PeerId = PeerId::new(3);

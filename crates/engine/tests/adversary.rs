@@ -33,12 +33,12 @@ use licketysync_engine::runtime::{Instant, PeerId};
 use licketysync_engine::{Engine, EngineConfig, Issue, IssueKind, Subject};
 use licketysync_keys::{CipherHash, FolderId, FolderKey, RecordHash, Tier};
 use licketysync_protocol::{Cause, CloseReason};
-use licketysync_sim::member::{default_workload, Ledger, Member};
+use licketysync_sim::member::{Ledger, Member, default_workload};
 use licketysync_sim::network::Partition;
 use licketysync_sim::scenario::{Fault, Scenario, Sim};
 use licketysync_sim::scenarios::engine::SMALL_CHUNK;
-use licketysync_sim::world::{World, MAIN};
-use support::peers::{write_key, Adversary, AdversaryLog, Attack, TestPeer, FOLDER_A};
+use licketysync_sim::world::{MAIN, World};
+use support::peers::{Adversary, AdversaryLog, Attack, FOLDER_A, TestPeer, write_key};
 
 const ADVERSARY: PeerId = PeerId::new(2);
 
@@ -213,12 +213,14 @@ fn a_bit_flipped_inside_a_pushed_body_is_forged_and_closes() {
     let s = run(Attack::FlippedBody, a_write());
     closed_for(&s, Cause::Forged, CloseReason::VerificationFailed);
     let record = s.log.borrow().records[0];
-    assert!(engine(&s.sim, 0)
-        .folder(&s.folder)
-        .unwrap()
-        .records
-        .iter()
-        .all(|r| r.hash != record));
+    assert!(
+        engine(&s.sim, 0)
+            .folder(&s.folder)
+            .unwrap()
+            .records
+            .iter()
+            .all(|r| r.hash != record)
+    );
 }
 
 #[test]

@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 use crate::folder::KeyError;
 use crate::handshake::Role;
 use crate::ids::DeviceId;
-use crate::keystring::{bech32m_decode, bech32m_encode, KeyStringError};
+use crate::keystring::{KeyStringError, bech32m_decode, bech32m_encode};
 use crate::labels::{self, derive_key, derive_key_into, keyed_hash};
 use crate::secret::{LinkConfirmKey, LinkSecret};
 use crate::suite::sizes;
@@ -120,8 +120,8 @@ pub fn verify_link_proof(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
-    use crate::folder::tests::write_key;
     use crate::folder::FolderKey;
+    use crate::folder::tests::write_key;
 
     #[test]
     fn link_code_round_trips_and_refuses_a_key_string() {

@@ -28,7 +28,7 @@ use core::fmt;
 use subtle::{Choice, ConstantTimeEq};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::aead::{xchacha_open, xchacha_seal, AeadError, SealError};
+use crate::aead::{AeadError, SealError, xchacha_open, xchacha_seal};
 use crate::folder::{FolderKey, ReadKey, WriteKey};
 use crate::ids::{CipherHash, FolderId};
 use crate::labels::{self, keyed_hash, keyed_hash_into, labelled_hash};

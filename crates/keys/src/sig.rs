@@ -19,7 +19,7 @@ use core::fmt;
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 
 use crate::ids::hex;
-use crate::labels::{signed_message, SigLabel};
+use crate::labels::{SigLabel, signed_message};
 use crate::suite::sizes;
 
 /// An Ed25519 signature, exactly 64 bytes. Validity is judged by the
@@ -135,12 +135,13 @@ pub(crate) mod tests {
             Err(SignatureError)
         );
         // The message is the label, a zero byte and the body: plain Ed25519.
-        assert!(vk
-            .verify_strict(
+        assert!(
+            vk.verify_strict(
                 b"licketysync/v1/sig/index\0body",
                 &ed25519_dalek::Signature::from_bytes(sig.as_bytes())
             )
-            .is_ok());
+            .is_ok()
+        );
         assert!(Signature::from_slice(&[0u8; 63]).is_none());
         assert!(Signature::from_slice(&[0u8; 65]).is_none());
         assert_eq!(
@@ -161,10 +162,10 @@ pub(crate) mod tests {
                 let mut bytes = [0xffu8; 32];
                 bytes[0] = 0xed + k;
                 bytes[31] = 0x7f | sign;
-                if let Ok(key) = VerifyingKey::from_bytes(&bytes) {
-                    if !key.is_weak() {
-                        return bytes;
-                    }
+                if let Ok(key) = VerifyingKey::from_bytes(&bytes)
+                    && !key.is_weak()
+                {
+                    return bytes;
                 }
             }
         }

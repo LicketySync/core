@@ -47,11 +47,11 @@ use licketysync_engine::runtime::{Instant, PeerId};
 use licketysync_engine::{EngineConfig, IssueKind};
 use licketysync_keys::{FolderId, RecordHash, Tier};
 
-use crate::member::{content, default_workload, Action, Ledger, Member, Step};
+use crate::member::{Action, Ledger, Member, Step, content, default_workload};
 use crate::network::{NetworkConfig, Partition};
 use crate::oracle::{self, Expect};
 use crate::scenario::{Fault, Outcome, Scenario, Sim};
-use crate::world::{World, MAIN};
+use crate::world::{MAIN, World};
 
 /// Simulated time a run may take.
 pub const LIMIT: Instant = Instant::from_secs(600);

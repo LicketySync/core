@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use core::fmt;
 
 use licketysync_keys::device::DevicePublicKey;
-use licketysync_keys::labels::{labelled_hash, HASH_TRANSCRIPT};
+use licketysync_keys::labels::{HASH_TRANSCRIPT, labelled_hash};
 use licketysync_keys::{DeviceId, Role, Suite};
 
 use crate::features::{COMPRESSION_NONE, HASH_BLAKE3};
@@ -322,9 +322,10 @@ mod tests {
         // The device proof signs th || role and verifies only for that role.
         let sig = a.sign_device_proof(&th.0, Role::A);
         assert!(a.public().verify_device_proof(&th.0, Role::A, &sig).is_ok());
-        assert!(a
-            .public()
-            .verify_device_proof(&th.0, Role::B, &sig)
-            .is_err());
+        assert!(
+            a.public()
+                .verify_device_proof(&th.0, Role::B, &sig)
+                .is_err()
+        );
     }
 }

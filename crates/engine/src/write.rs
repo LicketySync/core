@@ -54,13 +54,13 @@ use core::fmt;
 use std::collections::BTreeSet;
 
 use licketysync_index::{Change, Index, PathView, Place, Put, WriteError};
-use licketysync_keys::chunk::{seal_chunk, SealedChunk};
+use licketysync_keys::chunk::{SealedChunk, seal_chunk};
 use licketysync_keys::{CipherHash, FolderId, RecordHash};
 use licketysync_protocol::limits::MAX_CHUNKS;
-use licketysync_protocol::record::{check_path, Chunk, Kind, PathError};
+use licketysync_protocol::record::{Chunk, Kind, PathError, check_path};
 
 use crate::engine::Engine;
-use crate::issues::{bump, Issue, IssueKind, StoreFailureCause, Subject};
+use crate::issues::{Issue, IssueKind, StoreFailureCause, Subject, bump};
 use crate::runtime::Context;
 use crate::store::chunk_key;
 use crate::sync::Op;

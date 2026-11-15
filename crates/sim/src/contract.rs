@@ -40,12 +40,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use licketysync_engine::runtime::{
-    Context, Instant, Peer, PeerId, TimerId, MAX_CHUNK, MAX_SEND_QUEUE,
+    Context, Instant, MAX_CHUNK, MAX_SEND_QUEUE, Peer, PeerId, TimerId,
 };
 
-use crate::frame::{frame, Deframer};
+use crate::frame::{Deframer, frame};
 use crate::network::{NetworkConfig, Partition};
-use crate::scenario::{Fault, NetStats, Outcome, Scenario, DEFAULT_WALL_EPOCH};
+use crate::scenario::{DEFAULT_WALL_EPOCH, Fault, NetStats, Outcome, Scenario};
 use crate::toy::LIMIT;
 
 /// Seconds into the run, by the wall clock, after which the probers only
@@ -541,24 +541,25 @@ impl Prober {
             return;
         }
         let r = random(cx);
-        if eager || r.is_multiple_of(3) {
-            if let Some(q) = self.pick(r >> 8) {
-                self.write(cx, q, DATA);
+        if (eager || r.is_multiple_of(3))
+            && let Some(q) = self.pick(r >> 8)
+        {
+            self.write(cx, q, DATA);
+        }
+        if (r >> 16).is_multiple_of(40)
+            && let Some(q) = self.pick(r >> 22)
+        {
+            if (r >> 30).is_multiple_of(2) {
+                self.hang_up(cx, q);
+            } else {
+                self.say_goodbye(cx, q);
             }
         }
-        if (r >> 16).is_multiple_of(40) {
-            if let Some(q) = self.pick(r >> 22) {
-                if (r >> 30).is_multiple_of(2) {
-                    self.hang_up(cx, q);
-                } else {
-                    self.say_goodbye(cx, q);
-                }
-            }
-        }
-        if eager && (r >> 31).is_multiple_of(2) {
-            if let Some(q) = self.pick(r >> 32) {
-                self.write(cx, q, DATA);
-            }
+        if eager
+            && (r >> 31).is_multiple_of(2)
+            && let Some(q) = self.pick(r >> 32)
+        {
+            self.write(cx, q, DATA);
         }
         match (r >> 40) % 5 {
             0 => {
@@ -760,13 +761,13 @@ impl Peer for Prober {
             return;
         }
         let r = random(cx);
-        if r.is_multiple_of(20) {
-            if let Some(q) = self.pick(r >> 8) {
-                if (r >> 16).is_multiple_of(2) {
-                    self.hang_up(cx, q);
-                } else {
-                    self.say_goodbye(cx, q);
-                }
+        if r.is_multiple_of(20)
+            && let Some(q) = self.pick(r >> 8)
+        {
+            if (r >> 16).is_multiple_of(2) {
+                self.hang_up(cx, q);
+            } else {
+                self.say_goodbye(cx, q);
             }
         }
         self.act(cx, true);

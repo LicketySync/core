@@ -20,6 +20,7 @@ use licketysync_keys::secret::WriteSecret;
 use licketysync_keys::{
     CipherHash, DeviceId, FolderKey, PathTag, RecordHash, SetDigest, Suite, Tier, WriteKey,
 };
+use licketysync_protocol::Cause;
 use licketysync_protocol::connection::{FolderMemory, Judgement, NoteBudget, ReconcileServe};
 use licketysync_protocol::exchange::Prefix;
 use licketysync_protocol::limits::{DAY_US, DEFAULT_MESSAGE_SIZE, MAX_RECONCILE_PASSES};
@@ -28,7 +29,6 @@ use licketysync_protocol::messages::{
     VectorEntry,
 };
 use licketysync_protocol::record::{Chunk, Kind, Record};
-use licketysync_protocol::Cause;
 use prost::Message as _;
 
 use crate::{
@@ -854,7 +854,7 @@ pub(crate) fn check_drops(
     what: &str,
 ) {
     use licketysync_protocol::limits::{CLEANUP_HORIZON, TOMBSTONE_HORIZON};
-    use licketysync_protocol::record::{at_or_beneath, Applied};
+    use licketysync_protocol::record::{Applied, at_or_beneath};
     let keys = write_key().record_keys();
     let key_holder = ix.tier() != Tier::Sealed;
     let by_hashes: BTreeSet<RecordHash> = by.iter().map(Record::hash).collect();
@@ -907,15 +907,13 @@ pub(crate) fn check_drops(
             if because.contains(u) {
                 ok = true;
             }
-            if key_holder {
-                if let (Some(Applied::Index(rm)), Some(Applied::Index(m))) = (ra, um) {
-                    if rm.tree {
-                        if at_or_beneath(&m.path, &rm.path) && rm.vector.covers(&m.dot) {
-                            ok = true;
-                        }
-                    } else if !m.tree && r.path_tag() == ur.path_tag() && rm.vector.covers(&m.dot) {
+            if key_holder && let (Some(Applied::Index(rm)), Some(Applied::Index(m))) = (ra, um) {
+                if rm.tree {
+                    if at_or_beneath(&m.path, &rm.path) && rm.vector.covers(&m.dot) {
                         ok = true;
                     }
+                } else if !m.tree && r.path_tag() == ur.path_tag() && rm.vector.covers(&m.dot) {
+                    ok = true;
                 }
             }
             if ok {

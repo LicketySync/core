@@ -8,7 +8,7 @@
 use licketysync_keys::folder::FolderKey;
 use licketysync_keys::{Role, Suite, Tier};
 use prost::Message as _;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{check, ending, feed, h, key, scenario, seed};
 use crate::connection::{Config, Connection, Event, State, Tick};
@@ -17,8 +17,8 @@ use crate::hello::TranscriptHash;
 use crate::limits::{MAX_PROOFS_PER_CONNECTION, PRE_HELLO_LIMIT};
 use crate::messages::{DeviceProof, FolderProof, Hello, Message, ProofResult};
 use crate::parse::Parse;
-use crate::proof::{seal_proof, FolderCredential};
-use crate::testkit::{device, fixed32, folder, s, Pair, Rng};
+use crate::proof::{FolderCredential, seal_proof};
+use crate::testkit::{Pair, Rng, device, fixed32, folder, s};
 
 fn frame(m: &Message) -> Vec<u8> {
     m.to_frame().unwrap().encode()

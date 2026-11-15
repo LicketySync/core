@@ -318,10 +318,10 @@ impl ByPath {
 
     /// Removes a record no longer held.
     pub(crate) fn remove(&mut self, device: &DeviceId, path: &[u8], hash: &RecordHash) {
-        if let Some(root) = self.trees.remove(device) {
-            if let Some(rest) = remove(Some(root), path, hash) {
-                self.trees.insert(*device, rest);
-            }
+        if let Some(root) = self.trees.remove(device)
+            && let Some(rest) = remove(Some(root), path, hash)
+        {
+            self.trees.insert(*device, rest);
         }
     }
 

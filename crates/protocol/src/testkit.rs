@@ -44,7 +44,7 @@ use crate::connection::{
     Config, Connection, Event, IndexServe, Judgement, Keys, Output, ReconcileServe, SendError,
     State, Tick,
 };
-use crate::exchange::{reconcile_outcome, IndexView, Pager, Prefix};
+use crate::exchange::{IndexView, Pager, Prefix, reconcile_outcome};
 use crate::limits::{MAX_PAGE_RECORDS, RECONCILE_LEAF_MAX};
 use crate::messages::{FolderStatus, IndexRecords, ReconcileOutcome, ReconcileReply};
 use crate::proof::FolderCredential;

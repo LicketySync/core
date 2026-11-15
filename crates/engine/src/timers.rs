@@ -134,10 +134,10 @@ impl TimerTable {
 
     /// Disarms `purpose`; its id stays its own.
     pub(crate) fn cancel<T: Timers + ?Sized>(&mut self, cx: &mut T, purpose: Purpose) {
-        if self.armed.remove(&purpose) {
-            if let Some(id) = self.by_purpose.get(&purpose) {
-                cx.cancel_timer(*id);
-            }
+        if self.armed.remove(&purpose)
+            && let Some(id) = self.by_purpose.get(&purpose)
+        {
+            cx.cancel_timer(*id);
         }
     }
 

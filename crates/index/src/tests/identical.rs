@@ -48,9 +48,9 @@ use licketysync_keys::records::SignedRecord;
 use licketysync_keys::{DeviceId, RecordHash};
 use licketysync_protocol::limits::{MAX_REPLACES, MAX_VECTOR_ENTRIES};
 use licketysync_protocol::record::{Dot, Meta};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::kit::{dir, file, Dev};
+use super::kit::{Dev, dir, file};
 use super::vectors::h;
 use crate::{Change, PathView};
 

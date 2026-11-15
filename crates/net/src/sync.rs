@@ -35,7 +35,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use libp2p_core::upgrade::{InboundUpgrade, OutboundUpgrade, UpgradeInfo};
-use libp2p_core::{transport::PortUse, Endpoint, Multiaddr};
+use libp2p_core::{Endpoint, Multiaddr, transport::PortUse};
 use libp2p_identity::PeerId;
 use libp2p_swarm::handler::{
     ConnectionEvent, DialUpgradeError, FullyNegotiatedInbound, FullyNegotiatedOutbound,
@@ -46,7 +46,7 @@ use libp2p_swarm::{
     THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
 };
 
-use crate::{identity, PROTOCOL_ID};
+use crate::{PROTOCOL_ID, identity};
 
 /// The identifiers this build speaks, newest first.
 pub const PROTOCOLS: &[StreamProtocol] = &[StreamProtocol::new(PROTOCOL_ID)];
@@ -575,8 +575,10 @@ mod tests {
                 Some(&crate::identity::PeerKeyError::WeakKey)
             );
         }
-        assert!(behaviour
-            .handle_established_inbound_connection(connection, peer(1), &addr, &addr)
-            .is_ok());
+        assert!(
+            behaviour
+                .handle_established_inbound_connection(connection, peer(1), &addr, &addr)
+                .is_ok()
+        );
     }
 }

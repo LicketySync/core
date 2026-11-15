@@ -29,7 +29,7 @@ use crate::messages::{ChunkReply, ChunkRequest, CloseReason, FolderStatus, Messa
 use crate::parse::Parse;
 use crate::record::Chunk;
 use crate::rules::Cause;
-use crate::testkit::{folder, s, with_chunk, Pair};
+use crate::testkit::{Pair, folder, s, with_chunk};
 
 fn closed(side: &crate::testkit::Side) -> Option<(CloseReason, Option<Cause>)> {
     side.events.iter().find_map(|e| match e {
@@ -108,14 +108,12 @@ fn a_chunk_is_requested_served_and_verified() {
     assert_eq!(p.b.conn.chunk_position(p.b.tick(p.now), &f), Ok(None));
     p.b.request_chunk(p.now, h).unwrap();
     p.settle();
-    assert!(p
-        .a
-        .saw(|e| matches!(e, Event::ChunkRequested { cipher_hash, .. } if *cipher_hash == h)));
+    assert!(
+        p.a.saw(|e| matches!(e, Event::ChunkRequested { cipher_hash, .. } if *cipher_hash == h))
+    );
     p.a.reply_chunk(p.now, h, ChunkAnswer::Ok(&data)).unwrap();
     p.settle();
-    assert!(p
-        .b
-        .saw(|e| matches!(e, Event::Chunk { data: d, .. } if *d == data)));
+    assert!(p.b.saw(|e| matches!(e, Event::Chunk { data: d, .. } if *d == data)));
     // The record that names it judges the length: the writer's fault.
     let key = folder(0x10);
     let rec = with_chunk(
@@ -167,9 +165,7 @@ fn a_chunk_corrupt_in_storage_is_never_sent() {
     p.settle();
     p.a.reply_chunk(p.now, bh, ChunkAnswer::Ok(&big)).unwrap();
     p.settle();
-    assert!(p
-        .b
-        .saw(|e| matches!(e, Event::Chunk { cipher_hash, .. } if *cipher_hash == bh)));
+    assert!(p.b.saw(|e| matches!(e, Event::Chunk { cipher_hash, .. } if *cipher_hash == bh)));
 }
 
 #[test]
@@ -756,9 +752,9 @@ fn status_carries_chunks_stored_and_the_name_once() {
     let out = p.a.conn.send_status(Tick::at(p.now), &[one(99)]).unwrap();
     p.a.apply(p.now, out);
     p.settle();
-    assert!(p
-        .b
-        .saw(|e| matches!(e, Event::PeerNamed { device_name } if device_name == "device-a0")));
+    assert!(
+        p.b.saw(|e| matches!(e, Event::PeerNamed { device_name } if device_name == "device-a0"))
+    );
     // Fifty chunks within one second: one Status falls due, after 1 s.
     p.a.events.clear();
     for _ in 0..50 {

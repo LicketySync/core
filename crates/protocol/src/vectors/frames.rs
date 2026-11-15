@@ -4,9 +4,9 @@
 
 //! Item 1, frames (decoder vectors).
 
-use prost::encoding::{encode_key, encode_varint, WireType};
 use prost::Message as _;
-use serde_json::{json, Value};
+use prost::encoding::{WireType, encode_key, encode_varint};
+use serde_json::{Value, json};
 
 use super::{check, feed, seed};
 use crate::frame::{Frame, MessageType};

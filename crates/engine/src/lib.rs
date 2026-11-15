@@ -103,10 +103,10 @@ mod withheld;
 
 pub use config::{ConfigError, EngineConfig, MAX_FOLDERS};
 pub use engine::Engine;
-pub use folder::{FolderState, OpenCounts, MAX_TRANSITIONS};
+pub use folder::{FolderState, MAX_TRANSITIONS, OpenCounts};
 pub use issues::{
-    CloseCounts, Counters, Issue, IssueClass, IssueEntry, IssueKind, Issues, StoreFailureCause,
-    Subject, MAX_LOCAL_ISSUES, MAX_PEER_ISSUES, MAX_RECORD_ISSUES_PER_FOLDER, OPEN_ISSUE_HASHES,
+    CloseCounts, Counters, Issue, IssueClass, IssueEntry, IssueKind, Issues, MAX_LOCAL_ISSUES,
+    MAX_PEER_ISSUES, MAX_RECORD_ISSUES_PER_FOLDER, OPEN_ISSUE_HASHES, StoreFailureCause, Subject,
 };
 pub use timers::HARNESS_TIMERS;
 pub use write::WriteFailure;

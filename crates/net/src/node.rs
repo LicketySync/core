@@ -55,7 +55,7 @@ use libp2p_core::upgrade::Version;
 use libp2p_identity::{DecodingError, PeerId};
 use licketysync_keys::device::Libp2pIdentity;
 
-use crate::limits::{has_memory_limit, Limits, LimitsError};
+use crate::limits::{Limits, LimitsError, has_memory_limit};
 use crate::provider::{self, ProviderError};
 use crate::{identity, sync};
 

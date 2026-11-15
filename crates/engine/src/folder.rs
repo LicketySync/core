@@ -299,7 +299,9 @@ mod tests {
     fn words_compare_without_their_counts() {
         assert!(syncing(1).same_word(&syncing(9)));
         assert!(!syncing(1).same_word(&FolderState::UpToDate));
-        assert!(FolderState::Paused(StoreFailureCause::Full)
-            .same_word(&FolderState::Paused(StoreFailureCause::Io)));
+        assert!(
+            FolderState::Paused(StoreFailureCause::Full)
+                .same_word(&FolderState::Paused(StoreFailureCause::Io))
+        );
     }
 }

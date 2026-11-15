@@ -10,10 +10,10 @@
 //! vectors (`protocol.md` 8, "Who checks what").
 
 use prost::Message as _;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{check, feed, h, input, seed};
-use crate::exchange::{page_limit, Pager};
+use crate::exchange::{Pager, page_limit};
 use crate::frame::MessageType;
 use crate::limits::{MAX_LOCAL_SEQ, MAX_PAGE_RECORDS, MIN_MESSAGE_SIZE};
 use crate::messages::{IndexRecords, IndexRequest, Message, ReconcileReply, ReconcileRequest};
@@ -281,20 +281,24 @@ fn vector_exchange() {
         .encode();
     let unknown_request_id =
         json!({ "input": h(&unknown), "outcome": feed("established", &unknown) });
-    assert!(unknown_request_id["outcome"]
-        .as_str()
-        .unwrap()
-        .starts_with("close PROTOCOL_ERROR"));
+    assert!(
+        unknown_request_id["outcome"]
+            .as_str()
+            .unwrap()
+            .starts_with("close PROTOCOL_ERROR")
+    );
     // A ReconcileReply when no request is outstanding.
     let stray = Message::ReconcileReply(reply(1, 0))
         .to_frame()
         .unwrap()
         .encode();
     let stray_reply = json!({ "input": h(&stray), "outcome": feed("established", &stray) });
-    assert!(stray_reply["outcome"]
-        .as_str()
-        .unwrap()
-        .starts_with("close PROTOCOL_ERROR"));
+    assert!(
+        stray_reply["outcome"]
+            .as_str()
+            .unwrap()
+            .starts_with("close PROTOCOL_ERROR")
+    );
 
     let value: Value = json!({
         "description": "protocol.md 8 item 8, the protocol's part: decoder vectors of IndexRequest, ReconcileRequest (prefixes of 0 to 128 nibbles, a record's 64-byte key), ReconcileReply and IndexRecords (bodies, as the decoder alone judges them), the page limits, one page of one record, and a page with an unknown request_id and a ReconcileReply with none outstanding, each fed to an open connection. A ReconcileReply that carries through for a prefix other than the root, and a RECORDS page that carries through, pass the decoder alone (their entries say accepted) and are refused by the connection, which knows the request they answer (the unit test replies_of_the_wrong_kind_or_shape_are_malformed). Set digests and serving are the index crate's vectors; rounds, cursors, pushes and timeouts are the engine's connection vectors.",
@@ -494,15 +498,21 @@ fn vector_exchange_fuzz_seeds() {
             ..
         }
     )));
-    assert!(events
-        .iter()
-        .any(|ev| matches!(ev, Event::ServeIndex { .. })));
-    assert!(events
-        .iter()
-        .any(|ev| matches!(ev, Event::ServeReconcile { .. })));
-    assert!(events
-        .iter()
-        .any(|ev| matches!(ev, Event::EmptyPush { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, Event::ServeIndex { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, Event::ServeReconcile { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, Event::EmptyPush { .. }))
+    );
     assert_eq!(closed(&events), None);
     seeds.push(("exchange-equal-push-requests-empty-push", s));
     // A descent: the first side's digests are not zero (mode 3), so CHILDREN

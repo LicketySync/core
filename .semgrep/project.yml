@@ -97,8 +97,9 @@ rules:
   # crate expands into a forbidding crate (rustc reports no lint inside such an
   # expansion), and cargo-geiger counts no macro body. So the words of the
   # constructs the lint forbids are banned as text: unsafe, and no_mangle,
-  # export_name, link_section and global_asm, which need no unsafe in edition
-  # 2021. In code, macro_rules! bodies, comments and strings alike, which fails
+  # export_name, link_section and global_asm, which a crate on edition 2021 or
+  # earlier writes without unsafe (global_asm needs none on any edition). In
+  # code, macro_rules! bodies, comments and strings alike, which fails
   # closed (prose must say it otherwise; unsafe_code, not_unsafe and other
   # longer words pass). In every file under crates/, whatever its name; in
   # every Rust file elsewhere (.rs in any case, as macOS and Windows read
@@ -136,7 +137,9 @@ rules:
     pattern-regex: '\b(?:unsafe|no_mangle|export_name|link_section|global_asm)\b'
   # TM-7: an extern block links native code: #[link(name = ..., modifiers =
   # "+verbatim")] extern "C" {} runs a library's code before main, from a file
-  # in this repository, and edition 2021 writes it without unsafe. A macro can
+  # in this repository. Edition 2024, which the workspace's crates are on,
+  # writes it unsafe extern, which forbid(unsafe_code) refuses, but a macro of
+  # a crate on edition 2021 or earlier writes it without unsafe. A macro can
   # take the keyword as a token where it passes (m!(extern fn)) and emit a
   # block with it, so the keyword extern itself is banned in the word rule's
   # scope, extern crate and extern "C" fn included; no workspace crate uses
@@ -151,8 +154,9 @@ rules:
     message: >-
       The keyword extern is written only in the platform-FFI crates
       (threat-model.md TM-7): an extern block links native code that can run
-      before main, edition 2021 writes it without unsafe, and a macro can
-      emit one from the keyword wherever it is written.
+      before main, a macro of a crate on edition 2021 or earlier writes one
+      without unsafe, and a macro can emit one from the keyword wherever it
+      is written.
     paths:
       include:
         - "/crates/**"

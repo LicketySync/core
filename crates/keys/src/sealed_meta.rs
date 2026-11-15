@@ -40,7 +40,7 @@ use core::fmt;
 
 use zeroize::Zeroizing;
 
-use crate::aead::{xchacha_open, xchacha_seal, AeadError, SealError};
+use crate::aead::{AeadError, SealError, xchacha_open, xchacha_seal};
 use crate::folder::{FolderKey, ReadKey, WriteKey};
 use crate::ids::{FolderId, PathTag};
 use crate::labels::keyed_hash;

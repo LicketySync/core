@@ -5,13 +5,13 @@
 //! Items 10 and 11: Close and Status.
 
 use prost::Message as _;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{check, ending, feed, h, scenario, seed};
 use crate::connection::{Event, Tick};
 use crate::messages::{Close, CloseReason, FolderStatus, Message, Status};
-use crate::parse::{close_without_detail, Parse};
-use crate::testkit::{s, Pair};
+use crate::parse::{Parse, close_without_detail};
+use crate::testkit::{Pair, s};
 
 #[test]
 fn vector_close_and_status() {
@@ -116,9 +116,7 @@ fn vector_close_and_status() {
         q.now,
         &Message::Status(named.clone()).to_frame().unwrap().encode(),
     );
-    assert!(q
-        .b
-        .saw(|e| matches!(e, Event::PeerNamed { device_name } if device_name == "phone")));
+    assert!(q.b.saw(|e| matches!(e, Event::PeerNamed { device_name } if device_name == "phone")));
 
     // extra_versions (field 7), as the decoder reads it: 3 at a sealed holder
     // with two stale copies and one real conflict, 1 at a read holder with

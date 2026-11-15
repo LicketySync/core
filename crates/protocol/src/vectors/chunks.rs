@@ -4,10 +4,10 @@
 
 //! Item 9: chunks.
 
-use licketysync_keys::chunk::seal_chunk;
 use licketysync_keys::CipherHash;
+use licketysync_keys::chunk::seal_chunk;
 use prost::Message as _;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{check, ending, h, scenario, seed};
 use crate::connection::{ChunkAnswer, Event};
@@ -15,7 +15,7 @@ use crate::limits::{MAX_SEND_QUEUE, MAX_STORED_LEN};
 use crate::messages::{ChunkReply, ChunkRequest, Message};
 use crate::parse::Parse;
 use crate::record::{Chunk, Record};
-use crate::testkit::{folder, with_chunk, Pair};
+use crate::testkit::{Pair, folder, with_chunk};
 
 fn frame(m: &Message) -> Vec<u8> {
     m.to_frame().unwrap().encode()

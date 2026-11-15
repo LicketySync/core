@@ -25,16 +25,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use licketysync_engine::runtime::{Context, Instant, Peer, PeerId, TimerId};
-use licketysync_keys::chunk::{seal_chunk, PlainHash};
+use licketysync_keys::SetDigest;
+use licketysync_keys::chunk::{PlainHash, seal_chunk};
 use licketysync_keys::device::{DeviceKey, Libp2pIdentity};
 use licketysync_keys::records::SignedRecord;
 use licketysync_keys::secret::{DeviceSeed, WriteSecret};
-use licketysync_keys::SetDigest;
 use licketysync_keys::{CipherHash, DeviceId, FolderId, FolderKey, RecordHash, Suite, WriteKey};
 use licketysync_protocol::connection::{
     ChunkAnswer, Config, Connection, Event, Judgement, Keys, Output, Tick,
 };
-use licketysync_protocol::exchange::{reconcile_outcome, Pager};
+use licketysync_protocol::exchange::{Pager, reconcile_outcome};
 use licketysync_protocol::frame::{FrameDecoder, FrameKind, MessageType};
 use licketysync_protocol::limits::{MAX_MESSAGE_SIZE, MAX_PAGE_RECORDS, TOMBSTONE_HORIZON};
 use licketysync_protocol::messages::{

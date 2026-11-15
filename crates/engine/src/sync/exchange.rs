@@ -8,16 +8,16 @@
 //! `super`).
 
 use licketysync_keys::{DeviceId, FolderId, RecordHash};
+use licketysync_protocol::Cause;
 use licketysync_protocol::connection::{Event, Page, SendError};
 use licketysync_protocol::exchange::Prefix;
 use licketysync_protocol::record::Record;
-use licketysync_protocol::Cause;
 
 use super::{Judged, Op, ToPush};
-use crate::engine::{tick, Engine};
-use crate::issues::{bump, Issue, IssueKind, Subject};
+use crate::engine::{Engine, tick};
+use crate::issues::{Issue, IssueKind, Subject, bump};
 use crate::runtime::{Context, PeerId};
-use crate::work::{pop, Work};
+use crate::work::{Work, pop};
 
 impl Engine {
     /// Reacts to an event of the index exchange; any other event is handed

@@ -257,12 +257,14 @@ fn odd_mode(mode: u8, mut rest: &[u8], watch: &mut dyn Watch) {
         watch.handed(&b, &ob, Stage::Second);
         to_b.extend(oa.frames.concat());
         to_a.extend(ob.frames.concat());
-        if !proved && a.peer().is_some() && b.peer().is_some() {
-            if let Ok(out) = b.prove(&keys_b, &mut fill, t0, id) {
-                watch.handed(&b, &out, Stage::Second);
-                to_a.extend(out.frames.concat());
-                proved = true;
-            }
+        if !proved
+            && a.peer().is_some()
+            && b.peer().is_some()
+            && let Ok(out) = b.prove(&keys_b, &mut fill, t0, id)
+        {
+            watch.handed(&b, &out, Stage::Second);
+            to_a.extend(out.frames.concat());
+            proved = true;
         }
         react(&mut a, t0, &view, oa.events, &mut to_b, watch);
     }

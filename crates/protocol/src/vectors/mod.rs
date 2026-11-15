@@ -41,7 +41,7 @@ mod status;
 
 use core::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::connection::{Event, Side as Who};
 use crate::testkit::{Pair, Side};

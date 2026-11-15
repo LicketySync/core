@@ -49,7 +49,7 @@ use crate::limits::{
 use crate::messages::{
     ChunkRef, CleanupGroup, CleanupMeta, CleanupRecord, IndexRecord, SealedMeta, VectorEntry,
 };
-use crate::parse::{is_stored_len, Parse};
+use crate::parse::{Parse, is_stored_len};
 use crate::rules::Cause;
 use crate::wire::WireError;
 
@@ -787,7 +787,7 @@ fn open_index(
         match kind {
             Kind::Directory if !chunks.is_empty() => return Err(WriterFault::DirectoryWithChunks),
             Kind::File if m.size > 0 && chunks.is_empty() => {
-                return Err(WriterFault::FileWithoutChunks)
+                return Err(WriterFault::FileWithoutChunks);
             }
             Kind::File | Kind::Directory => {}
         }

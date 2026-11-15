@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use core::ops::Bound;
 
 use licketysync_keys::{RecordHash, SetDigest};
-use licketysync_protocol::exchange::{nibble, Key, Prefix};
+use licketysync_protocol::exchange::{Key, Prefix, nibble};
 use licketysync_protocol::limits::RECONCILE_LEAF_MAX;
 
 /// One subtree's cached state.
@@ -115,7 +115,7 @@ pub(crate) fn hash_of(key: &Key) -> RecordHash {
 
 impl Trie {
     /// The record hashes in the subtree at `prefix`, ascending by key.
-    fn range(&self, prefix: &Prefix) -> impl Iterator<Item = RecordHash> + '_ {
+    fn range(&self, prefix: &Prefix) -> impl Iterator<Item = RecordHash> {
         let (lo, hi) = prefix.bounds();
         self.entries.range(lo..=hi).map(hash_of)
     }
@@ -212,7 +212,7 @@ impl Trie {
         &'a self,
         prefix: &Prefix,
         after: Option<&Key>,
-    ) -> impl Iterator<Item = &'a Key> + 'a {
+    ) -> impl Iterator<Item = &'a Key> + use<'a> {
         let (lo, hi) = prefix.bounds();
         let from = after.map_or(Bound::Included(lo), |a| Bound::Excluded(*a));
         self.entries

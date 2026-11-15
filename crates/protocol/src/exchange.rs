@@ -123,10 +123,10 @@ impl Prefix {
         for (i, b) in p.packed.iter_mut().enumerate().take(len.div_ceil(2)) {
             *b = key.get(i).copied().unwrap_or(0);
         }
-        if len % 2 == 1 {
-            if let Some(b) = p.packed.get_mut(len / 2) {
-                *b &= 0xf0;
-            }
+        if len % 2 == 1
+            && let Some(b) = p.packed.get_mut(len / 2)
+        {
+            *b &= 0xf0;
         }
         p
     }
@@ -202,10 +202,10 @@ impl Prefix {
         for (h, l) in hi.iter_mut().zip(&lo).take(whole) {
             *h = *l;
         }
-        if self.depth() % 2 == 1 {
-            if let (Some(h), Some(l)) = (hi.get_mut(whole), lo.get(whole)) {
-                *h = l | 0x0f;
-            }
+        if self.depth() % 2 == 1
+            && let (Some(h), Some(l)) = (hi.get_mut(whole), lo.get(whole))
+        {
+            *h = l | 0x0f;
         }
         (lo, hi)
     }

@@ -44,9 +44,9 @@ use licketysync_protocol::proof::FolderCredential;
 use crate::chunks::ChunkBook;
 use crate::engine::Engine;
 use crate::folder::{Folder, FolderState, Health, OpenCounts, Transitions};
-use crate::issues::{open_subject, Issue, IssueKind, Subject};
+use crate::issues::{Issue, IssueKind, Subject, open_subject};
 use crate::runtime::{Context, PeerId};
-use crate::store::{load, load_stored_chunks, Loaded};
+use crate::store::{Loaded, load, load_stored_chunks};
 use crate::work::Work;
 
 impl Engine {

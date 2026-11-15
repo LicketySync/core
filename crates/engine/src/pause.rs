@@ -41,7 +41,7 @@ use core::time::Duration;
 use licketysync_keys::FolderId;
 
 use crate::engine::Engine;
-use crate::issues::{bump, Issue, IssueKind, StoreFailureCause, Subject};
+use crate::issues::{Issue, IssueKind, StoreFailureCause, Subject, bump};
 use crate::runtime::{Context, StorageError};
 use crate::store::PROBE;
 use crate::timers::Purpose;

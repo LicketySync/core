@@ -1,10 +1,12 @@
 [workspace]
+# Not 3, edition 2024's default, which picks dependency versions whose
+# rust-version fits ours over the newest. Also in fuzz/ and browser-tests/.
 resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/licketysync/core"
 rust-version = "1.88"

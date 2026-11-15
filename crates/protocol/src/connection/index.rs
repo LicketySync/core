@@ -35,8 +35,8 @@ use core::time::Duration;
 
 use licketysync_keys::{DeviceId, FolderId, FolderVerifier, RecordHash, SetDigest};
 
-use super::{open_mut, Connection, Event, Output, SendError, State, Tag, Tick};
-use crate::exchange::{page_limit, IndexView, Prefix};
+use super::{Connection, Event, Output, SendError, State, Tag, Tick, open_mut};
+use crate::exchange::{IndexView, Prefix, page_limit};
 use crate::limits::{
     MAX_FUTURE_KNOWN, MAX_LOCAL_SEQ, MAX_NOTE_VERIFICATIONS, MAX_PAGE_RECORDS, MAX_PASS_REQUESTS,
     MAX_PENDING_PUSHES, MAX_RECONCILE_PASSES, MAX_WORK_LIST, RECONCILE_LEAF_MAX,
@@ -240,10 +240,10 @@ impl FolderMemory {
             return;
         }
         self.future.push_back(hash);
-        if self.future.len() > MAX_FUTURE_KNOWN {
-            if let Some(old) = self.future.pop_front() {
-                self.future_set.remove(&old);
-            }
+        if self.future.len() > MAX_FUTURE_KNOWN
+            && let Some(old) = self.future.pop_front()
+        {
+            self.future_set.remove(&old);
         }
     }
 
@@ -507,12 +507,11 @@ impl Connection {
     pub(super) fn note_departures(&mut self) {
         let (delivered, now) = (self.delivered, self.now);
         for f in self.folders.values_mut() {
-            if let Some(o) = f.open.as_mut().and_then(|x| x.outstanding.as_mut()) {
-                if o.departed_at.is_none()
-                    && o.handed_end.is_some_and(|e| i128::from(e) <= delivered)
-                {
-                    o.departed_at = Some(now);
-                }
+            if let Some(o) = f.open.as_mut().and_then(|x| x.outstanding.as_mut())
+                && o.departed_at.is_none()
+                && o.handed_end.is_some_and(|e| i128::from(e) <= delivered)
+            {
+                o.departed_at = Some(now);
             }
         }
     }
@@ -701,18 +700,18 @@ impl Connection {
                         round.stage = Stage::Passes;
                     }
                 }
-                if message.is_none() {
-                    if let Some((prefix, theirs)) = round.children.take() {
-                        let next = differing(&prefix, &theirs, view);
-                        // Depth first, ascending: the smallest on top. The
-                        // list cannot pass its bound (15 siblings a level);
-                        // were it to, the pass is cut rather than quiet.
-                        for child in next.into_iter().rev() {
-                            if round.work.len() < MAX_WORK_LIST {
-                                round.work.push(child);
-                            } else {
-                                round.cut = true;
-                            }
+                if message.is_none()
+                    && let Some((prefix, theirs)) = round.children.take()
+                {
+                    let next = differing(&prefix, &theirs, view);
+                    // Depth first, ascending: the smallest on top. The
+                    // list cannot pass its bound (15 siblings a level);
+                    // were it to, the pass is cut rather than quiet.
+                    for child in next.into_iter().rev() {
+                        if round.work.len() < MAX_WORK_LIST {
+                            round.work.push(child);
+                        } else {
+                            round.cut = true;
                         }
                     }
                 }
@@ -860,11 +859,11 @@ impl Connection {
     pub fn owe_round(&mut self, tick: Tick, folder: FolderId) -> Output {
         let mut out = Output::default();
         self.observe(tick, &mut out);
-        if self.state == State::Established {
-            if let Some(x) = open_mut(&mut self.folders, &folder) {
-                x.round_owed = true;
-                self.start_owed_round(folder, &mut out);
-            }
+        if self.state == State::Established
+            && let Some(x) = open_mut(&mut self.folders, &folder)
+        {
+            x.round_owed = true;
+            self.start_owed_round(folder, &mut out);
         }
         self.finish(&mut out);
         out
@@ -880,16 +879,16 @@ impl Connection {
     pub fn set_paused(&mut self, tick: Tick, folder: FolderId, paused: bool) -> Output {
         let mut out = Output::default();
         self.observe(tick, &mut out);
-        if self.state == State::Established {
-            if let Some(x) = open_mut(&mut self.folders, &folder) {
-                let was = x.paused;
-                x.paused = paused;
-                if paused {
-                    x.stop_counting();
-                } else if was {
-                    x.round_owed = true;
-                    self.start_owed_round(folder, &mut out);
-                }
+        if self.state == State::Established
+            && let Some(x) = open_mut(&mut self.folders, &folder)
+        {
+            let was = x.paused;
+            x.paused = paused;
+            if paused {
+                x.stop_counting();
+            } else if was {
+                x.round_owed = true;
+                self.start_owed_round(folder, &mut out);
             }
         }
         self.finish(&mut out);
@@ -999,10 +998,8 @@ impl Connection {
         }
         let page = crate::exchange::reset_page(&folder, request_id, epoch);
         let out = self.serve_frame(tick, folder, &Message::IndexRecords(page), true)?;
-        if redrew {
-            if let Some(x) = open_mut(&mut self.folders, &folder) {
-                x.epoch_redrawn = true;
-            }
+        if redrew && let Some(x) = open_mut(&mut self.folders, &folder) {
+            x.epoch_redrawn = true;
         }
         Ok(out)
     }
@@ -1059,10 +1056,10 @@ impl Connection {
             &Message::ReconcileReply(reply.clone()),
             !records,
         )?;
-        if records {
-            if let Some(s) = open_mut(&mut self.folders, &folder).and_then(|x| x.serving.as_mut()) {
-                s.kind = Served::Records;
-            }
+        if records
+            && let Some(s) = open_mut(&mut self.folders, &folder).and_then(|x| x.serving.as_mut())
+        {
+            s.kind = Served::Records;
         }
         Ok(out)
     }
@@ -1159,11 +1156,11 @@ impl Connection {
             .is_some_and(|x| x.empty_push_queued);
         if !queued && self.room_for(frame.len()) {
             self.enqueue(frame, Tag::None, &mut out);
-        } else if let Some(x) = open_mut(&mut self.folders, &folder) {
-            if !x.empty_push_queued {
-                x.empty_push_queued = true;
-                self.enqueue(empty, Tag::EmptyPush(folder), &mut out);
-            }
+        } else if let Some(x) = open_mut(&mut self.folders, &folder)
+            && !x.empty_push_queued
+        {
+            x.empty_push_queued = true;
+            self.enqueue(empty, Tag::EmptyPush(folder), &mut out);
         }
         self.finish(&mut out);
         Ok(out)
@@ -1518,13 +1515,13 @@ impl Connection {
                     }
                 }
             }
-            if matches!(o.kind, Asked::Since) {
-                if let Some(round) = x.round.as_mut() {
-                    if reset {
-                        round.cursor = None;
-                    } else if last {
-                        round.cursor = Some((epoch, through));
-                    }
+            if matches!(o.kind, Asked::Since)
+                && let Some(round) = x.round.as_mut()
+            {
+                if reset {
+                    round.cursor = None;
+                } else if last {
+                    round.cursor = Some((epoch, through));
                 }
             }
         }
@@ -1644,10 +1641,10 @@ impl Connection {
                     return;
                 }
                 x.awaiting = x.awaiting.saturating_sub(1);
-                if let Some(round) = x.round.as_mut() {
-                    if round.stage == Stage::Passes {
-                        round.brought |= held;
-                    }
+                if let Some(round) = x.round.as_mut()
+                    && round.stage == Stage::Passes
+                {
+                    round.brought |= held;
                 }
                 if last || (x.reply_ended && x.awaiting == 0) {
                     self.reply_completed(folder, out);

@@ -34,7 +34,7 @@ use crate::messages::{
 };
 use crate::proof::FolderCredential;
 use crate::rules::Cause;
-use crate::testkit::{device, folder, s, signed, Pair, Rng};
+use crate::testkit::{Pair, Rng, device, folder, s, signed};
 
 fn frame(m: &Message) -> Vec<u8> {
     m.to_frame().unwrap().encode()
@@ -114,12 +114,12 @@ fn every_tier_proves_to_every_tier_and_reports_its_own() {
         p.settle();
         p.b.prove_all(p.now);
         p.settle();
-        assert!(p
-            .a
-            .saw(|e| matches!(e, Event::FolderOpened { peer_tier, .. } if *peer_tier == tb)));
-        assert!(p
-            .b
-            .saw(|e| matches!(e, Event::FolderOpened { peer_tier, .. } if *peer_tier == ta)));
+        assert!(
+            p.a.saw(|e| matches!(e, Event::FolderOpened { peer_tier, .. } if *peer_tier == tb))
+        );
+        assert!(
+            p.b.saw(|e| matches!(e, Event::FolderOpened { peer_tier, .. } if *peer_tier == ta))
+        );
     }
 }
 
@@ -722,9 +722,7 @@ fn unknown_types_once_established() {
     );
     assert!(p.a.saw(|e| matches!(e, Event::Ignored { message_type: 7 })));
     p.settle();
-    assert!(p
-        .b
-        .saw(|e| matches!(e, Event::PeerUnsupported { message_type: 7 })));
+    assert!(p.b.saw(|e| matches!(e, Event::PeerUnsupported { message_type: 7 })));
     // 0x0000 is never used, so unknown: answered too.
     p.a.receive(p.now, &raw(0x0000, b""));
     assert_eq!(p.a.conn.state(), State::Established);

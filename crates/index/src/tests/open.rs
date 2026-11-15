@@ -16,7 +16,7 @@ use licketysync_protocol::limits::{CLOCK_AHEAD_WARNING, MAX_COUNTER, PEER_STATE_
 
 use licketysync_keys::RecordHash;
 
-use super::kit::{cleanup, dev, flipped_body, folder_key, Dev, DAY, T0};
+use super::kit::{DAY, Dev, T0, cleanup, dev, flipped_body, folder_key};
 use crate::{Change, Commit, Index, MemoryStore, Place, Store, StoreError, StoredMeta};
 
 /// Everything the index persists or derives from what it persists, as text:
@@ -617,10 +617,12 @@ fn stored_per_peer_state_is_clamped_to_the_clock_and_capped() {
         report.changes.peers.contains(&(dev(1), Some(*p))),
         "the clamped state stored"
     );
-    assert!(report
-        .changes
-        .peers
-        .contains(&(licketysync_keys::DeviceId(first), None)));
+    assert!(
+        report
+            .changes
+            .peers
+            .contains(&(licketysync_keys::DeviceId(first), None))
+    );
 }
 
 /// After the ordered crash between a write's records and its removals, the

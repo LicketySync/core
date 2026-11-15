@@ -19,8 +19,8 @@
 
 use core::fmt;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bech32::primitives::decode::{
     CharError, CheckedHrpstring, CheckedHrpstringError, UncheckedHrpstringError,
 };
@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 
 use crate::folder::{FolderKey, KeyError};
 use crate::secret::SecretBytes;
-use crate::suite::{sizes, Tier};
+use crate::suite::{Tier, sizes};
 
 /// The write key string's prefix.
 pub const HRP_WRITE: &str = "lsw";

@@ -5,6 +5,51 @@ changed and why.
 
 ## Unreleased
 
+- Build: the workspace, `fuzz/` and `browser-tests/webtransport` move from Rust edition 2021 to 2024,
+  the current one. On 2024 an extern block needs `unsafe`, as do `std::env::set_var` and
+  `remove_var`, so `forbid(unsafe_code)` now refuses them in the crates' own code (TM-7), where 2021
+  let `#[link(...)] extern "C" {}` compile under it; it already refused `no_mangle`, `export_name`,
+  `link_section` and `global_asm`. The Semgrep bans by spelling stay: a macro of a crate on edition
+  2021 or earlier still writes an extern block and those attributes, and calls `set_var` and
+  `remove_var`, without `unsafe`, and rustc lints nothing such a macro expands. TM-7 and the rules'
+  notes say so; TM-7 leaves such a macro's calls to them to review with TM-8, since no text of the
+  crates shows one.
+  - `crates/net/tests/key_log.rs` no longer sets `SSLKEYLOGFILE` in its own process, which the lint
+    now refuses: the test starts its own binary again with the variable set in the child's
+    environment, and checks that the child ran the test and that `node::build` refused there. It
+    fails with that refusal removed. The variable names a file under the target's temporary
+    directory, so that a failing run leaves nothing in the source tree.
+  - The migration, by hand where `cargo fix --edition` was more cautious than the code needs:
+    - A return-position `impl Trait` captures every lifetime in scope. The index's `Trie::range`,
+      which wrote `+ '_`, now writes nothing, and the engine's `in_line` now also captures `&self`.
+      Four iterators of the index that wrote `+ 'a`, the public `Index::bases_beneath` among them,
+      write `use<…>` instead, so that none holds its `dir` or `after` argument, as before: the
+      server assigns `keys_after`'s `after` while it iterates.
+    - `gen` is a reserved word: the simulator test's variable is `generation`.
+    - The keys crate's macros keep their `expr` fragments, which on 2024 also match `const { … }`
+      and `_`; no caller passes either.
+    - A tail expression's temporaries drop before the block's locals. Each place rustc's migration
+      lint names (tests, the spike example, two `protocol` test helpers, `net`'s WebTransport
+      listener) drops memory, zeroizes a secret, closes a channel or aborts a finished task, in an
+      order nothing depends on. No `if let` depended on its scrutinee living through `else`.
+    - Clippy's `collapsible_if` asks for let chains on 2024: 56 nested `if`s with no `else` become
+      `if let … && …`, by `cargo clippy --fix`, with the same conditions in the same order; and
+      a `let` returned at once in a simulator test becomes the tail expression
+      (`let_and_return`), which 2024's earlier drop of tail temporaries allows.
+  - All three workspaces keep cargo's resolver 2: 3, edition 2024's default, prefers dependency
+    versions whose `rust-version` fits the workspace's (1.88) to the newest.
+  - `ci/mutants.sh`'s note on the caps' signs: on 2024 rustdoc merges a crate's doc-tests into one
+    binary and runs it through cargo's runner as one process (rustdoc 1.99.1), so the caps hold for
+    those doc-tests together, and one past the file cap leaves no sign: its mutant counts as caught,
+    not capped. `ci/test-mutants.sh` says which of its doc-tests run on their own and pins that gap
+    with a case of merged doc-tests past the file cap. `ci/test-check-dep-info.sh` builds its toy
+    crate on 2024.
+  - rustfmt formats in the 2024 style, which `rustfmt.toml`'s edition sets: names in a `use` list
+    sort as versions (`Limits, LimitsError, has_memory_limit`), and a macro call such as `assert!`
+    whose argument is a method chain wraps the chain inside the parentheses, and six `return`s get
+    a `;`. 97 files change, in layout only; `fuzz/`'s targets, which nothing formats and only
+    cargo-fuzz compiles (nightly, not the gate), are left as they are.
+
 - Spec and CI: TM-22 states how long a withheld batch takes, `protocol.md` §4.4 states which of a
   device's own versions refuse its writes and everything that ends the refusal, and
   `ci/check-dep-info.sh` no longer fails on another tool's depfile.

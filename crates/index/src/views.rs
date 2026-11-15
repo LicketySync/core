@@ -286,7 +286,7 @@ impl Index {
     pub fn bases_beneath<'a>(
         &'a self,
         dir: &str,
-    ) -> impl Iterator<Item = (&'a str, &'a Place, &'a RecordHash)> + 'a {
+    ) -> impl Iterator<Item = (&'a str, &'a Place, &'a RecordHash)> + use<'a> {
         self.s
             .base_slots_at_or_beneath(dir)
             .map(|(path, slot, hash)| (path, &slot.1, hash))

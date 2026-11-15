@@ -238,7 +238,7 @@ impl<'a> Reader<'a> {
             other => {
                 return Err(WireError::UnknownWireType(
                     u8::try_from(other).unwrap_or(u8::MAX),
-                ))
+                ));
             }
         };
         Ok(Some((field, wire_type)))

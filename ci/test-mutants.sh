@@ -8,7 +8,8 @@
 # signal comes and records SIGINT, or, as cargo-mutants does, times the
 # unmutated tree's tests by its arguments, or runs the unmutated tree's tests
 # and then each mutant's (a stand-in test process, `hog`, that asks for a
-# little less or a little more than a cap; a test binary's or a doc-test's)
+# little less or a little more than a cap; a test binary's, a doc-test's run
+# on its own, or a crate's merged doc-tests')
 # through the host's runner, logs them as cargo-mutants, cargo and rustdoc do,
 # and counts the mutant caught or missed. For the listing and the run alike it
 # records whether cargo-mutants 27.1.0 would cap the lints, by its rules: a
@@ -233,19 +234,25 @@ fi
 # runner, as cargo test starts a test binary and rustdoc a doc-test (the runner
 # split on whitespace, as cargo splits it; nothing when unset). A failure ends
 # the log as cargo 1.99 reports a test binary's: the signal (a shell's status
-# 128 + n), named for SIGABRT but not for SIGXFSZ, or the exit status; or, for
-# a command that starts with "doc ", as rustdoc 1.99 reports a doc-test's,
-# the signal by number and name.
+# 128 + n), named for SIGABRT but not for SIGXFSZ, or the exit status; for a
+# command that starts with "doc ", as rustdoc 1.99 reports a doc-test that
+# runs on its own (unmerged), the signal by number and name; and for one that
+# starts with "merged ", as cargo and rustdoc 1.99 report a crate's merged
+# doc-tests (edition 2024), which run as one process, with no signal at all.
 run_tests() {
   local log=$1 test=$2 doc='' rc=0 why
-  if [ "${test%% *}" = doc ]; then
-    doc=1
-    test=${test#doc }
-  fi
+  case ${test%% *} in
+    doc | merged)
+      doc=${test%% *}
+      test=${test#* }
+      ;;
+  esac
   # shellcheck disable=SC2086 # split on purpose, as cargo splits them
   $runner $test >> "$log" 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then
     return 0
+  elif [ "$doc" = merged ]; then
+    echo "error: doctest failed, to rerun pass \`--doc\`" >> "$log"
   elif [ -n "$doc" ]; then
     why="exit status: $rc"
     [ "$rc" -le 128 ] || why="signal: $((rc - 128)) (SIG$(kill -l "$rc"))"
@@ -264,7 +271,7 @@ run_tests() {
 }
 if [ -n "${FAKE_BASELINE_TESTS:-}" ]; then
   # The unmutated tree's tests, a test command a line, each run whether or not
-  # the one before failed (as rustdoc runs every doc-test), logged as
+  # the one before failed (as rustdoc runs every unmerged doc-test), logged as
   # cargo-mutants does (baseline.log, its first line "*** baseline"); when any
   # fails, no mutant is tested.
   printf '\n*** baseline\n' > mutants.out/log/baseline.log
@@ -597,14 +604,22 @@ case_ "a module where the tests run cannot replace Python's own (python3 -I)" 0 
   "== cargo-mutants shard 8/16: 1 caught, 0 missed, 0 timed out, 0 unviable
 == 1 of the caught were stopped by a cap (memory or file size)" \
   FAKE_PLANT=1 FAKE_TESTS="$r1|hog memory $((6442450944 + (64 << 20)))"
-# rustdoc reports a doc-test killed by SIGXFSZ by the signal's name as well
-# as its number (cargo, by the number only); both count.
+# rustdoc reports a doc-test that runs on its own (unmerged) killed by
+# SIGXFSZ by the signal's name as well as its number (cargo, by the number
+# only); both count.
 r3='crates/keys/src/stand_in.rs:1:1: a mutant whose doc-test writes a file of 1 GiB and 1 byte'
 case_ "a doc-test past a cap: its mutant caught by a cap" 0 9/16 180m \
   "== cargo-mutants shard 9/16: 2 caught, 0 missed, 0 timed out, 0 unviable
 == 2 of the caught were stopped by a cap (memory or file size)" \
   FAKE_TESTS="$r3|doc hog file 1073741825
 $r1|doc hog memory $((6442450944 + (64 << 20)))"
+# A crate's merged doc-tests (edition 2024) run as one process, and one past
+# the file cap leaves no sign: its mutant is caught, not counted capped (the
+# known gap ci/mutants.sh states).
+case_ "merged doc-tests past the file cap: caught, not counted capped" 0 14/16 180m \
+  "== cargo-mutants shard 14/16: 1 caught, 0 missed, 0 timed out, 0 unviable
+== 0 of the caught were stopped by a cap (memory or file size)" \
+  FAKE_TESTS="$r3|merged hog file 1073741825"
 # Only caught mutants count: a passing test process can print the sign (a
 # test of the message itself), and the baseline's log can carry it (below).
 case_ "a missed mutant whose log carries a cap's sign is not counted" 0 10/16 180m \

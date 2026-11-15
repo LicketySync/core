@@ -37,8 +37,8 @@ use licketysync_keys::records::SignedRecord;
 use licketysync_keys::{DeviceId, PathTag, RandomFill, RecordHash};
 use licketysync_protocol::limits::{MAX_COUNTER, MAX_REPLACES};
 use licketysync_protocol::record::{
-    at_or_beneath, check_path, Chunk, CleanupDraft, Dot, DraftError, Group, IndexDraft, Kind, Meta,
-    PathError, Record, Vector, WriterFault,
+    Chunk, CleanupDraft, Dot, DraftError, Group, IndexDraft, Kind, Meta, PathError, Record, Vector,
+    WriterFault, at_or_beneath, check_path,
 };
 
 use crate::index::{Accepted, Seq, Txn};
@@ -445,20 +445,21 @@ impl Txn<'_> {
             let Some(note) = self.ix.s.notes.get(h) else {
                 continue;
             };
-            if let Noted::Stale { dot, .. } = &note.noted {
-                if vector.covers(dot) && !replaces.contains(h) {
-                    let used = spent.by_peer.get(&note.peer).copied().unwrap_or(0);
-                    if self
-                        .peer_names(&note.peer, spent.clock_us)
-                        .saturating_add(used)
-                        >= self.ix.bounds.peer_names
-                    {
-                        continue;
-                    }
-                    spent.by_peer.insert(note.peer, used + 1);
-                    replaces.push(*h);
-                    noted.push(*h);
+            if let Noted::Stale { dot, .. } = &note.noted
+                && vector.covers(dot)
+                && !replaces.contains(h)
+            {
+                let used = spent.by_peer.get(&note.peer).copied().unwrap_or(0);
+                if self
+                    .peer_names(&note.peer, spent.clock_us)
+                    .saturating_add(used)
+                    >= self.ix.bounds.peer_names
+                {
+                    continue;
                 }
+                spent.by_peer.insert(note.peer, used + 1);
+                replaces.push(*h);
+                noted.push(*h);
             }
         }
         Ok(Plan {

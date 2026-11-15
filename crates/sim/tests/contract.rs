@@ -25,9 +25,9 @@ use licketysync_keys as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use licketysync_engine::runtime::{Context, Instant, Peer, PeerId, TimerId, MAX_CHUNK};
+use licketysync_engine::runtime::{Context, Instant, MAX_CHUNK, Peer, PeerId, TimerId};
 use licketysync_sim::contract::{self, Report};
-use licketysync_sim::frame::{frame, Deframer};
+use licketysync_sim::frame::{Deframer, frame};
 use licketysync_sim::scenario::STOP_FLUSH;
 use licketysync_sim::toy::LIMIT;
 use licketysync_sim::trace::DropReason;
@@ -229,8 +229,8 @@ fn bounce_with_effects(me: &mut Scripted, cx: &mut dyn Context, call: Call) {
 }
 
 #[test]
-fn a_hang_up_inside_on_connected_lets_the_other_sides_on_connected_effects_take_effect_before_its_on_disconnected(
-) {
+fn a_hang_up_inside_on_connected_lets_the_other_sides_on_connected_effects_take_effect_before_its_on_disconnected()
+ {
     let (log, scenario) = scripted(1, 3, bounce_with_effects);
     let mut sim = scenario
         .fault(Fault::Reconnect {
@@ -824,10 +824,10 @@ impl Peer for Firehose {
         }
         for _ in 0..30 {
             let f = frame(&[7; 100]).unwrap_or_default();
-            if let Some(cap) = self.pace {
-                if cx.unsent(p(1)) + f.len() > cap {
-                    break;
-                }
+            if let Some(cap) = self.pace
+                && cx.unsent(p(1)) + f.len() > cap
+            {
+                break;
             }
             if cx.send(p(1), f).is_ok() {
                 *self.sent.borrow_mut() += 1;

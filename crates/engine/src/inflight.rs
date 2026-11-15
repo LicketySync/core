@@ -183,10 +183,10 @@ impl Asked {
     /// turn once the hold has passed (`made_so_far`, the connections made).
     fn place_at(&self, now: Instant, made_so_far: u64) -> Place {
         let mut place = self.place;
-        if let Some(k) = self.kept_for {
-            if now >= k.until {
-                place.turn_of(k.conn.made, made_so_far);
-            }
+        if let Some(k) = self.kept_for
+            && now >= k.until
+        {
+            place.turn_of(k.conn.made, made_so_far);
         }
         place
     }
@@ -428,10 +428,10 @@ impl InFlight {
             .map(|(key, _)| *key)
             .collect();
         for key in ended {
-            if let Some(a) = self.asked.remove(&key) {
-                if lacking(&key.0, &key.1) {
-                    self.kept.insert(key, a.place_at(now, made));
-                }
+            if let Some(a) = self.asked.remove(&key)
+                && lacking(&key.0, &key.1)
+            {
+                self.kept.insert(key, a.place_at(now, made));
             }
         }
     }

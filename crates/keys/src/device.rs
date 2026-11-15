@@ -23,11 +23,11 @@ use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use zeroize::Zeroizing;
 
 use crate::handshake::Role;
-use crate::ids::{hex, DeviceId};
+use crate::ids::{DeviceId, hex};
 use crate::labels::{self, derive_key, labelled_hash};
 use crate::secret::DeviceSeed;
 use crate::sig::{self, Signature, SignatureError};
-use crate::suite::{sizes, Suite, SuiteError};
+use crate::suite::{Suite, SuiteError, sizes};
 
 /// Why the device public key in a Hello is refused (`protocol.md` 3.2:
 /// `Close(PROTOCOL_ERROR)`).
@@ -347,9 +347,10 @@ mod tests {
         );
         let sig = dht.sign_bep44(b"item");
         let vk = VerifyingKey::from_bytes(&dht.public_key()).unwrap();
-        assert!(vk
-            .verify_strict(b"item", &ed25519_dalek::Signature::from_bytes(&sig))
-            .is_ok());
+        assert!(
+            vk.verify_strict(b"item", &ed25519_dalek::Signature::from_bytes(&sig))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -439,12 +440,14 @@ mod tests {
         );
         // The message is `th || role` under the device-proof label.
         let vk = VerifyingKey::from_bytes(pk.ed25519_bytes()).unwrap();
-        assert!(sig::verify(
-            &vk,
-            labels::SIG_DEVICE_PROOF,
-            &[&th[..], &[0x01]].concat(),
-            &proof
-        )
-        .is_ok());
+        assert!(
+            sig::verify(
+                &vk,
+                labels::SIG_DEVICE_PROOF,
+                &[&th[..], &[0x01]].concat(),
+                &proof
+            )
+            .is_ok()
+        );
     }
 }

@@ -157,8 +157,8 @@ pub(crate) fn seal_proof(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
-    use licketysync_keys::secret::WriteSecret;
     use licketysync_keys::WriteKey;
+    use licketysync_keys::secret::WriteSecret;
 
     use super::*;
 

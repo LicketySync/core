@@ -2,13 +2,14 @@
 name = "licketysync-fuzz"
 version = "0.0.0"
 publish = false
-edition = "2021"
+edition = "2024"
 
 [package.metadata]
 cargo-fuzz = true
 
 # Not a member of the core workspace: cargo-fuzz builds it on its own.
 [workspace]
+resolver = "2"
 
 [dependencies]
 libfuzzer-sys = "0.4"

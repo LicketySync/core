@@ -20,7 +20,7 @@
 use core::fmt;
 
 pub use licketysync_index::{Place, RecordState};
-use licketysync_keys::chunk::{open_chunk, ChunkError};
+use licketysync_keys::chunk::{ChunkError, open_chunk};
 use licketysync_keys::{CipherHash, FolderId, RecordHash, Tier};
 use licketysync_protocol::record::{Chunk, Dot, Kind, Record};
 

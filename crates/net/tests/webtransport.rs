@@ -27,17 +27,17 @@ use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use libp2p_core::multihash::Multihash;
 use libp2p_core::upgrade::OutboundConnectionUpgrade as _;
 use libp2p_identity::{Keypair, PeerId};
+use licketysync_net::PROTOCOL_ID;
 use licketysync_net::limits::Limits;
 use licketysync_net::webtransport::{
-    certhash, echo, within, BiStream, KxPolicy, Listener, ListenerConfig, WebTransportError,
-    MAX_VALIDITY_DAYS, NOISE_PATH, PIECE, SHA2_256,
+    BiStream, KxPolicy, Listener, ListenerConfig, MAX_VALIDITY_DAYS, NOISE_PATH, PIECE, SHA2_256,
+    WebTransportError, certhash, echo, within,
 };
-use licketysync_net::PROTOCOL_ID;
-use rustls::crypto::aws_lc_rs::kx_group;
-use rustls::crypto::SupportedKxGroup;
 use rustls::NamedGroup;
-use wtransport::tls::Sha256Digest;
+use rustls::crypto::SupportedKxGroup;
+use rustls::crypto::aws_lc_rs::kx_group;
 use wtransport::VarInt;
+use wtransport::tls::Sha256Digest;
 
 #[cfg(not(target_os = "ios"))]
 use libp2p_memory_connection_limits as _;
@@ -382,9 +382,11 @@ async fn accept_on_a_closed_endpoint_is_an_error_not_a_panic() {
 #[tokio::test]
 async fn a_dropped_accept_loses_no_connection() {
     let l = listener(KxPolicy::PreferPq, None, Some(BROWSER_SEED));
-    assert!(tokio::time::timeout(Duration::from_millis(50), l.accept())
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), l.accept())
+            .await
+            .is_err()
+    );
     let plan = dial_for(&l);
     let (served, client) = run(l, plan).await;
     served.unwrap();

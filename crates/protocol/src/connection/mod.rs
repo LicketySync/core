@@ -97,7 +97,7 @@ use crate::exchange::IndexView;
 use crate::exchange::Prefix;
 use crate::features::{COMPRESSION_NONE, HASH_BLAKE3};
 use crate::frame::{Frame, FrameDecoder, FrameError, FrameKind, MessageType};
-use crate::hello::{check_peer_hello, PeerHello, TranscriptHash};
+use crate::hello::{PeerHello, TranscriptHash, check_peer_hello};
 use crate::limits::{
     CHUNK_BUSY_BACKOFF, CLOCK_RULE_LIMIT_DAYS, CLOSE_FLUSH, DEFAULT_MESSAGE_SIZE,
     DEFAULT_REQUESTS_IN_FLIGHT, HELLO_NONCE_LEN, HELLO_TIMEOUT, IDLE_TIMEOUT,
@@ -110,7 +110,7 @@ use crate::messages::{
     ChunkReply, ChunkRequest, Close, CloseReason, DeviceProof, FolderProof, FolderStatus, Hello,
     IndexRequest, Message, ProofResult, ReconcileReply, ReconcileRequest, Status, Unsupported,
 };
-use crate::parse::{close_without_detail, is_device_name, parse_records_page, Parse};
+use crate::parse::{Parse, close_without_detail, is_device_name, parse_records_page};
 use crate::proof::FolderCredential;
 use crate::record::Record;
 use crate::rules::{Cause, Outcome};
@@ -1261,10 +1261,10 @@ impl Connection {
     /// Encodes and queues one of the connection's own messages, which always
     /// fit the peer's limit.
     fn send_own(&mut self, message: &Message, out: &mut Output) {
-        if let Ok(frame) = message.to_frame() {
-            if frame.fits(self.peer_max_message_size()) {
-                self.enqueue(frame.encode(), Tag::None, out);
-            }
+        if let Ok(frame) = message.to_frame()
+            && frame.fits(self.peer_max_message_size())
+        {
+            self.enqueue(frame.encode(), Tag::None, out);
         }
     }
 
@@ -1317,11 +1317,12 @@ impl Connection {
     /// A connection that ends with no folder opened and clocks out of range
     /// is only counted (3.2).
     fn count_stranger_clock(&self, out: &mut Output) {
-        if !self.opened_any && !self.clock_refused {
-            if let Some((ours, theirs)) = self.clocks_out_of_range() {
-                out.events
-                    .push(Event::StrangerClockOutOfRange { ours, theirs });
-            }
+        if !self.opened_any
+            && !self.clock_refused
+            && let Some((ours, theirs)) = self.clocks_out_of_range()
+        {
+            out.events
+                .push(Event::StrangerClockOutOfRange { ours, theirs });
         }
     }
 

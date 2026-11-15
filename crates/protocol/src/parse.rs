@@ -27,7 +27,7 @@ use crate::features::{is_feature_name, is_list_entry};
 use crate::limits::{
     CLEANUP_RECORD_TYPE, DEVICE_SIGNATURE_LEN, HINT_LEN, INDEX_RECORD_TYPE, MAX_CHUNKS,
     MAX_CLEANUP_ENTRIES, MAX_CLEANUP_GROUPS, MAX_CLEANUP_SEALED_BYTES, MAX_CLOCK_DAYS,
-    MAX_CLOSE_DETAIL_BYTES, MAX_DEVICE_NAME_BYTES, MAX_FEATURES, MAX_FEATURE_NAME_BYTES,
+    MAX_CLOSE_DETAIL_BYTES, MAX_DEVICE_NAME_BYTES, MAX_FEATURE_NAME_BYTES, MAX_FEATURES,
     MAX_INDEX_RECORD_BYTES, MAX_LIST_ENTRIES, MAX_LIST_ENTRY_BYTES, MAX_LOCAL_SEQ,
     MAX_PAGE_RECORDS, MAX_PREFIX_NIBBLES, MAX_PROOF_SEALED, MAX_REPLACES, MAX_SEALED_BYTES,
     MAX_STATUS_FOLDERS, MAX_STORED_LEN, MAX_SUITES, MAX_VECTOR_ENTRIES, MIN_PROOF_SEALED,
@@ -39,7 +39,7 @@ use crate::messages::{
     ProofPayload, ProofResult, ProofStatus, ReconcileOutcome, ReconcileReply, ReconcileRequest,
     SealedMeta, Status, Unsupported, VectorEntry,
 };
-use crate::wire::{empty_or_exact, exact, push_bounded, room, Reader, Seen, WireError, WireType};
+use crate::wire::{Reader, Seen, WireError, WireType, empty_or_exact, exact, push_bounded, room};
 use licketysync_keys::records::SignedRecord;
 use licketysync_keys::sealed_meta::SealedKind;
 

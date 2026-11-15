@@ -25,7 +25,7 @@ use licketysync_engine::runtime::{Instant, PeerId};
 use crate::contract;
 use crate::network::{NetworkConfig, Partition};
 use crate::scenario::{Fault, Outcome, Scenario};
-use crate::toy::{all_hold, total_items, SetUnion, LIMIT};
+use crate::toy::{LIMIT, SetUnion, all_hold, total_items};
 
 pub mod engine;
 
@@ -359,8 +359,7 @@ static ENGINE: [NamedScenario; 25] = [
     },
     NamedScenario {
         name: "engine-clones",
-        about:
-            "engines: two devices with one seed; concurrent heads, the own-ID hint, nobody blamed",
+        about: "engines: two devices with one seed; concurrent heads, the own-ID hint, nobody blamed",
         run: engine_clones,
     },
     NamedScenario {
@@ -380,8 +379,7 @@ static ENGINE: [NamedScenario; 25] = [
     },
     NamedScenario {
         name: "engine-expiry",
-        about:
-            "engines: a tombstone past the horizon in folder time is forgotten; the file returns",
+        about: "engines: a tombstone past the horizon in folder time is forgotten; the file returns",
         run: engine_expiry,
     },
     NamedScenario {

@@ -39,7 +39,7 @@
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use licketysync_engine::runtime::{Instant, PeerId, MAX_SEND_QUEUE};
+use licketysync_engine::runtime::{Instant, MAX_SEND_QUEUE, PeerId};
 
 /// A probability in millionths, so that no floating point is used while the
 /// simulation runs and two platforms cannot round differently.
@@ -275,11 +275,7 @@ pub(crate) struct Links {
 }
 
 fn unordered(a: PeerId, b: PeerId) -> (PeerId, PeerId) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 impl Links {

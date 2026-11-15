@@ -11,8 +11,8 @@ use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 
 use licketysync_engine::runtime::{
-    Clock, Context, Entry, Instant, Peer, PeerId, Randomness, SendError, Storage, StorageError,
-    TimerId, Timers, Transport, MAX_CHUNK,
+    Clock, Context, Entry, Instant, MAX_CHUNK, Peer, PeerId, Randomness, SendError, Storage,
+    StorageError, TimerId, Timers, Transport,
 };
 
 use crate::network::{Links, NetworkConfig, Partition, Piece, Probability, Stream};

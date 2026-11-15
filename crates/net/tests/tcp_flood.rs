@@ -17,10 +17,10 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use futures::channel::mpsc;
 use futures::StreamExt as _;
-use libp2p_core::multiaddr::Protocol;
+use futures::channel::mpsc;
 use libp2p_core::Multiaddr;
+use libp2p_core::multiaddr::Protocol;
 use libp2p_identity::PeerId;
 use libp2p_swarm::ListenError;
 use libp2p_swarm::SwarmEvent;
@@ -28,7 +28,7 @@ use licketysync_keys::device::Libp2pIdentity;
 use licketysync_keys::secret::DeviceSeed;
 use licketysync_net::identity;
 use licketysync_net::limits::Limits;
-use licketysync_net::node::{self, dial_opts::DialOpts, Swarm};
+use licketysync_net::node::{self, Swarm, dial_opts::DialOpts};
 
 /// Every wait's bound: a deadline, never a sleep.
 const DEADLINE: Duration = Duration::from_secs(90);

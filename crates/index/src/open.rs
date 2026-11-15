@@ -14,7 +14,7 @@ use licketysync_protocol::limits::{
 };
 use licketysync_protocol::record::Record;
 
-use crate::index::{draw_epoch, Accepted, Index, OpenReport, Seq};
+use crate::index::{Accepted, Index, OpenReport, Seq, draw_epoch};
 use crate::state::BaseRecord;
 use crate::store::{BaseSlot, ChangeSet, Stored, StoredMeta};
 use crate::verify;

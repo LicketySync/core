@@ -15,7 +15,7 @@ use licketysync_protocol::connection::{IndexServe, ReconcileServe, SendError};
 use licketysync_protocol::messages::IndexRecords;
 
 use super::{Op, Reply, Serving};
-use crate::engine::{tick, Engine};
+use crate::engine::{Engine, tick};
 use crate::pacing::{page_estimate, within_budget};
 use crate::runtime::{Context, PeerId};
 use crate::work::Work;

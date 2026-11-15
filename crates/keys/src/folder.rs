@@ -32,11 +32,11 @@ use core::fmt;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use zeroize::Zeroizing;
 
-use crate::ids::{hex, FolderId};
+use crate::ids::{FolderId, hex};
 use crate::labels::{self, derive_key, labelled_hash};
 use crate::rng::RandomFill;
 use crate::secret::{AccessKey, DataKey, SecretBytes, WriteSecret};
-use crate::suite::{sizes, Suite, SuiteError, Tier};
+use crate::suite::{Suite, SuiteError, Tier, sizes};
 
 /// Why key material could not be read: a key string's payload, a stored key,
 /// or a link code's payload.

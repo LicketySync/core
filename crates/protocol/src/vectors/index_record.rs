@@ -12,7 +12,7 @@ use licketysync_keys::chunk::PlainHash;
 use licketysync_keys::records::{Malformed, SignedRecord};
 use licketysync_keys::{CipherHash, DeviceId, RecordHash};
 use prost::Message as _;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{check, h, input, seed};
 use crate::limits::{

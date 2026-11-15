@@ -695,14 +695,19 @@ rustls's default key log, which writes nothing.
 
 **TM-7. No `unsafe` outside the platform-FFI crates.** The workspace lint `unsafe_code = "forbid"`
 applies everywhere; a platform-FFI crate opts out explicitly, is covered by Miri nightly and exports
-no macro. The lint sees a crate's own code and macros, but not what a macro defined in another crate
-expands into it, and cargo-geiger counts no macro body. So Semgrep rules in `.semgrep/` ban by
+no macro. The crates are on edition 2024, where an extern block needs `unsafe`, as do
+`std::env::set_var` and `remove_var`, so the lint refuses them in a crate's own code as it refuses
+`no_mangle`, `export_name`, `link_section` and `global_asm`. The lint sees a crate's own code and
+macros, but not what a macro defined in another crate expands into it (on edition 2021 or earlier,
+such a macro writes an extern block and those attributes, and calls `set_var` and `remove_var`,
+without `unsafe`), and cargo-geiger counts no macro body. So Semgrep rules in `.semgrep/` ban by
 spelling, each but for the crates its allow-list names, which only a reviewed change extends: in
 every file rustc reads for a workspace crate (under `crates/`, every `.rs` file, every `Cargo.toml`,
 the root's `clippy.toml`, the fuzz seeds; `ci/scope.py`), the words of the constructs the lint
 forbids (`unsafe`, `no_mangle`, `export_name`, `link_section`, `global_asm`) as text, and the
-keyword `extern`, since an extern block links native code that can run before `main`, edition 2021
-writes it without `unsafe`, and a macro can build one from the keyword wherever it is written
+keyword `extern`, since an extern block links native code that can run before `main`, a macro of a
+crate on edition 2021 or earlier writes one without `unsafe`, and a macro can build one from the
+keyword wherever it is written
 (`unsafe_code-only-in-ffi-crates`, `extern_keyword-only-in-ffi-crates`; the extern ban leaves out
 the vendored wasm-bindgen `bindings.rs` of `browser-tests`, in a tree no workspace crate may read);
 under `crates/` and in every `.rs` file, `include!` and its kin and the path attribute, with the
@@ -733,8 +738,9 @@ the new counts. CI scans in full on pushes to main and on pull requests; `gate.s
 when the inputs `ci/geiger.sh` lists are those of a scan that passed. The gate catches a change in
 the unsafe code the build uses when its listing covers the change; otherwise CI catches it on main,
 where it is fixed forward. Left to review, with TM-8 (cargo-vet): a dependency's macro that wraps
-its caller's tokens in unsafe code, joins identifiers (`paste` is in `Cargo.lock`) or emits an
-extern block or `#[link]`, a dependency's proc-macro, and a dependency's build script. Also left to
+its caller's tokens in unsafe code, joins identifiers (`paste` is in `Cargo.lock`), emits an
+extern block or `#[link]`, or calls `std::env::set_var` or `remove_var` (on edition 2021 or
+earlier, without `unsafe`), a dependency's proc-macro, and a dependency's build script. Also left to
 review: cargo configuration outside the repository; the build environment the workflows set
 (`RUSTFLAGS`, `CARGO_TARGET_*_LINKER`, link arguments); code compiled only for a target or feature
 set no checked build has (the workspace crates other than net and its dependencies on Android and

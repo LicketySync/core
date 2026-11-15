@@ -19,7 +19,7 @@ use core::time::Duration;
 use licketysync_keys::chunk::cipher_hash;
 use licketysync_keys::{CipherHash, FolderId};
 
-use super::{open_mut, ChunkAnswer, Connection, Event, Output, SendError, Tag, Tick};
+use super::{ChunkAnswer, Connection, Event, Output, SendError, Tag, Tick, open_mut};
 use crate::limits::{MAX_REQUESTS_IN_FLIGHT, MAX_SEND_QUEUE, MAX_STATUS_FOLDERS, MAX_STORED_LEN};
 use crate::messages::{ChunkReply, ChunkRequest, ChunkStatus, FolderStatus, Message, Status};
 use crate::rules::Cause;
@@ -224,7 +224,7 @@ impl Connection {
         let not_found = match x.chunks.pass {
             Pass::Waiting { .. } => return Err(SendError::PassWaiting),
             Pass::Asking { position, .. } if cipher_hash <= position => {
-                return Err(SendError::OutOfOrder)
+                return Err(SendError::OutOfOrder);
             }
             Pass::Asking { not_found, .. } => not_found,
             Pass::Free => false,
@@ -517,10 +517,10 @@ impl Connection {
     pub fn hash_freed(&mut self, tick: Tick, folder: FolderId) -> Output {
         let mut out = Output::default();
         self.observe(tick, &mut out);
-        if let Some(x) = open_mut(&mut self.folders, &folder) {
-            if x.chunks.skipped {
-                x.chunks.fired.freed = true;
-            }
+        if let Some(x) = open_mut(&mut self.folders, &folder)
+            && x.chunks.skipped
+        {
+            x.chunks.fired.freed = true;
         }
         self.trigger(folder, &mut out);
         self.finish(&mut out);

@@ -11,14 +11,14 @@ use std::collections::BTreeMap;
 use licketysync_keys::{FolderId, RandomFill, Signature};
 
 use super::{Connection, Event, Keys, Output, ProveError, State};
+use crate::PROTOCOL_ID;
 use crate::frame::Frame;
-use crate::hello::{check_peer_hello, role_of, transcript_hash, TranscriptHash};
+use crate::hello::{TranscriptHash, check_peer_hello, role_of, transcript_hash};
 use crate::limits::{MAX_OPEN_FOLDERS_PER_CONNECTION, MAX_PROOFS_PER_CONNECTION};
 use crate::messages::{
     CloseReason, DeviceProof, FolderProof, Hello, Message, ProofResult, ProofStatus,
 };
 use crate::rules::Cause;
-use crate::PROTOCOL_ID;
 
 impl Connection {
     pub(super) fn on_hello(
@@ -314,20 +314,20 @@ impl Connection {
         // any record, chunk or Status of it is sent, the two Hellos' clocks
         // are compared; more than CLOCK_RULE_LIMIT apart, the connection
         // closes.
-        if !self.opened_any {
-            if let (Some((ours, theirs)), Some(peer)) = (
+        if !self.opened_any
+            && let (Some((ours, theirs)), Some(peer)) = (
                 self.clocks_out_of_range(),
                 self.peer.as_ref().map(|p| p.device_id),
-            ) {
-                self.clock_refused = true;
-                out.events.push(Event::ClockOutOfRange {
-                    folder,
-                    peer,
-                    ours,
-                    theirs,
-                });
-                return self.fail(Cause::ClockOutOfRange, out);
-            }
+            )
+        {
+            self.clock_refused = true;
+            out.events.push(Event::ClockOutOfRange {
+                folder,
+                peer,
+                ours,
+                theirs,
+            });
+            return self.fail(Cause::ClockOutOfRange, out);
         }
         let Some(state) = self.folders.get_mut(&folder) else {
             return;

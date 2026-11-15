@@ -17,10 +17,10 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use licketysync_engine::runtime::{Context, Instant, Peer, PeerId, SendError, Storage, TimerId};
-use licketysync_sim::frame::{frame, Deframer};
+use licketysync_sim::frame::{Deframer, frame};
 use licketysync_sim::scenario::{DEFAULT_MAX_EVENTS, DEFAULT_WALL_EPOCH};
 use licketysync_sim::scenarios;
-use licketysync_sim::toy::{all_hold, total_items, SetUnion, LIMIT};
+use licketysync_sim::toy::{LIMIT, SetUnion, all_hold, total_items};
 use licketysync_sim::trace::DropReason;
 use licketysync_sim::{EventKind, Fault, NetworkConfig, Partition, Scenario, TraceEvent};
 
@@ -224,7 +224,7 @@ impl Peer for Burst {
             .and_then(|d| d.push(bytes).ok())
             .unwrap_or_default();
         for payload in frames {
-            let (Some(gen), Some(i)) = (
+            let (Some(generation), Some(i)) = (
                 payload
                     .get(..4)
                     .and_then(|b| <[u8; 4]>::try_from(b).ok())
@@ -238,7 +238,7 @@ impl Peer for Burst {
             };
             self.received
                 .borrow_mut()
-                .entry((from, me, gen))
+                .entry((from, me, generation))
                 .or_default()
                 .push(i);
         }
@@ -246,10 +246,10 @@ impl Peer for Burst {
     fn on_timer(&mut self, _cx: &mut dyn Context, _id: TimerId) {}
     fn on_connected(&mut self, cx: &mut dyn Context, peer: PeerId) {
         self.streams.insert(peer, Deframer::new(8));
-        let gen = self.connections.entry(peer).or_insert(0);
-        *gen += 1;
+        let generation = self.connections.entry(peer).or_insert(0);
+        *generation += 1;
         for i in 0..BURST {
-            let mut msg = gen.to_be_bytes().to_vec();
+            let mut msg = generation.to_be_bytes().to_vec();
             msg.extend_from_slice(&i.to_be_bytes());
             assert_eq!(cx.send(peer, frame(&msg).unwrap_or_default()), Ok(()));
         }
@@ -285,8 +285,8 @@ fn messages_on_one_connection_arrive_in_order_and_once_whatever_their_latency() 
         6,
         "three peers, each direction of each pair"
     );
-    for ((from, to, gen), got) in received.iter() {
-        assert_eq!(*gen, 1, "one connection per pair");
+    for ((from, to, generation), got) in received.iter() {
+        assert_eq!(*generation, 1, "one connection per pair");
         let want: Vec<u32> = (0..BURST).collect();
         assert_eq!(got, &want, "{from} -> {to}: in order, each once");
     }
@@ -339,13 +339,13 @@ fn a_drop_cuts_the_stream_cleanly_and_the_next_connection_starts_afresh() {
             1 + lost,
             "every lost piece cost one connection and brought one back"
         );
-        for ((from, to, gen), got) in received.iter() {
+        for ((from, to, generation), got) in received.iter() {
             let want: Vec<u32> = (0..u32::try_from(got.len()).unwrap_or(0)).collect();
             assert_eq!(
                 got, &want,
-                "{from} -> {to} on connection {gen}: a prefix of the burst, in order, each once"
+                "{from} -> {to} on connection {generation}: a prefix of the burst, in order, each once"
             );
-            if *gen == last_gen {
+            if *generation == last_gen {
                 let whole: Vec<u32> = (0..BURST).collect();
                 assert_eq!(got, &whole, "the last connection carried it all");
             }
@@ -385,15 +385,21 @@ fn a_partition_blocks_convergence_until_it_heals() {
     assert!(after.converged && after.quiescent, "{after}");
     assert!(sim.is_connected(p(0), p(2)));
     let trace = sim.trace().unwrap_or_default();
-    assert!(trace
-        .iter()
-        .any(|e| e.kind == EventKind::PartitionStart && e.peer.is_none()));
-    assert!(trace
-        .iter()
-        .any(|e| e.kind == EventKind::PartitionEnd && e.peer.is_none()));
-    assert!(trace
-        .iter()
-        .any(|e| e.kind == EventKind::Disconnected(p(2)) && e.peer == Some(p(0))));
+    assert!(
+        trace
+            .iter()
+            .any(|e| e.kind == EventKind::PartitionStart && e.peer.is_none())
+    );
+    assert!(
+        trace
+            .iter()
+            .any(|e| e.kind == EventKind::PartitionEnd && e.peer.is_none())
+    );
+    assert!(
+        trace
+            .iter()
+            .any(|e| e.kind == EventKind::Disconnected(p(2)) && e.peer == Some(p(0)))
+    );
     assert!(
         trace.iter().any(|e| matches!(
             e.kind,
@@ -542,9 +548,11 @@ fn a_clean_stop_runs_on_stop_and_a_commit_there_carries_every_staged_write() {
     );
     assert_eq!(s.staged_len(), 0);
     let trace = sim.trace().unwrap_or_default();
-    assert!(trace
-        .iter()
-        .any(|e| e.kind == EventKind::Stop && e.peer == Some(p(0))));
+    assert!(
+        trace
+            .iter()
+            .any(|e| e.kind == EventKind::Stop && e.peer == Some(p(0)))
+    );
     assert!(!trace.iter().any(|e| e.kind == EventKind::Crash));
 }
 
@@ -631,12 +639,16 @@ fn timers_replace_cancel_and_fire_in_the_peers_own_time() {
         "simulation time is not skewed"
     );
     let trace = sim.trace().unwrap_or_default();
-    assert!(trace
-        .iter()
-        .any(|e| e.kind == EventKind::SendRefused { to: p(99) }));
-    assert!(trace
-        .iter()
-        .any(|e| e.kind == EventKind::TimerCancelled(TimerId::new(2))));
+    assert!(
+        trace
+            .iter()
+            .any(|e| e.kind == EventKind::SendRefused { to: p(99) })
+    );
+    assert!(
+        trace
+            .iter()
+            .any(|e| e.kind == EventKind::TimerCancelled(TimerId::new(2)))
+    );
     assert_eq!(
         trace
             .iter()
@@ -767,12 +779,16 @@ fn a_full_disk_delays_persistence_and_everything_is_saved_once_freed() {
     assert!(after.converged && after.quiescent, "{after}");
     assert_eq!(sim.storage(p(0)).map(|s| s.committed().len()), Some(15));
     let trace = sim.trace().unwrap_or_default();
-    assert!(trace
-        .iter()
-        .any(|e| e.kind == EventKind::DiskFull && e.peer == Some(p(0))));
-    assert!(trace
-        .iter()
-        .any(|e| e.kind == EventKind::DiskFreed && e.peer == Some(p(0))));
+    assert!(
+        trace
+            .iter()
+            .any(|e| e.kind == EventKind::DiskFull && e.peer == Some(p(0)))
+    );
+    assert!(
+        trace
+            .iter()
+            .any(|e| e.kind == EventKind::DiskFreed && e.peer == Some(p(0)))
+    );
     assert!(trace.iter().any(
         |e| matches!(&e.kind, EventKind::StorageFailed { error, .. } if error == "storage is full")
     ));
@@ -866,8 +882,7 @@ fn firings<P: Peer + 'static>(
     let mut sim = scenario.build();
     let o = sim.run_until(Instant::from_secs(20));
     assert!(!o.exhausted, "{o}");
-    let fired = log.borrow().clone();
-    fired
+    log.borrow().clone()
 }
 
 #[test]
@@ -944,8 +959,8 @@ impl Peer for ArmAcrossCrash {
 }
 
 #[test]
-fn timer_generations_never_reset_a_timer_armed_before_a_crash_does_not_fire_on_the_restarted_instance(
-) {
+fn timer_generations_never_reset_a_timer_armed_before_a_crash_does_not_fire_on_the_restarted_instance()
+ {
     let log = Rc::new(RefCell::new(Vec::new()));
     let shared = Rc::clone(&log);
     let mut sim = Scenario::new(1, 1, move |_| ArmAcrossCrash {

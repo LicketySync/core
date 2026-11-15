@@ -16,7 +16,7 @@
 
 use core::time::Duration;
 
-use licketysync_keys::chunk::{seal_chunk, SealedChunk};
+use licketysync_keys::chunk::{SealedChunk, seal_chunk};
 use licketysync_keys::records::SignedRecord;
 use licketysync_keys::{CipherHash, DeviceId, FolderId, RecordHash};
 use licketysync_protocol::connection::Timing;
@@ -30,7 +30,7 @@ use crate::rules::{conflict, conflict_at, conflict_in, file, heads};
 use crate::runtime::{Instant, Peer, PeerId, Storage};
 use crate::store::{chunk_key, held_key};
 use crate::sync::disk::copy_name;
-use crate::testkit::{chunk_hash, config, folder_key, write_key, Hold, Net};
+use crate::testkit::{Hold, Net, chunk_hash, config, folder_key, write_key};
 use crate::tests::{folder, pair, state, write};
 use crate::timers::Purpose;
 use crate::{FolderState, WriteFailure};
@@ -1138,9 +1138,11 @@ fn a_turn_passes_on_when_a_pass_past_the_hash_comes_to_wait() {
     assert!(
         holds(&net, partial, f1, h) && holds(&net, partial, f1, p) && !holds(&net, partial, f1, j)
     );
-    assert!([h, j, p]
-        .iter()
-        .all(|c| holds(&net, silent, f1, *c) && holds(&net, honest, f1, *c)));
+    assert!(
+        [h, j, p]
+            .iter()
+            .all(|c| holds(&net, silent, f1, *c) && holds(&net, honest, f1, *c))
+    );
     // Node 2 never answers node 1; node 3's chunk replies to node 1 wait,
     // and its chunk requests never arrive.
     net.gate.rules.extend([

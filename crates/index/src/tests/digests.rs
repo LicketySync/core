@@ -22,9 +22,9 @@ use licketysync_protocol::limits::{
 use licketysync_protocol::messages::ReconcileOutcome;
 use licketysync_protocol::record::Record;
 use proptest::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::kit::{chunk, cleanup, converge, dev, forge, round, sealed_file, Dev, DAY, T0};
+use super::kit::{DAY, Dev, T0, chunk, cleanup, converge, dev, forge, round, sealed_file};
 use super::vectors::{check, h};
 use crate::SincePlan;
 

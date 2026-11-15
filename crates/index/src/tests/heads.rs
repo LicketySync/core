@@ -21,10 +21,10 @@ use licketysync_protocol::limits::{
     CLEANUP_HORIZON, CLOCK_RULE_LIMIT, MAX_REPLACES, MAX_VECTOR_ENTRIES, TOMBSTONE_HORIZON,
 };
 use licketysync_protocol::record::{Kind, Record};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::kit::{
-    chunk, dev, dir, file, forge, sealed_file, tombstone, write_key, Dev, DAY, SEC, T0,
+    DAY, Dev, SEC, T0, chunk, dev, dir, file, forge, sealed_file, tombstone, write_key,
 };
 use super::vectors::{check, h};
 use crate::{Change, Place, Put, Store};
@@ -419,10 +419,11 @@ pub(crate) fn lost_update_s1() -> Value {
     d.take(&a, &[v2]);
     assert_eq!(d.heads("f"), vec![v2]);
     assert_eq!(d.ix.current("f").unwrap().hash, v1, "V1 its base");
-    assert!(!d
-        .ix
-        .subtree(&licketysync_protocol::exchange::Prefix::ROOT)
-        .contains(&v1));
+    assert!(
+        !d.ix
+            .subtree(&licketysync_protocol::exchange::Prefix::ROOT)
+            .contains(&v1)
+    );
     let w = d.put("f", 3);
     let mut heads = d.heads("f");
     heads.sort();
@@ -432,10 +433,11 @@ pub(crate) fn lost_update_s1() -> Value {
     same_on_a_reader(&d, &["f"]);
     // V1 is never served or counted.
     let root_without = d.root();
-    assert!(!d
-        .ix
-        .subtree(&licketysync_protocol::exchange::Prefix::ROOT)
-        .contains(&v1));
+    assert!(
+        !d.ix
+            .subtree(&licketysync_protocol::exchange::Prefix::ROOT)
+            .contains(&v1)
+    );
     // The tree delete variant: V2 survives a scan's tree delete of the
     // directory holding the path.
     let mut a = Dev::writer(0xa0);

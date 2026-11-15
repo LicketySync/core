@@ -68,7 +68,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use licketysync_keys::chunk::{cipher_hash, open_chunk, ChunkKeys, PlainHash};
+use licketysync_keys::chunk::{ChunkKeys, PlainHash, cipher_hash, open_chunk};
 use licketysync_keys::{CipherHash, FolderId, RecordHash};
 
 use crate::runtime::Storage;
@@ -490,7 +490,7 @@ fn judge_position(p: &Position, blob: &[u8], keys: Option<&ChunkKeys>) -> Option
 )]
 mod tests {
     use super::*;
-    use crate::testkit::{write_key, FakeStorage};
+    use crate::testkit::{FakeStorage, write_key};
     use licketysync_index::WantedChunk;
     use licketysync_keys::chunk::seal_chunk;
 
@@ -541,9 +541,10 @@ mod tests {
         let (satisfied, findings) = book.judge(s.cipher_hash, &s.stored, Some(&keys));
         assert!(satisfied);
         assert_eq!(findings, vec![Finding::Corrupt(RecordHash([2; 32]))]);
-        assert!(book
-            .corrupt()
-            .contains(&(s.cipher_hash, RecordHash([2; 32]))));
+        assert!(
+            book.corrupt()
+                .contains(&(s.cipher_hash, RecordHash([2; 32])))
+        );
         assert!(
             !book.holds(&s.cipher_hash),
             "not stored until the blob is staged"

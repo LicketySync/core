@@ -21,8 +21,8 @@
 
 use core::fmt;
 
-use rustls::crypto::CryptoProvider;
 use rustls::NamedGroup;
+use rustls::crypto::CryptoProvider;
 
 /// Why the process-default provider is not the one `suites.md` 2.6 requires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

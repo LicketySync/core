@@ -15,7 +15,7 @@
 use licketysync_keys::records::SignedRecord;
 use licketysync_keys::{DeviceId, RecordHash, SetDigest};
 use licketysync_protocol::connection::ReconcileServe;
-use licketysync_protocol::exchange::{reconcile_outcome, IndexView, Key, Pager, Prefix};
+use licketysync_protocol::exchange::{IndexView, Key, Pager, Prefix, reconcile_outcome};
 use licketysync_protocol::limits::MAX_PAGE_RECORDS;
 use licketysync_protocol::messages::{IndexRecords, ReconcileOutcome, ReconcileReply};
 
@@ -231,11 +231,11 @@ impl Index {
         let mut more = false;
         for key in self.s.trie.keys_after(&reply.prefix, reply.after.as_ref()) {
             // A record that fits no page is passed over, as before.
-            if let Some(held) = self.s.held.get(&hash_of(key)) {
-                if matches!(pager.push(held.record.signed()), Ok(false)) {
-                    more = true;
-                    break;
-                }
+            if let Some(held) = self.s.held.get(&hash_of(key))
+                && matches!(pager.push(held.record.signed()), Ok(false))
+            {
+                more = true;
+                break;
             }
             reply.after = Some(*key);
         }

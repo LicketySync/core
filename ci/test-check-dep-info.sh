@@ -44,7 +44,7 @@ build() {
   local dir=$1
   shift
   git -C "$dir" add -A
-  (cd "$dir" && "$tmo" 120 rustc --edition 2021 --crate-type lib --crate-name toy "$@" \
+  (cd "$dir" && "$tmo" 120 rustc --edition 2024 --crate-type lib --crate-name toy "$@" \
     --emit dep-info=target/debug/deps/toy-0000000000000000.d,metadata=target/debug/deps/libtoy-0000000000000000.rmeta \
     crates/toy/src/lib.rs)
 }
@@ -312,7 +312,7 @@ t="$tmp/vendor"
 repo "$t"
 v="browser-tests/webtransport/vendor/x-1.0.0/src"
 mkdir -p "$t/$v"
-printf '#[link(name = "x", modifiers = "+verbatim")]\nextern "C" {}\n%s\n' "$hidden" > "$t/$v/new.rs"
+printf '#[link(name = "x", modifiers = "+verbatim")]\nunsafe extern "C" {}\n%s\n' "$hidden" > "$t/$v/new.rs"
 assembled "$t" "../../../$v/new.rs"
 build "$t"
 check "a workspace crate reading a file of the vendored tree" "$t" 1 \

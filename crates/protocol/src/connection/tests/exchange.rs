@@ -44,7 +44,7 @@ use crate::messages::{
 };
 use crate::parse::Parse;
 use crate::rules::Cause;
-use crate::testkit::{device, folder, s, signed, Pair, Part, Side};
+use crate::testkit::{Pair, Part, Side, device, folder, s, signed};
 
 fn bodies(side: &Side, t: u16) -> Vec<Vec<u8>> {
     side.sent
@@ -254,9 +254,11 @@ fn the_first_round_reconciles_both_ways() {
     assert_eq!(rounds(&p.b)[0].1, Some((p.a.store.epoch, 3)));
     assert_eq!(p.b.store.peers[&device_a()], (p.a.store.epoch, 3));
     // A pushed what B's RECORDS reply lacked, with through 0.
-    assert!(pages(&p.a)
-        .iter()
-        .any(|pg| pg.request_id == 0 && pg.through == 0 && pg.records.len() == 3));
+    assert!(
+        pages(&p.a)
+            .iter()
+            .any(|pg| pg.request_id == 0 && pg.through == 0 && pg.records.len() == 3)
+    );
 }
 
 #[test]
@@ -371,9 +373,7 @@ fn a_reset_for_another_epoch_and_a_since_above_the_local_sequence() {
     );
     let first = p.a.store.epoch;
     assert_ne!(first, u64::from(0xa0u8) << 8 | 1, "redrawn");
-    assert!(p
-        .a
-        .saw(|e| matches!(e, Event::ServeIndex { request, .. } if request.redraw_allowed)));
+    assert!(p.a.saw(|e| matches!(e, Event::ServeIndex { request, .. } if request.redraw_allowed)));
     // Again on the same connection: a reset, no new epoch.
     p.b.store.peers.insert(device_a(), (first, MAX_LOCAL_SEQ));
     let f = p.b.folder_id();
@@ -1414,11 +1414,11 @@ fn a_through_above_max_local_seq_is_never_sent_is3() {
         p2.a.conn.send_reconcile_reply(t2, &reply(over)).err(),
         Some(SendError::Malformed)
     );
-    assert!(p2
-        .a
-        .conn
-        .send_reconcile_reply(t2, &reply(MAX_LOCAL_SEQ))
-        .is_ok());
+    assert!(
+        p2.a.conn
+            .send_reconcile_reply(t2, &reply(MAX_LOCAL_SEQ))
+            .is_ok()
+    );
 }
 
 /// The epoch is redrawn at most once per connection, and the connection
@@ -1433,9 +1433,7 @@ fn a_second_redraw_on_one_connection_is_refused() {
         },
         |_| {},
     );
-    assert!(q
-        .a
-        .saw(|e| matches!(e, Event::ServeIndex { request, .. } if request.redraw_allowed)));
+    assert!(q.a.saw(|e| matches!(e, Event::ServeIndex { request, .. } if request.redraw_allowed)));
     q.a.serving = false;
     let f = q.b.folder_id();
     let e = q.a.store.epoch;
@@ -1455,11 +1453,11 @@ fn a_second_redraw_on_one_connection_is_refused() {
         q.a.conn.send_reset(t, f, request.request_id, e, true).err(),
         Some(SendError::RedrawSpent)
     );
-    assert!(q
-        .a
-        .conn
-        .send_reset(t, f, request.request_id, e, false)
-        .is_ok());
+    assert!(
+        q.a.conn
+            .send_reset(t, f, request.request_id, e, false)
+            .is_ok()
+    );
 }
 
 #[test]

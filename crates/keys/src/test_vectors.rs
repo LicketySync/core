@@ -29,16 +29,16 @@
 )]
 
 use prost::Message as _;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::chunk::{self, cipher_hash, open_chunk, padme, seal_chunk, MAX_STORED_LEN};
+use crate::chunk::{self, MAX_STORED_LEN, cipher_hash, open_chunk, padme, seal_chunk};
 use crate::device::{DeviceKey, DhtKey, Libp2pIdentity};
 use crate::discovery;
 use crate::folder::{FolderKey, WriteKey};
 use crate::handshake::Role;
 use crate::ids::{PathTag, RecordHash, SetDigest};
-use crate::keystring::{bech32m_encode, Link, HRP_READ, HRP_SEALED, HRP_WRITE, LINK_PREFIX};
-use crate::labels::{self, derive_key, REGISTRY};
+use crate::keystring::{HRP_READ, HRP_SEALED, HRP_WRITE, LINK_PREFIX, Link, bech32m_encode};
+use crate::labels::{self, REGISTRY, derive_key};
 use crate::linking::{self, LinkCode};
 use crate::records::{RecordType, SignedRecord};
 use crate::sealed_meta::MAX_INDEX_SEALED_BYTES;
@@ -431,10 +431,12 @@ fn vector_device() {
             device.public().verify_device_proof(&th, role, proof),
             Ok(())
         );
-        assert!(device
-            .public()
-            .verify_device_proof(&th, role.peer(), proof)
-            .is_err());
+        assert!(
+            device
+                .public()
+                .verify_device_proof(&th, role.peer(), proof)
+                .is_err()
+        );
     }
     check(
         "device",

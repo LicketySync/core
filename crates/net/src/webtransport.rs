@@ -45,22 +45,22 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
+use libp2p_core::Multiaddr;
 use libp2p_core::multiaddr::Protocol;
 use libp2p_core::multihash::Multihash;
 use libp2p_core::upgrade::InboundConnectionUpgrade as _;
-use libp2p_core::Multiaddr;
 use libp2p_identity::{Keypair, PeerId};
 use multistream_select::Negotiated;
-use rustls::crypto::{ActiveKeyExchange, CompletedKeyExchange, CryptoProvider, SupportedKxGroup};
 use rustls::NamedGroup;
+use rustls::crypto::{ActiveKeyExchange, CompletedKeyExchange, CryptoProvider, SupportedKxGroup};
 use tokio::io::{AsyncRead as TokioRead, AsyncWrite as TokioWrite, ReadBuf};
-use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::IncomingSession;
+use wtransport::endpoint::endpoint_side::Server;
 use wtransport::tls::Sha256Digest;
 use wtransport::{Endpoint, Identity, RecvStream, SendStream, ServerConfig, VarInt};
 
-use crate::limits::Limits;
 use crate::PROTOCOL_ID;
+use crate::limits::Limits;
 
 /// The path the libp2p WebTransport specification puts the session on.
 pub const NOISE_PATH: &str = "/.well-known/libp2p-webtransport?type=noise";

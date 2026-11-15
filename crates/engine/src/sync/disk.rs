@@ -67,7 +67,7 @@ use licketysync_keys::RecordHash;
 use licketysync_protocol::limits::{MAX_NAME_BYTES, MAX_PATH_BYTES};
 
 use crate::chunks::ChunkBook;
-use crate::issues::{bump, Counters};
+use crate::issues::{Counters, bump};
 
 /// The bytes of the record hash a shortened copy name shows, as 32 hex
 /// digits: copies of two records then share a shortened name only if their
@@ -196,10 +196,10 @@ fn apply_path(txn: &mut Txn<'_>, book: &ChunkBook, path: &str, counters: &mut Co
                 set(txn, place.clone(), None);
             }
         }
-        if let Some(tree) = want {
-            if !bases.contains(&(Place::Path, tree)) {
-                set(txn, Place::Path, Some(tree));
-            }
+        if let Some(tree) = want
+            && !bases.contains(&(Place::Path, tree))
+        {
+            set(txn, Place::Path, Some(tree));
         }
         return true;
     }
@@ -232,10 +232,10 @@ fn apply_path(txn: &mut Txn<'_>, book: &ChunkBook, path: &str, counters: &mut Co
     // it verified comes again); a new one is added only once its copy is on
     // the disk.
     for (place, record) in &bases {
-        if let Place::Copy(name) = place {
-            if slots.get(name) != Some(record) {
-                set(txn, place.clone(), None);
-            }
+        if let Place::Copy(name) = place
+            && slots.get(name) != Some(record)
+        {
+            set(txn, place.clone(), None);
         }
     }
     for (name, c) in &slots {
@@ -534,10 +534,10 @@ mod tests {
             let first = name.chars().next().unwrap().len_utf8();
             let copy = copy_name(&path, &record);
             let other = format!("{path}{more}");
-            if check_path(&other).is_ok() {
-                if let (Some(x), Some(y)) = (&copy, copy_name(&other, &neighbour)) {
-                    prop_assert_ne!(x, &y);
-                }
+            if check_path(&other).is_ok()
+                && let (Some(x), Some(y)) = (&copy, copy_name(&other, &neighbour))
+            {
+                prop_assert_ne!(x, &y);
             }
             match &copy {
                 None => prop_assert!(

@@ -185,9 +185,10 @@ mod tests {
     fn a_converging_scenario_exits_0_with_a_fingerprint() {
         let r = run(&args(&["clean", "3", "2"]));
         assert_eq!(r.code, 0, "{}", r.text);
-        assert!(r
-            .text
-            .starts_with("ok clean: 2 seed(s) from 3 converged (seed 3 trace "));
+        assert!(
+            r.text
+                .starts_with("ok clean: 2 seed(s) from 3 converged (seed 3 trace ")
+        );
         let again = run(&args(&["clean", "3", "2"]));
         assert_eq!(r, again, "the same seeds print the same fingerprint");
     }

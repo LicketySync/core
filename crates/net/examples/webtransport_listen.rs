@@ -25,7 +25,7 @@ use std::time::Duration;
 use libp2p_core::multihash::Multihash;
 use libp2p_identity::Keypair;
 use licketysync_net::limits::Limits;
-use licketysync_net::webtransport::{echo, KxPolicy, Listener, ListenerConfig, SHA2_256};
+use licketysync_net::webtransport::{KxPolicy, Listener, ListenerConfig, SHA2_256, echo};
 
 // The example uses a handful of the crate's dependencies; the rest are
 // acknowledged so the unused-crate lint stays quiet.

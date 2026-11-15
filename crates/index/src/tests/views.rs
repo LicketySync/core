@@ -13,7 +13,7 @@
 use licketysync_keys::{CipherHash, RecordHash, Tier};
 use licketysync_protocol::record::WriterFault;
 
-use super::kit::{chunk, dev, forge, sealed_file, Dev, T0};
+use super::kit::{Dev, T0, chunk, dev, forge, sealed_file};
 use crate::{BaseError, Change, Place, Store};
 
 const TIERS: [Tier; 3] = [Tier::Write, Tier::Read, Tier::Sealed];

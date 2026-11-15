@@ -13,9 +13,9 @@
     reason = "test code"
 )]
 
+use licketysync_keys::WriteKey;
 use licketysync_keys::folder::FolderKey;
 use licketysync_keys::records::Malformed;
-use licketysync_keys::WriteKey;
 use proptest::prelude::*;
 
 use super::*;
@@ -939,12 +939,13 @@ fn the_largest_records_fit() {
     t.meta.tree = true;
     t.meta.kind = Kind::Directory;
     let tree = parsed(&key, sign(&key, &t).unwrap());
-    assert!(tree
-        .open(&key.record_keys())
-        .unwrap()
-        .meta()
-        .unwrap()
-        .is_tree_delete());
+    assert!(
+        tree.open(&key.record_keys())
+            .unwrap()
+            .meta()
+            .unwrap()
+            .is_tree_delete()
+    );
 }
 
 /// A draft's record with an unknown field of `extra` bytes added to its body,

@@ -175,9 +175,14 @@ echo "== cargo-mutants shard $shard: $counts"
 # which cargo gives by its number only, "process didn't exit successfully:
 # `<runner> <test binary>` (signal: 25)" (cargo 1.99 names some signals, not
 # this one), and rustdoc by its name as well, "Test executable failed
-# (signal: 25 (SIGXFSZ))." for a doc-test. Checked with cargo and rustdoc
-# 1.99.1 on 2026-11-08, on a toy crate of the workspace's edition (2021: each
-# doc-test its own process).
+# (signal: 25 (SIGXFSZ))." for a doc-test run on its own. Checked with cargo
+# and rustdoc 1.99.1 on 2026-11-08, on a toy crate of edition 2021, where each
+# doc-test runs on its own. On edition 2024, the workspace's, rustdoc merges a
+# crate's doc-tests into one binary and runs it through the runner as one
+# process (checked with rustdoc 1.99.1 on 2026-11-14): the caps hold for those
+# doc-tests together, and one past the file cap leaves no sign, so its mutant
+# is counted caught but not capped. Doc-tests rustdoc cannot merge still run
+# on their own.
 mem_sign="memory allocation of [0-9]+ bytes failed"
 file_sign="process didn't exit successfully: .*\(signal: 25\)$|\(SIGXFSZ\)"
 # Of the caught mutants, those stopped by a cap: those whose log (its first

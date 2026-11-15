@@ -44,11 +44,7 @@ impl SimRng {
     /// A number in `0..n`, or 0 when `n` is 0. Taken by remainder: the bias of
     /// at most `n / 2^64` is invisible to a simulator.
     pub fn below(&mut self, n: u64) -> u64 {
-        if n == 0 {
-            0
-        } else {
-            self.next_u64() % n
-        }
+        if n == 0 { 0 } else { self.next_u64() % n }
     }
 
     /// `true` with probability `p`.

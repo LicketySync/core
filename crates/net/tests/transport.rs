@@ -40,18 +40,18 @@ use std::time::{Duration, Instant};
 
 use futures::channel::mpsc;
 use futures::{AsyncReadExt as _, AsyncWriteExt as _, StreamExt as _};
+use libp2p_core::Multiaddr;
 use libp2p_core::multiaddr::Protocol;
 use libp2p_core::transport::TransportError;
-use libp2p_core::Multiaddr;
 use libp2p_identity::PeerId;
 use libp2p_swarm::{ConnectionId, DialError, ListenError, Stream, StreamProtocol, SwarmEvent};
 use licketysync_keys::device::Libp2pIdentity;
 use licketysync_keys::secret::DeviceSeed;
 use licketysync_net::limits::Limits;
-use licketysync_net::node::{self, dial_opts::DialOpts, Event, Swarm};
-use licketysync_net::pieces::{Delivery, End, Pieces, MAX_PIECE};
+use licketysync_net::node::{self, Event, Swarm, dial_opts::DialOpts};
+use licketysync_net::pieces::{Delivery, End, MAX_PIECE, Pieces};
 use licketysync_net::sync::{self, OpenError};
-use licketysync_net::{identity, provider, PROTOCOL_ID};
+use licketysync_net::{PROTOCOL_ID, identity, provider};
 use rustls::{CipherSuite, NamedGroup, ProtocolVersion};
 
 /// Every test's bound on waiting: generous for a loaded CI runner, and a
@@ -182,10 +182,10 @@ fn serve(mut swarm: Swarm, serve: Serve) -> mpsc::UnboundedReceiver<Seen> {
                 }
                 _ => None,
             };
-            if let Some(seen) = seen {
-                if tx.unbounded_send(seen).is_err() {
-                    return;
-                }
+            if let Some(seen) = seen
+                && tx.unbounded_send(seen).is_err()
+            {
+                return;
             }
         }
     });
@@ -471,10 +471,12 @@ fn installed_default_provider_is_aws_lc_rs_with_x25519mlkem768_first() {
     );
     assert_eq!(groups(installed), groups(&aws_lc_rs));
     assert_eq!(suites(installed), suites(&aws_lc_rs));
-    assert!(installed
-        .cipher_suites
-        .iter()
-        .all(|s| s.version().version == ProtocolVersion::TLSv1_3));
+    assert!(
+        installed
+            .cipher_suites
+            .iter()
+            .all(|s| s.version().version == ProtocolVersion::TLSv1_3)
+    );
     assert_eq!(provider::check(installed), Ok(()));
 }
 
@@ -750,9 +752,11 @@ async fn connections_are_refused_above_the_memory_limit() {
     })
     .await;
     match refused {
-        Ok(ListenError::Denied { cause }) => assert!(cause
-            .downcast_ref::<libp2p_memory_connection_limits::MemoryUsageLimitExceeded>()
-            .is_some()),
+        Ok(ListenError::Denied { cause }) => assert!(
+            cause
+                .downcast_ref::<libp2p_memory_connection_limits::MemoryUsageLimitExceeded>()
+                .is_some()
+        ),
         other => panic!("not refused by the memory limit: {other:?}"),
     }
     dialer.abort();
@@ -765,9 +769,11 @@ async fn connections_are_refused_above_the_memory_limit() {
             .addresses(vec![addr])
             .build(),
     ) {
-        Err(DialError::Denied { cause }) => assert!(cause
-            .downcast_ref::<libp2p_memory_connection_limits::MemoryUsageLimitExceeded>()
-            .is_some()),
+        Err(DialError::Denied { cause }) => assert!(
+            cause
+                .downcast_ref::<libp2p_memory_connection_limits::MemoryUsageLimitExceeded>()
+                .is_some()
+        ),
         other => panic!("not refused by the memory limit: {other:?}"),
     }
 }

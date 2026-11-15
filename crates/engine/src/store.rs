@@ -374,7 +374,7 @@ pub(crate) fn stage_chunk_delete(
 )]
 mod tests {
     use super::*;
-    use crate::testkit::{signed_record, FakeStorage};
+    use crate::testkit::{FakeStorage, signed_record};
 
     fn changes() -> ChangeSet {
         let r1 = signed_record(1);

@@ -204,7 +204,7 @@ pub(crate) struct State {
 fn at_or_beneath<'a, V>(
     map: &'a BTreeMap<String, V>,
     dir: &str,
-) -> impl Iterator<Item = (&'a String, &'a V)> + 'a {
+) -> impl Iterator<Item = (&'a String, &'a V)> + use<'a, V> {
     let every = dir.is_empty().then(|| map.iter());
     let runs = (!dir.is_empty()).then(|| {
         let first = format!("{dir}/");
@@ -373,10 +373,10 @@ impl State {
         meta: &Meta,
         except: Option<&RecordHash>,
     ) -> Option<RecordHash> {
-        if !meta.tree {
-            if let Some(h) = self.covering_at_tag(tag, &meta.dot) {
-                return Some(h);
-            }
+        if !meta.tree
+            && let Some(h) = self.covering_at_tag(tag, &meta.dot)
+        {
+            return Some(h);
         }
         self.covering_tree_delete(&meta.path, &meta.dot, except)
     }
@@ -391,10 +391,10 @@ impl State {
         applied: Option<&Applied>,
     ) -> BTreeSet<RecordHash> {
         let mut out = BTreeSet::new();
-        if let Some(tag) = record.path_tag() {
-            if let Some(at) = self.at_tag.get(&tag) {
-                out.extend(record.replaces().iter().filter(|h| at.contains(h)));
-            }
+        if let Some(tag) = record.path_tag()
+            && let Some(at) = self.at_tag.get(&tag)
+        {
+            out.extend(record.replaces().iter().filter(|h| at.contains(h)));
         }
         for g in record.groups() {
             if g.because.as_ref().is_none_or(|b| self.is_held(b)) {
@@ -406,10 +406,11 @@ impl State {
                 out.extend(self.covered_beneath(&meta.path, &meta.vector));
             } else {
                 for h in self.at_tag.get(&tag).into_iter().flatten() {
-                    if let Some(m) = self.held.get(h).and_then(Held::meta) {
-                        if !m.tree && meta.vector.covers(&m.dot) {
-                            out.insert(*h);
-                        }
+                    if let Some(m) = self.held.get(h).and_then(Held::meta)
+                        && !m.tree
+                        && meta.vector.covers(&m.dot)
+                    {
+                        out.insert(*h);
                     }
                 }
             }
@@ -424,16 +425,14 @@ impl State {
     /// a tree delete, beneath it through the index by path.
     pub(crate) fn replaces_any(&self, record: &Record, applied: Option<&Applied>) -> bool {
         let hash = record.hash();
-        if let Some(tag) = record.path_tag() {
-            if let Some(at) = self.at_tag.get(&tag) {
-                if record
-                    .replaces()
-                    .iter()
-                    .any(|h| *h != hash && at.contains(h))
-                {
-                    return true;
-                }
-            }
+        if let Some(tag) = record.path_tag()
+            && let Some(at) = self.at_tag.get(&tag)
+            && record
+                .replaces()
+                .iter()
+                .any(|h| *h != hash && at.contains(h))
+        {
+            return true;
         }
         if record.groups().iter().any(|g| {
             g.because.as_ref().is_none_or(|b| self.is_held(b))
@@ -463,10 +462,10 @@ impl State {
             return Some(Replacer::Name);
         }
         let (tag, meta) = (record.path_tag()?, applied?.meta()?);
-        if !meta.tree {
-            if let Some(h) = self.covering_at_tag(&tag, &meta.dot) {
-                return Some(Replacer::Covered(h));
-            }
+        if !meta.tree
+            && let Some(h) = self.covering_at_tag(&tag, &meta.dot)
+        {
+            return Some(Replacer::Covered(h));
         }
         self.covering_tree_delete(&meta.path, &meta.dot, Some(&record.hash()))
             .map(Replacer::Beneath)
@@ -659,12 +658,12 @@ impl State {
                     }
                 }
             }
-            if let Some(b) = g.because {
-                if let Some(set) = self.by_because.get_mut(&b) {
-                    set.remove(&(*hash, gi));
-                    if set.is_empty() {
-                        self.by_because.remove(&b);
-                    }
+            if let Some(b) = g.because
+                && let Some(set) = self.by_because.get_mut(&b)
+            {
+                set.remove(&(*hash, gi));
+                if set.is_empty() {
+                    self.by_because.remove(&b);
                 }
             }
         }
@@ -738,22 +737,23 @@ impl State {
         if hash.is_none() {
             self.base_slot_removed(&slot.0);
         }
-        if let Some(o) = old {
-            if let Some(set) = self.slots_of.get_mut(&o) {
-                set.remove(&slot);
-                if set.is_empty() {
-                    self.slots_of.remove(&o);
-                    self.remove_base_only(&o, undo.as_deref_mut());
-                }
+        if let Some(o) = old
+            && let Some(set) = self.slots_of.get_mut(&o)
+        {
+            set.remove(&slot);
+            if set.is_empty() {
+                self.slots_of.remove(&o);
+                self.remove_base_only(&o, undo.as_deref_mut());
             }
         }
         if let Some(h) = hash {
             let tag = slot.0;
             self.slots_of.entry(h).or_default().insert(slot);
-            if !self.held.contains_key(&h) && !self.base_only.contains_key(&h) {
-                if let Some(b) = base {
-                    self.put_base_only(b, undo);
-                }
+            if !self.held.contains_key(&h)
+                && !self.base_only.contains_key(&h)
+                && let Some(b) = base
+            {
+                self.put_base_only(b, undo);
             }
             if old.is_none() {
                 self.base_slot_added(tag, &h);
@@ -782,10 +782,8 @@ impl State {
             entry.1 = entry.1.saturating_sub(1);
             entry.1 == 0
         });
-        if last {
-            if let Some((path, _)) = self.base_tags.remove(tag) {
-                self.base_paths.remove(&path);
-            }
+        if last && let Some((path, _)) = self.base_tags.remove(tag) {
+            self.base_paths.remove(&path);
         }
     }
 
@@ -797,7 +795,7 @@ impl State {
     pub(crate) fn base_slots_at_or_beneath<'a>(
         &'a self,
         dir: &str,
-    ) -> impl Iterator<Item = (&'a str, &'a BaseSlot, &'a RecordHash)> + 'a {
+    ) -> impl Iterator<Item = (&'a str, &'a BaseSlot, &'a RecordHash)> + use<'a> {
         at_or_beneath(&self.base_paths, dir).flat_map(move |(path, tag)| {
             self.read_beneath();
             self.bases
@@ -862,12 +860,12 @@ impl State {
             return;
         };
         self.note_order.remove(&note.nr);
-        if let Noted::Stale { tag, .. } = &note.noted {
-            if let Some(set) = self.notes_at.get_mut(tag) {
-                set.remove(hash);
-                if set.is_empty() {
-                    self.notes_at.remove(tag);
-                }
+        if let Noted::Stale { tag, .. } = &note.noted
+            && let Some(set) = self.notes_at.get_mut(tag)
+        {
+            set.remove(hash);
+            if set.is_empty() {
+                self.notes_at.remove(tag);
             }
         }
         log(undo, Undo::NoteRemoved(Box::new(note)));
@@ -882,10 +880,10 @@ impl State {
                 }
                 Undo::Unheld(held) => self.raw_hold(*held),
                 Undo::BaseOnlyPut(h) => {
-                    if let Some(b) = self.base_only.remove(&h) {
-                        if b.meta.deleted {
-                            self.base_deletions.remove(&(b.meta.dot.counter, h));
-                        }
+                    if let Some(b) = self.base_only.remove(&h)
+                        && b.meta.deleted
+                    {
+                        self.base_deletions.remove(&(b.meta.dot.counter, h));
                     }
                 }
                 Undo::BaseOnlyRemoved(b) => self.put_base_only(*b, None),
@@ -902,12 +900,12 @@ impl State {
                         (None, Some(o)) => self.base_slot_added(slot.0, &o),
                         _ => {}
                     }
-                    if let Some(n) = now {
-                        if let Some(set) = self.slots_of.get_mut(&n) {
-                            set.remove(&slot);
-                            if set.is_empty() {
-                                self.slots_of.remove(&n);
-                            }
+                    if let Some(n) = now
+                        && let Some(set) = self.slots_of.get_mut(&n)
+                    {
+                        set.remove(&slot);
+                        if set.is_empty() {
+                            self.slots_of.remove(&n);
                         }
                     }
                     if let Some(o) = old {

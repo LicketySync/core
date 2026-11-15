@@ -38,11 +38,11 @@ use licketysync_protocol::{Cause, CloseReason, Report};
 use crate::config::{self, ConfigError, EngineConfig, Settings};
 use crate::conn::Conn;
 use crate::folder::FolderState;
-use crate::inflight::{patience, InFlight};
-use crate::issues::{bump, Counters, Issue, IssueKind, Issues, Subject};
+use crate::inflight::{InFlight, patience};
+use crate::issues::{Counters, Issue, IssueKind, Issues, Subject, bump};
 use crate::runtime::{Context, Instant, Peer, PeerId, TimerId};
 use crate::timers::{Purpose, TimerTable};
-use crate::work::{pop, Work};
+use crate::work::{Work, pop};
 
 /// The sync engine of one device (the crate documentation).
 pub struct Engine {
@@ -533,7 +533,7 @@ impl Engine {
                 return FolderState::Misconfigured {
                     dropped,
                     undecodable,
-                }
+                };
             }
             crate::folder::Health::Unreadable => return FolderState::Unreadable,
             crate::folder::Health::Usable => {}
@@ -753,13 +753,13 @@ impl Peer for Engine {
 mod tests {
     use core::time::Duration;
 
-    use licketysync_protocol::frame::{Frame, FrameKind, MessageType};
     use licketysync_protocol::Cause;
+    use licketysync_protocol::frame::{Frame, FrameKind, MessageType};
 
-    use crate::runtime::{Instant, PeerId, MAX_SEND_QUEUE};
-    use crate::testkit::{config, folder_key, Hold, Net};
-    use crate::tests::{folder, pair, write};
     use crate::FolderState;
+    use crate::runtime::{Instant, MAX_SEND_QUEUE, PeerId};
+    use crate::testkit::{Hold, Net, config, folder_key};
+    use crate::tests::{folder, pair, write};
 
     #[test]
     fn an_idle_engine_sets_no_timer_and_the_free_tick_only_while_chunks_wait() {

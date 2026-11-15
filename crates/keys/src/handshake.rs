@@ -32,7 +32,7 @@
 
 use core::fmt;
 
-use crate::aead::{xchacha_open, xchacha_seal, AeadError, SealError};
+use crate::aead::{AeadError, SealError, xchacha_open, xchacha_seal};
 use crate::folder::FolderKey;
 use crate::ids::FolderId;
 use crate::labels::{keyed_hash, keyed_hash_into};

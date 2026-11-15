@@ -45,7 +45,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use licketysync_engine::inspect::{
-    conflict_copy_name, stored_blob, FolderView, Place, RecordState,
+    FolderView, Place, RecordState, conflict_copy_name, stored_blob,
 };
 use licketysync_engine::runtime::PeerId;
 use licketysync_engine::{Engine, FolderState, Issue, IssueKind};

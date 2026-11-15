@@ -72,9 +72,9 @@ impl Conn {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
+    use crate::FolderState;
     use crate::runtime::{Peer as _, PeerId};
     use crate::tests::{pair, state};
-    use crate::FolderState;
 
     #[test]
     fn a_connection_whose_close_is_flushing_counts_for_no_folder() {

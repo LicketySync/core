@@ -61,7 +61,7 @@ use prost::bytes::Buf;
 
 use crate::folder::{FolderVerifier, WriteKey};
 use crate::ids::RecordHash;
-use crate::labels::{self, labelled_hash, SigLabel};
+use crate::labels::{self, SigLabel, labelled_hash};
 use crate::sig::{self, Signature, SignatureError};
 
 /// The largest encoded [`SignedRecord`] (`protocol.md` 2,
@@ -406,10 +406,11 @@ fn scan_fields(body: &[u8], shape: &Shape<'_>) -> Result<(), Malformed> {
         let (field, wire_type) =
             prost::encoding::decode_key(&mut buf).map_err(|_| Malformed::Decode)?;
         let value = take_value(&mut buf, wire_type)?;
-        if let Some(v) = value {
-            if shape.u32_fields.contains(&field) && u32::try_from(v).is_err() {
-                return Err(Malformed::VarintRange(field));
-            }
+        if let Some(v) = value
+            && shape.u32_fields.contains(&field)
+            && u32::try_from(v).is_err()
+        {
+            return Err(Malformed::VarintRange(field));
         }
         if (1..=shape.fields).contains(&field) {
             let bit = 1u64.checked_shl(field).ok_or(Malformed::Decode)?;
@@ -453,8 +454,8 @@ mod tests {
     use super::*;
     use crate::folder::tests::write_key;
     use proptest::prelude::*;
-    use prost::encoding::{encode_key, encode_varint, WireType};
     use prost::Message as _;
+    use prost::encoding::{WireType, encode_key, encode_varint};
 
     /// A body with the common prefix and one unknown field, as an index
     /// record's would begin.
@@ -499,13 +500,15 @@ mod tests {
         assert_eq!(w.read_key().verifier().verify_record(&record), Ok(()));
         assert_eq!(w.sealed_key().verifier().verify_record(&record), Ok(()));
         // The signature is over the index label, so it is no device proof.
-        assert!(sig::verify(
-            v.verifying_key().key(),
-            labels::SIG_DEVICE_PROOF,
-            record.body(),
-            record.signature()
-        )
-        .is_err());
+        assert!(
+            sig::verify(
+                v.verifying_key().key(),
+                labels::SIG_DEVICE_PROOF,
+                record.body(),
+                record.signature()
+            )
+            .is_err()
+        );
         assert_eq!(
             record.hash().0,
             labelled_hash(labels::HASH_RECORD, &[record.body()])

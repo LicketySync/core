@@ -202,9 +202,10 @@ pub fn read_through(p: *const u8) -> u8 {
     sneak!(p)
 }
 
-// The constructs the lint forbids that need no such block in edition 2021,
-// each from another crate's macro: a symbol exported under its own name or
-// another (a caller's malloc, say), a linker section, and assembly.
+// The constructs the lint forbids that need neither such a block nor the word
+// in a crate on edition 2021, each from another crate's macro: a symbol
+// exported under its own name or another (a caller's malloc, say), a linker
+// section, and assembly.
 #[macro_export]
 macro_rules! export_as {
     ($f:ident) => {

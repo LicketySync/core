@@ -19,8 +19,8 @@
 
 use core::fmt;
 
-use libp2p_identity::{ed25519, DecodingError, Keypair, PeerId};
-use licketysync_keys::device::{check_peer_identity_key, Libp2pIdentity};
+use libp2p_identity::{DecodingError, Keypair, PeerId, ed25519};
+use licketysync_keys::device::{Libp2pIdentity, check_peer_identity_key};
 
 /// The libp2p keypair of `identity`.
 ///
