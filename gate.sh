@@ -269,6 +269,10 @@ step ci/test-geiger.sh
 step ci/geiger.sh
 step ci/test-no-hostnames.sh
 step ci/no-hostnames.sh
+# Every tracked path one Windows can hold: Git for Windows refuses to check out
+# any other, and the whole checkout with it.
+step ci/test-windows-paths.sh
+step python3 -I ci/windows-paths.py
 # Every action in the workflows pinned by commit, and the workflows' Rust
 # toolchains (the pinning rule in ci.yml's header); ci/toolchains.sh itself ran
 # with the pins above.

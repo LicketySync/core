@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rustix::fs::{FileType, Mode};
 use rustix::io::Errno;
 
-use super::unix::{Bounds, DIRECTORY, Meta};
+use super::unix::{Bounds, DIRECTORY, DeviceNumber, Meta, meta_from_stat};
 use super::*;
 use crate::name::{HIDDEN_DIR, IndexPath, Name, NameError, NamePolicy};
 
@@ -411,6 +411,31 @@ fn a_mount_point_beneath_the_root_is_another_file_system() {
                 "{p}: {got:?}"
             );
         }
+    }
+}
+
+/// A device number macOS reports as negative (devfs's `dev_t`, an `i32`
+/// holding a 32-bit hash) is widened as std widens it, never refused as out
+/// of range: a root at `/dev`, and `/dev` beneath a root at `/`, failed on
+/// macOS with `EOVERFLOW`.
+#[test]
+fn a_negative_device_number_as_macos_devfs_has_is_widened_not_an_overflow() {
+    assert_eq!((-1_i32).widened(), u64::MAX);
+    assert_eq!(i32::MIN.widened(), 0xFFFF_FFFF_8000_0000);
+    assert_eq!(i32::MAX.widened(), 0x7FFF_FFFF);
+    assert_eq!(0_i32.widened(), 0);
+    for dev in [0, 1, 0x1_0000_0004, u64::MAX] {
+        assert_eq!(dev.widened(), dev);
+    }
+}
+
+/// A `stat`'s device number is the one std reports, for `/` and for `/dev`
+/// (devfs on macOS, devtmpfs on Linux), so that the two compare equal.
+#[test]
+fn the_device_numbers_of_root_and_dev_are_the_ones_std_reports() {
+    for path in ["/", "/dev"] {
+        let meta = meta_from_stat(&rustix::fs::stat(path).unwrap()).unwrap();
+        assert_eq!(meta.id.dev, fs::metadata(path).unwrap().dev(), "{path}");
     }
 }
 

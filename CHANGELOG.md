@@ -5,6 +5,20 @@ changed and why.
 
 ## Unreleased
 
+- Disk: the fs crate, as CI first ran it on macOS and Windows.
+  - macOS: a root at `/dev`, and `/dev` beneath a root at `/`, failed with `EOVERFLOW` ("Value too
+    large to be stored in data type") rather than opening, or being refused as another file system.
+    macOS's `dev_t` is an `i32`, and devfs's device number is a 32-bit hash of a kernel address
+    (XNU's `devfs_getattr`), negative as often as not, which the resolver refused as out of range.
+    It is now sign-extended, as std's `MetadataExt::dev` reports it. Regression tests
+    `a_negative_device_number_as_macos_devfs_has_is_widened_not_an_overflow` and
+    `the_device_numbers_of_root_and_dev_are_the_ones_std_reports`.
+  - Windows: no checkout could be made: the fuzz seed `fuzz/seeds/disk_names/nul` (a name holding
+    NUL) is named for a device, which Windows cannot hold; it is now `nul-byte`.
+    `ci/windows-paths.py`, run by `gate.sh` and a CI job of its own and tested by
+    `ci/test-windows-paths.sh`, fails on any tracked path Windows cannot hold, by the Windows rules
+    of `crates/fs/src/name.rs`: reserved and control characters, a trailing dot or space, and the
+    device names with any extension.
 - Disk: a new crate, `licketysync-fs` (`crates/fs`), for what phase 1 reads and writes on a folder's
   disk, with the name policy and the beneath-root path resolver (TM-4), the one way into the disk.
   - **The name policy:** which names a device can store, and how a name read from the disk becomes a

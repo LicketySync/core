@@ -106,7 +106,7 @@ pub const CROSSES_MOUNTS: bool = false;
 /// rename keeps and a replacement changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileId {
-    /// The device (`st_dev`).
+    /// The device (`st_dev`), as std's `MetadataExt::dev` reports it.
     pub dev: u64,
     /// The inode (`st_ino`).
     pub ino: u64,

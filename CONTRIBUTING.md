@@ -105,11 +105,12 @@ group. The groups:
 7. **The CI scripts**, each check with the test that runs it on made-up
    inputs: cargo-geiger's counts against the baseline (`ci/test-geiger.sh`,
    `ci/geiger.sh`); no hostname beyond `spec/allowed-hosts.txt`
-   (`ci/test-no-hostnames.sh`, `ci/no-hostnames.sh`); every action in the
-   workflows pinned by commit (`ci/test-pinned-actions.sh`,
-   `ci/pinned-actions.sh`); the tests of group 1's two checks
-   (`ci/test-toolchains.sh`, `ci/test-check-pins.sh`); the line-ending
-   attributes of the test vectors and fuzz seeds
+   (`ci/test-no-hostnames.sh`, `ci/no-hostnames.sh`); every tracked path one
+   Windows can hold (`ci/test-windows-paths.sh`, `ci/windows-paths.py`);
+   every action in the workflows pinned by commit
+   (`ci/test-pinned-actions.sh`, `ci/pinned-actions.sh`); the tests of group
+   1's two checks (`ci/test-toolchains.sh`, `ci/test-check-pins.sh`); the
+   line-ending attributes of the test vectors and fuzz seeds
    (`ci/test-vector-line-endings.sh`); the scripts the weekly and nightly
    workflows run, on stand-ins for their tools or made-up logs
    (`ci/test-mutants.sh`, `ci/test-fuzz-targets.sh`,
@@ -117,8 +118,8 @@ group. The groups:
    (`ci/test-check-wasm-bindgen.sh`, `ci/test-check-vendored.sh`); and the
    download helper with the check that nothing downloads without it
    (`ci/test-download.sh`, `ci/check-downloads.sh`); the helper that picks
-   sccache (`ci/test-rustc-wrapper.sh`); and the dep-info check on toy crates
-   (`ci/test-check-dep-info.sh`).
+   sccache (`ci/test-rustc-wrapper.sh`); and the dep-info check on toy
+   crates (`ci/test-check-dep-info.sh`).
 8. **Coverage**: at least 90% of lines in each of the keys, protocol,
    index, engine and fs crates, measured per crate, after
    `cargo llvm-cov clean --workspace`. These are the gate's only runs of those

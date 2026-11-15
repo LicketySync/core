@@ -76,7 +76,7 @@ pub(super) fn meta_from_stat(st: &Stat) -> Result<Meta, Errno> {
     Ok(Meta {
         file_type: FileType::from_raw_mode(st.st_mode),
         id: FileId {
-            dev: number(st.st_dev)?,
+            dev: st.st_dev.widened(),
             ino: number(st.st_ino)?,
         },
         mount: None,
@@ -99,6 +99,28 @@ pub(super) fn meta_from_stat(st: &Stat) -> Result<Meta, Errno> {
 /// differ by platform and architecture.
 fn number<T: TryInto<U>, U>(value: T) -> Result<U, Errno> {
     value.try_into().map_err(|_| Errno::OVERFLOW)
+}
+
+/// A `stat`'s device number (`dev_t`) as std's `MetadataExt::dev` reports
+/// it. Linux's is a `u64`; macOS's is an `i32`, and devfs's is negative as
+/// often as not (its `devfs_getattr` gives a 32-bit hash of a kernel
+/// address), so it is sign-extended, as std's `as u64` does, never refused
+/// as out of range.
+pub(super) trait DeviceNumber {
+    /// The device number as a `u64`.
+    fn widened(self) -> u64;
+}
+
+impl DeviceNumber for u64 {
+    fn widened(self) -> u64 {
+        self
+    }
+}
+
+impl DeviceNumber for i32 {
+    fn widened(self) -> u64 {
+        i64::from(self).cast_unsigned()
+    }
 }
 
 /// What every component beneath a root is checked against.

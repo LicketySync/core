@@ -490,6 +490,19 @@ jobs:
       - run: ci/test-no-hostnames.sh
       - run: ci/no-hostnames.sh
 
+  # Every tracked path one Windows can hold: Git for Windows refuses to check
+  # out any other, and the Windows jobs' whole checkout with it, so this runs
+  # on Linux. gate.sh runs the same two scripts.
+  windows-paths:
+    name: every tracked path valid on Windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/test-windows-paths.sh
+      - run: python3 -I ci/windows-paths.py
+
   # The action half of the pinning rule at the top of this file, checked in
   # every workflow here; gate.sh runs the same two scripts.
   pinned-actions:
