@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Spike B, browser half: headless Chrome dials the native listeners
+//! The WebTransport check, browser half: headless Chrome dials the native listeners
 //! (`crates/net/examples/webtransport_listen.rs`) with
 //! `libp2p-webtransport-websys`, given only each listener's multiaddr
 //! (address, certhash, peer ID). The addresses come in at build time from the

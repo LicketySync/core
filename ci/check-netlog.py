@@ -2,7 +2,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
-"""Spike B: read Chrome's net log from a browser run.
+"""Read Chrome's net log from a browser run.
 
 1. Fails if Chrome connected anywhere but loopback (the tests use 127.0.0.1 only).
 2. For every WebTransport session, prints the URL, how it ended, and the outer TLS facts Chrome

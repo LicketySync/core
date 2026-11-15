@@ -35,7 +35,7 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
-  # browser-tests/webtransport (spike B) is a third workspace, with its own
+  # browser-tests/webtransport is a third workspace, with its own
   # Cargo.lock. Its wasm-bindgen crates are left to the weekly refresh, which
   # moves them together with WASM_BINDGEN_CLI in ci/pins.env (the CLI the
   # nightly webtransport-chrome job runs must be their version; CONTRIBUTING.md),

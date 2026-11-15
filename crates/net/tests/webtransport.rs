@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Spike B: the WebTransport listener against a native dialer that does what
+//! The WebTransport listener against a native dialer that does what
 //! the browser does (wtransport's client, certificate-hash check, Noise as
 //! initiator with the dialed hashes, multistream-select), and against a raw
 //! QUIC client for the TM-23 containment. No browser, so

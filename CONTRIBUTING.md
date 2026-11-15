@@ -89,7 +89,7 @@ group. The groups:
 3. **Dependencies**: `cargo deny` (and the production bans of
    `deny-production.toml`), `cargo audit` on core's lockfile and on `fuzz/`'s,
    `cargo machete`, `cargo vet --locked`.
-4. **The browser test crate**, `browser-tests/webtransport` (spike B), a
+4. **The browser test crate**, `browser-tests/webtransport`, a
    workspace of its own: its lockfile fetched `--locked`, audited,
    deny-checked and vetted against its own `supply-chain/`; its code formatted
    and clippy pedantic on wasm32; `ci/check-vendored.sh` (the vendored
@@ -320,7 +320,7 @@ change:
   newer release to move to; a bump pins the commit `v1` names that day;
 - transitive crates, which Dependabot skips: `cargo update` here, in
   `fuzz/` (whose `Cargo.lock` the fuzz jobs build from with `--locked`
-  checked) and in `browser-tests/webtransport` (spike B's browser test crate,
+  checked) and in `browser-tests/webtransport` (the browser test crate,
   with its own `supply-chain/` store), taking back with `cargo update
   --precise` any version younger than 7 days, then `cargo deny`, `cargo audit`
   (and `cargo audit --file` on the other two lockfiles), `cargo vet` in both
@@ -339,7 +339,7 @@ change:
   and shared crates at 0.2.108 and `js-sys` and `web-sys` at 0.3.85 in
   `Cargo.lock` (no native build compiles them), so a refresh leaves them
   until `libp2p-swarm` moves. Phase 6's browser build must settle it: the
-  app's web UI and the `wasm-bindgen-cli` the spikes use are on 0.2.129, and
+  app's web UI and the `wasm-bindgen-cli` the browser tests use are on 0.2.129, and
   one wasm build holds one `wasm-bindgen`.
 
 The same review reads the result of the last `codecov` job on `main`, since

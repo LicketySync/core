@@ -6,7 +6,7 @@
 //! offering X25519MLKEM768 first, the device's libp2p identity, connection
 //! limits, and the one byte stream of `/licketysync/sync/1`.
 //!
-//! Status: phase 0's transport spike (spike A of the phase 0 spikes). The
+//! Status: the transports, not yet wired to the engine. The
 //! plan ("LicketySync: Project Plan") is the specification; `spec/suites.md`
 //! section 2.6 fixes the transport suite and section 3.1 the crates, and
 //! `spec/threat-model.md` the rules this crate enforces (TM-1, TM-2, TM-6,
@@ -26,7 +26,7 @@
 //! - [`pieces`]: reading such a stream as the engine's runtime contract asks:
 //!   bytes in order, at most [`pieces::MAX_PIECE`] at a time, and the end
 //!   reported.
-//! - `webtransport` (feature `webtransport`, off by default; spike B):
+//! - `webtransport` (feature `webtransport`, off by default):
 //!   a device-side WebTransport listener that a browser dials with only an
 //!   address and a certificate hash, Noise inside it.
 //!

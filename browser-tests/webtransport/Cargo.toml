@@ -1,4 +1,4 @@
-# Spike B: the browser half of the WebTransport check. A
+# The browser half of the WebTransport check. A
 # workspace of its own, outside core's: libp2p-swarm 0.48.0 (in core's tree)
 # pins wasm-bindgen-futures =0.4.58 and so wasm-bindgen =0.2.108 in core's
 # Cargo.lock, while this crate needs the pinned wasm-bindgen-cli's 0.2.129.

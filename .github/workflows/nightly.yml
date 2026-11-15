@@ -1,5 +1,5 @@
 # The slow checks the plan's checks table runs nightly: fuzzing, Miri,
-# cargo-careful, the long simulator runs, spike B's WebTransport check in
+# cargo-careful, the long simulator runs, the WebTransport check in
 # headless Chrome, and the daily advisory feed
 # (cargo-audit against the lockfile, TM-8 and TM-22: a vulnerability published
 # after a crate was added is caught without a code change). Nightly on main;
@@ -193,8 +193,8 @@ jobs:
             esac
           done
 
-  # Spike B's check (pass condition B2), nightly because Chrome and the pins
-  # move (owner decision 2 of the spike brief): net's WebTransport listeners
+  # The WebTransport check, nightly because Chrome and the pins
+  # move: net's WebTransport listeners
   # (feature webtransport) on 127.0.0.1, dialed from headless Chrome by
   # browser-tests/webtransport with only an address and a certificate hash;
   # then ci/check-netlog.py reads Chrome's net log for the outer key exchange
@@ -205,7 +205,7 @@ jobs:
   # WASM_BINDGEN_CLI from crates.io, the version the test crate's
   # wasm-bindgen pins (gate.sh checks both copies).
   webtransport-chrome:
-    name: WebTransport from headless Chrome (spike B)
+    name: WebTransport from headless Chrome
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

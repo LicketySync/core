@@ -234,7 +234,7 @@ step cargo audit
 step cargo audit --file fuzz/Cargo.lock
 step cargo machete
 step cargo vet --locked
-# browser-tests/webtransport (spike B) is a workspace of its own: its
+# browser-tests/webtransport is a workspace of its own: its
 # lockfile is current, audited, deny-checked against deny.toml and vetted
 # against its own supply-chain/; its code is formatted and passes clippy
 # pedantic on wasm32, the only target it builds for; and its vendored

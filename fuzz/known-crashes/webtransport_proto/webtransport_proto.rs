@@ -1,6 +1,6 @@
 #![no_main]
 //! wtransport-proto 0.7.2, the HTTP/3 and WebTransport framing beneath net's
-//! WebTransport listener (feature `webtransport`, spike B), over bytes from a
+//! WebTransport listener (feature `webtransport`), over bytes from a
 //! peer: a stream header, then frames as a stream carries them; a HEADERS
 //! frame goes through QPACK decoding into a session request, a SETTINGS frame
 //! into settings. TM-3 and TM-23: none of it may panic.

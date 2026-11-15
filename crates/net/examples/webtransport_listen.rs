@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Spike B: the listeners the headless-Chrome test dials, all on
+//! The WebTransport listeners the headless-Chrome test dials, all on
 //! 127.0.0.1. Prints `ADDR <name> <multiaddr>` for each, then `READY`, then
 //! one `REPORT` line per session, and exits after the deadline (the first
 //! argument, seconds, 180 by default). Run by `ci/webtransport-chrome.sh`:

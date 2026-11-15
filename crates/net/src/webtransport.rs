@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! A device-side WebTransport listener that a browser can dial with only an
-//! address and a certificate hash (spike B; feature `webtransport`, off by
+//! address and a certificate hash (feature `webtransport`, off by
 //! default).
 //!
 //! The listener is `wtransport` on `aws-lc-rs` with a rustls configuration
@@ -343,7 +343,7 @@ pub struct ListenerConfig {
     /// such a certificate).
     pub validity_days: u32,
     /// Allows a validity above [`MAX_VALIDITY_DAYS`] (tests only; a public
-    /// knob of the spike, like `noise_hashes_override` and
+    /// knob, like `noise_hashes_override` and
     /// [`KxPolicy::ClassicalOnly`], that phase 6 moves behind a test-only
     /// interface).
     pub allow_long_validity: bool,
@@ -779,7 +779,7 @@ where
         .map_err(|_| WebTransportError::Timeout(what))?
 }
 
-/// The spike's stand-in for the protocol: copies what arrives back, in
+/// The stand-in for the protocol: copies what arrives back, in
 /// pieces of at most [`PIECE`], until the remote finishes, then finishes.
 ///
 /// # Errors

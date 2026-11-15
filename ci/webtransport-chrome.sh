@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Spike B: the headless-Chrome WebTransport test. Starts
+# The headless-Chrome WebTransport test. Starts
 # net's example listeners on 127.0.0.1, runs browser-tests/webtransport in
 # headless Chrome against them (wasm-bindgen-test-runner + chromedriver), and
 # checks Chrome's net log: no packet off loopback, and the outer TLS facts

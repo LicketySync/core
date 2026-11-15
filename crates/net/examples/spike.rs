@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Spike A by hand (pass condition A1), on 127.0.0.1: every socket that stays
+//! Two peers connected by hand on 127.0.0.1: every socket that stays
 //! bound is on 127.0.0.1; quinn-udp's GSO and GRO checks open and close `[::]`
 //! sockets without sending. In one terminal:
 //!

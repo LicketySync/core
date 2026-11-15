@@ -30,7 +30,7 @@ futures = "0.3.34"
 # ICU4X back end that 1.1 and later bring, and dependabot.yml skips them.
 idna_adapter = "~1.0"
 
-# Spike B (feature `webtransport`, off by default): a device-side
+# The WebTransport listener (feature `webtransport`, off by default): a device-side
 # WebTransport listener a browser dials with an address and a certificate
 # hash. wtransport on aws-lc-rs (its ring feature off; `quinn` only exposes
 # quinn's transport configuration, for net's windows and stream limit), Noise
@@ -65,12 +65,12 @@ hex = "0.4"
 name = "spike"
 test = true
 
-# Spike B: its native tests, built only with the feature.
+# The WebTransport listener's native tests, built only with the feature.
 [[test]]
 name = "webtransport"
 required-features = ["webtransport"]
 
-# Spike B: the listeners the headless-Chrome test dials (ci/webtransport-chrome.sh).
+# The WebTransport listeners the headless-Chrome test dials (ci/webtransport-chrome.sh).
 [[example]]
 name = "webtransport_listen"
 required-features = ["webtransport"]

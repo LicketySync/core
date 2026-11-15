@@ -67,7 +67,7 @@ jobs:
           toolchain: 1.99.1
           components: rustfmt
       - run: cargo fmt --all --check
-      # browser-tests/webtransport (spike B), a workspace of its own.
+      # browser-tests/webtransport, a workspace of its own.
       - run: cargo fmt --manifest-path browser-tests/webtransport/Cargo.toml --check
 
   clippy:
@@ -79,7 +79,7 @@ jobs:
         with:
           toolchain: 1.99.1
           components: clippy
-          # browser-tests/webtransport (spike B) builds for wasm32 only.
+          # browser-tests/webtransport builds for wasm32 only.
           targets: wasm32-unknown-unknown
       # No workspace crate's build in the cache, so that every .d file
       # ci/check-dep-info.sh reads is this run's (also the default).
@@ -226,7 +226,7 @@ jobs:
           use_oidc: true
           fail_ci_if_error: true
 
-  # licketysync-net for the phone targets (spike A of phase 0): aws-lc-sys,
+  # licketysync-net for the phone targets: aws-lc-sys,
   # ring and quinn cross-compile for aarch64-linux-android with the pinned
   # NDK and for aarch64-apple-ios with the pinned Xcode, so that the app shells
   # (phases 3 and 4) link a transport that builds. A build, not a test: no
@@ -340,7 +340,7 @@ jobs:
         run: cargo vet --locked
       # fuzz/Cargo.lock, which nightly.yml's fuzz jobs build from, is current.
       - run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
-      # browser-tests/webtransport (spike B), a workspace of its own, as gate.sh
+      # browser-tests/webtransport, a workspace of its own, as gate.sh
       # checks it: its lockfile current, audited, deny-checked against
       # deny.toml and vetted against its own supply-chain/, and its vendored
       # crate the copy vendor/SHA256SUMS lists.

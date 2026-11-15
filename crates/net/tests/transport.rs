@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Spike A's pass condition A2, on loopback (TM-31): real swarms over QUIC
+//! The transports on loopback (TM-31): real swarms over QUIC
 //! and TCP on 127.0.0.1, each test under a deadline and none sleeping. Every
 //! socket that stays bound is on 127.0.0.1; quinn-udp's GSO and GRO checks
 //! open and close `[::]` sockets without sending.

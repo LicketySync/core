@@ -297,3 +297,53 @@ and 55ddfb4, both since deleted.
 Verdict on 8494dc3: gate passes, once 8494dc3 lands on main with its reviewers named.
 
 Verdict: gate passes
+
+## Addendum: phase 0's work list is complete
+
+The gate above passed at core 8494dc3. The work list then still held spike C, the phone shells; it
+is done, and phase 0 is complete. Spike C is in the app repository (main 5e4373b; the spike itself
+fb0b9cd, with fixes 7e4fc18 and 5e4373b); core's part is 51358ab, which records Tauri's
+cryptography and its residuals in `spec/suites.md` 3.1 and `spec/threat-model.md` TM-27 and TM-31.
+
+Pass conditions:
+
+- **C1, Android.** Debug APKs for x86_64 and aarch64 build. The x86_64 APK installs in an API 37.0
+  x86_64 emulator, in airplane mode, and the page shows "LicketySync" and the peer ID
+  `12D3KooWLbwYSoxYfCSHg726dZA3cCSdzeMG18brSyhACQ2mo24f`, the one the keys crate computes for the
+  public test seed. Logcat holds no fatal exception; a screenshot and the UI dump show the page with
+  "QUIC loopback: ok".
+- **C2, iOS.** App CI builds an unsigned iOS simulator `.app`, and the link needs
+  SystemConfiguration (named in `tauri.conf.json`, held there by a test). The stretch goal (boot and
+  screenshot in the simulator) was not attempted: iOS is compile-only.
+- **C3, security settings.** One capability holds only the `status` command, and that is the
+  boundary; Tauri's isolation pattern is defence in depth, since it authenticates a message's
+  arguments and not its command name. The content security policy is `default-src 'self'`; the
+  prototype is frozen; a navigation guard keeps the page on the app's origin; no updater and no
+  plugin but the guard. The manifest asks for INTERNET alone, allows no cleartext, and backs nothing
+  up. `ci/check-manifest.sh` holds each built APK's merged manifest to explicit allow-lists, with 26
+  must-fail cases.
+- **C4, QUIC loopback.** On Android, two swarms of the net crate connect over QUIC on the phone's
+  own loopback and the page shows "QUIC loopback: ok". On iOS it is compile-only (the net crate
+  builds no swarm there yet: no process-memory limit, TM-22).
+- **C5, CI and gate.** The app has its gate (`gate.sh`, passing), CI with every action pinned by
+  commit and every tool by version, and Dependabot with the 7-day cooldown for cargo, Gradle and
+  actions. App CI on main is green: checks, android (with the emulator check) and ios (with the
+  simulator build), runs 43679275536, 43679275537 and 43679275543.
+
+Residuals, none a blocker:
+
+- **TM-31, fonts.** With networking on, each WebView start asks Google Play services' font provider
+  for its fonts, and Play services downloads any it lacks from `fonts.gstatic.com` (about 3 MB on a
+  fresh device), counting the bytes against the app. Nothing in the app turns it off (with
+  networking on, the emulator's log shows the font provider's query and its download), so CI's
+  emulator check runs in airplane mode. TM-31 states it.
+- **Foreign-function code.** `forbid(unsafe_code)` holds for the app's own code; Tauri's
+  `mobile_entry_point` macro expands JNI and `start_app` entry points that neither rustc's lint nor
+  the project's text rules see.
+- **Gradle's checksums** were recorded from a first download, not from a signature; 740 of 767 were
+  cross-checked against the repositories' published checksums, none differed, and the other 27
+  (Kotlin Multiplatform metadata jars, AARs published under another name than Gradle gives them, and
+  gradle-kotlin-dsl-plugins) could not be and stay trust-on-first-use.
+- **Still lacking, for phase 1 or later:** no iOS run (compile only); no Apple or Google signing
+  (the plan's one open decision); the page is static HTML, not Leptos yet; the `status` command
+  stands in for the local API and is not the design (TM-21).

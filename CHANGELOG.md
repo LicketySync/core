@@ -5,6 +5,9 @@ changed and why.
 
 ## Unreleased
 
+- Docs: phase 0 is complete; the addendum in `gates/phase-0.md` records the phone shell's evidence.
+  The README describes phase 1. Code comments, READMEs, CONTRIBUTING and CI names no longer call
+  current code a spike.
 - Spec: Tauri's cryptography, which the app's phone shell brings, gets a row in `suites.md` 3.1:
   AES-256-GCM in `tauri-utils` for the isolation pattern's IPC, under a key drawn at each start,
   and SHA-256 in `tauri-codegen` and `wry` for the content security policy's hashes. It protects
