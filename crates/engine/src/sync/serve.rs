@@ -211,13 +211,16 @@ impl Engine {
         }
     }
 
-    /// The connection refused a frame of the reply: the reply ends; an error
-    /// other than the connection's own state is the engine's, counted.
+    /// The connection refused a frame of the reply: the reply ends. Any error
+    /// but `Closed` is the engine's bug, counted (`protocol.md` section 5:
+    /// nothing is silently skipped). `UnknownRequest` and `FolderNotOpen`
+    /// come only from a desync between the engine's replies and the
+    /// connection's, never from a peer: the connection keeps the request it
+    /// handed over until the reply's last frame goes, a second request for
+    /// the folder before then closes the connection, and no folder closes on
+    /// a live connection.
     fn reply_failed(&mut self, peer: PeerId, folder: FolderId, e: &SendError) -> bool {
-        if !matches!(
-            e,
-            SendError::Closed | SendError::FolderNotOpen | SendError::UnknownRequest
-        ) {
+        if *e != SendError::Closed {
             self.counters.bug();
         }
         if let Some(c) = self.conns.get_mut(&peer) {
@@ -234,14 +237,13 @@ mod tests {
     use crate::tests::{folder, pair};
 
     #[test]
-    fn a_reply_the_engine_holds_for_a_request_the_connection_does_not_know_ends_and_counts_no_bug()
-    {
+    fn a_reply_the_engine_holds_for_a_request_the_connection_does_not_know_ends_and_counts_a_bug() {
         // The connection refuses a page of a reply for a request it does not
-        // know (`SendError::UnknownRequest`, its own state, as `Closed` and
-        // `FolderNotOpen` are): the reply ends there, nothing is sent, and
-        // no engine bug is counted. The branch is defensive: in an honest
-        // run the engine holds a reply only for a request the connection
-        // handed it, so it is never reached.
+        // know (`SendError::UnknownRequest`): the reply ends there, nothing
+        // is sent, and an engine bug is counted (section 5: nothing is
+        // silently skipped). Only a desync between the engine's replies and
+        // the connection's reaches it, which the test makes by hand: no peer
+        // can.
         let mut net = pair();
         let peer = PeerId::new(1);
         let n = &mut net.nodes[0];
@@ -263,6 +265,6 @@ mod tests {
         assert!(went_on, "the caller may go on to the next frame");
         assert_eq!(n.engine.conns[&peer].sync.serving(), None, "it ended");
         assert!(n.cx.outbox.is_empty(), "nothing sent");
-        assert_eq!(n.engine.counters.internal_errors, bugs, "no bug counted");
+        assert_eq!(n.engine.counters.internal_errors, bugs + 1, "a bug counted");
     }
 }

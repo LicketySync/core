@@ -5,6 +5,37 @@ changed and why.
 
 ## Unreleased
 
+- Engine: a write refused because this device's next counter in the folder would pass
+  `MAX_COUNTER` raises an issue, `IssueKind::CounterExhausted`, saying that the folder must be shared
+  again (unlink it keeping its files, then share the same directory as a new folder with new keys),
+  as `protocol.md` §4.4 ("The counter ceiling") and §5 say; it raised none. The issue names no one,
+  and is one entry per folder however often it is raised. A local write so refused also counts the
+  cause, as a write holder's cleanup at a round's end already did, and that cleanup raises the issue
+  too; a test covers each. The local issues' bound grows by one kind per folder.
+
+- Engine: remove by simpler code, with the same behaviour, the nine equivalent mutants that the
+  engine's second batch of mutant tests left. `clock_days` caps at the protocol's `MAX_CLOCK_DAYS`
+  instead of writing out its value. The build-time check that the close reasons' wire numbers are
+  distinct is a `const fn`, `distinct`, which walks the list by slice patterns and which a unit test
+  also calls on reasons that share a number. The check it replaces counted with `+=`, and its
+  mutants `+=` with `*=` never finished building: with the lints capped (`.cargo/mutants.toml`),
+  rustc's `long_running_const_eval` only warns, so the loop ran for ever and would have held a
+  weekly shard until its budget ran out. `DRIVE_STEPS` is the literal 2 052 it was, checked at build
+  time to exceed twice `MAX_REQUESTS_IN_FLIGHT`. Narrow cargo-mutants runs under `ci/mutants.sh`'s
+  caps: the nine were missed before; none is generated now, and the changed functions' other
+  mutants are caught or unviable.
+
+- Engine: a reply page or chunk answer that the connection refuses because it holds no such request
+  (`UnknownRequest`, `Unrequested`), or because the folder is not open on it (`FolderNotOpen`),
+  counts an engine bug (`Counters::internal_errors`), where it counted nothing (`protocol.md` §5:
+  nothing is silently skipped). Only a desync between the engine's replies or chunk queue and the
+  connection's state reaches it, and no peer can bring one about: the connection keeps a request it
+  handed over until its answer goes (a reply's last frame, a chunk's answer), a second request for
+  a folder whose reply is still going out closes the connection, and no folder closes on a live
+  connection. A refusal because the connection closed still counts nothing. The two tests that make
+  such a desync by hand expect the count now, and the chunk test also covers a request for a chunk
+  this device does not hold, answered not found.
+
 - Build: the workspace, `fuzz/` and `browser-tests/webtransport` move from Rust edition 2021 to 2024,
   the current one. On 2024 an extern block needs `unsafe`, as do `std::env::set_var` and
   `remove_var`, so `forbid(unsafe_code)` now refuses them in the crates' own code (TM-7), where 2021

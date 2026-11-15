@@ -1716,6 +1716,79 @@ fn a_write_the_index_refuses_reports_its_refusal_though_its_handlers_commit_fail
 }
 
 #[test]
+fn a_write_past_the_counter_ceiling_raises_one_issue_saying_to_share_the_folder_again() {
+    // 4.4, "The counter ceiling", and section 5: a device whose next counter
+    // would pass `MAX_COUNTER` writes nothing more in the folder and raises
+    // an issue saying that the folder must be shared again, naming no one.
+    // Node 0 holds a record at `MAX_COUNTER`, so each of its writes there is
+    // refused; the issue is listed once however often it is raised. The
+    // clock is set just below `MAX_COUNTER` only for phase 0's clock rule,
+    // as in the test above.
+    let max = licketysync_protocol::limits::MAX_COUNTER;
+    let tier_1 = || config(0, vec![folder_key(1, 1)]);
+    let mut net = Net::new(vec![tier_1()]);
+    net.nodes[0].cx.wall = max / 1_000_000;
+    plant_and_restart(&mut net, 0, &[crafted("z", 0x99, max, &[], None)], tier_1());
+    for path in ["a.txt", "b.txt"] {
+        let n = &mut net.nodes[0];
+        let written = n.engine.write_file(&mut n.cx, folder(), path, b"a", 0);
+        assert_eq!(written, Err(WriteFailure::CounterExhausted));
+    }
+    let e = &net.nodes[0].engine;
+    let entries: Vec<_> = e
+        .issues()
+        .entries()
+        .filter(|x| x.issue.kind == IssueKind::CounterExhausted)
+        .collect();
+    assert_eq!(entries.len(), 1, "listed once");
+    let entry = entries[0];
+    assert_eq!(entry.count, 2, "raised by each refused write");
+    assert_eq!(entry.issue.folder, Some(folder()));
+    assert_eq!(entry.issue.subject, crate::issues::Subject::None);
+    assert_eq!(
+        e.counters()
+            .of(licketysync_protocol::Cause::CounterExhausted),
+        2
+    );
+    assert_eq!(e.counters().internal_errors, 0);
+}
+
+#[test]
+fn a_cleanup_refused_at_the_counter_ceiling_raises_the_issue_to_share_the_folder_again() {
+    // The same, for what a write holder signs at a round's end: node 0 holds
+    // a record of `p` at `MAX_COUNTER` that covers node 1's, which node 1
+    // still holds and sends. Node 0 notes it as a stale copy, and the
+    // cleanup naming it at the round's end would pass the ceiling: refused,
+    // counted, and the issue raised, with no engine bug. The clocks are set
+    // just below `MAX_COUNTER` only for phase 0's clock rule, as above.
+    let max = licketysync_protocol::limits::MAX_COUNTER;
+    let tier_1 = |i: u8| config(i, vec![folder_key(1, 1)]);
+    let mut net = Net::new(vec![tier_1(0), tier_1(1)]);
+    for n in &mut net.nodes {
+        n.cx.wall = max / 1_000_000;
+    }
+    let ours = crafted("p", 0x99, max, &[(0x77, 5)], Some(0x42));
+    plant_and_restart(&mut net, 0, &[ours], tier_1(0));
+    let stale = crafted("p", 0x77, 5, &[], Some(0x41));
+    plant_and_restart(&mut net, 1, &[stale], tier_1(1));
+    net.connect(0, 1);
+    net.advance(Duration::from_secs(5));
+    let e = &net.nodes[0].engine;
+    let raised = e
+        .issues()
+        .entries()
+        .filter(|x| x.issue.kind == IssueKind::CounterExhausted)
+        .count();
+    assert_eq!(raised, 1);
+    assert_eq!(
+        e.counters()
+            .of(licketysync_protocol::Cause::CounterExhausted),
+        1
+    );
+    assert_eq!(e.counters().internal_errors, 0);
+}
+
+#[test]
 fn a_version_becomes_its_paths_base_in_the_handler_that_stores_its_last_chunk() {
     // The `disk` module and item 1: a path whose heads are not all on the
     // disk is applied again as their chunks arrive, so a version received

@@ -46,9 +46,12 @@ use crate::runtime::{Context, PeerId};
 use crate::store::{chunk_key, stage_chunk};
 use crate::work::Work;
 
-/// The most steps one pass drive takes on one connection: each step asks for
-/// a hash (at most the peer's in-flight limit) or ends a pass.
-const DRIVE_STEPS: usize = 2 * MAX_REQUESTS_IN_FLIGHT as usize + 4;
+/// The most steps one pass drive takes on one connection before it counts an
+/// engine bug: each step asks for a hash (at most the peer's in-flight limit,
+/// which `MAX_REQUESTS_IN_FLIGHT` bounds) or ends a pass. This leaves a pass
+/// end after every request, and more.
+const DRIVE_STEPS: usize = 2_052;
+const _: () = assert!(DRIVE_STEPS > 2 * MAX_REQUESTS_IN_FLIGHT as usize);
 
 impl Engine {
     /// Brings a folder's chunk state up to date if its index changed, and
@@ -253,6 +256,14 @@ impl Engine {
 
     /// Answers the request at the front of the connection's queue, if the
     /// budget and the queue have room for it. Whether it was answered.
+    ///
+    /// A refusal other than `Closed` (or the room and corrupt-blob cases
+    /// handled here) drops the request and counts an engine bug (`protocol.md`
+    /// section 5: nothing is silently skipped). `Unrequested` and
+    /// `FolderNotOpen` come only from a desync between the queue and the
+    /// connection, never from a peer: the queue holds exactly the requests
+    /// the connection handed over, each until its answer goes, and no folder
+    /// closes on a live connection.
     fn serve_chunk(
         &mut self,
         cx: &mut dyn Context,
@@ -322,10 +333,7 @@ impl Engine {
             }
             Err(SendError::Corrupt) => self.lost_blob(cx, work, peer, folder, hash),
             Err(e) => {
-                if !matches!(
-                    e,
-                    SendError::Closed | SendError::FolderNotOpen | SendError::Unrequested
-                ) {
+                if e != SendError::Closed {
                     self.counters.bug();
                 }
                 c.chunk_requests.pop_front();
@@ -348,6 +356,9 @@ impl Engine {
         self.answer_not_found(cx, work, peer, folder, hash)
     }
 
+    /// Answers the request at the front of the queue `CHUNK_NOT_FOUND` and
+    /// drops it; a refusal other than `Closed` counts an engine bug, as in
+    /// [`Engine::serve_chunk`].
     fn answer_not_found(
         &mut self,
         cx: &mut dyn Context,
@@ -364,8 +375,7 @@ impl Engine {
         }
         match answered {
             Some(Ok(out)) => self.apply(cx, work, peer, out),
-            Some(Err(SendError::Closed | SendError::FolderNotOpen | SendError::Unrequested))
-            | None => {}
+            Some(Err(SendError::Closed)) | None => {}
             Some(Err(_)) => self.counters.bug(),
         }
         true
@@ -643,33 +653,36 @@ mod tests {
     }
 
     #[test]
-    fn a_chunk_request_the_connection_does_not_hold_is_dropped_and_not_counted() {
-        // `serve_chunk`: a `CHUNK_OK` the connection refuses because the
-        // request is not outstanding there (UNREQUESTED; FOLDER_NOT_OPEN and
-        // CLOSED alike) is dropped and the queue moves on, and it is not
-        // counted in `Counters::internal_errors`. The branch is defensive:
-        // the engine's queue holds exactly the requests the connection
-        // handed over, so only a desync between the two reaches it. The
-        // test makes one by hand: node 1 holds the chunk and finds a request
-        // in its queue that node 0 never made.
+    fn a_chunk_request_the_connection_does_not_hold_is_dropped_and_counted_as_an_engine_bug() {
+        // `serve_chunk` and `answer_not_found`: an answer the connection
+        // refuses because the request is not outstanding there
+        // (`Unrequested`) drops the request, the queue moves on, and an
+        // engine bug is counted (section 5: nothing is silently skipped).
+        // Only a desync between the engine's queue and the connection's
+        // requests reaches it, which the test makes by hand: node 1 finds in
+        // its queue two requests node 0 never made, one for a chunk it holds
+        // (`CHUNK_OK`) and one for a chunk it does not (`CHUNK_NOT_FOUND`).
         let mut net = pair();
         write(&mut net, 0, "a.bin", &[6u8; 900]).unwrap();
         net.advance(Duration::from_secs(3));
         let n = &mut net.nodes[1];
         let chunk = n.engine.folder(&folder()).unwrap().stored_chunks[0];
         let zero = PeerId::new(0);
-        n.engine
-            .conns
-            .get_mut(&zero)
-            .unwrap()
-            .chunk_requests
-            .push_back((folder(), chunk));
+        let queue = &mut n.engine.conns.get_mut(&zero).unwrap().chunk_requests;
+        queue.push_back((folder(), chunk));
+        queue.push_back((folder(), licketysync_keys::CipherHash([9; 32])));
         let bugs = n.engine.counters().internal_errors;
+        n.cx.outbox.clear();
         n.engine.run(&mut n.cx, |_, _, w| {
             w.pump.insert(zero);
         });
         assert!(n.engine.conns[&zero].chunk_requests.is_empty(), "dropped");
-        assert_eq!(n.engine.counters().internal_errors, bugs);
+        assert!(n.cx.outbox.is_empty(), "nothing sent");
+        assert_eq!(
+            n.engine.counters().internal_errors,
+            bugs + 2,
+            "both counted"
+        );
     }
 
     #[test]

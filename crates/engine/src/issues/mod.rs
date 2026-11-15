@@ -17,7 +17,8 @@
 //! - a device without blaming it, for the clock rule's issues: the peer whose
 //!   Hello was more than a year from this device's, the device a record from
 //!   the future claims, the device a record far ahead claims;
-//! - nothing, for a hint that this device was restored or cloned.
+//! - nothing, for a hint that this device was restored or cloned, and for a
+//!   folder whose counter is exhausted.
 //!
 //! No issue carries a path or a secret (TM-6): the subjects are record and
 //! chunk hashes, peer handles and device IDs, and counts. The list keeps
@@ -119,6 +120,13 @@ pub enum IssueKind {
     /// peer (it is merged per folder, as every local issue is) and stays
     /// until this instance ends, even if a later connection opens the folder.
     OpenLimit,
+    /// This device's next counter in the folder would pass `MAX_COUNTER`
+    /// (4.4, "The counter ceiling"; section 5): it writes nothing more there,
+    /// and keeps syncing what others write. The remedy is to share the
+    /// folder again (`keys.md` §7): unlink it keeping its files, share the
+    /// same directory as a new folder, which has new keys, and give those to
+    /// the people it was shared with.
+    CounterExhausted,
 }
 
 /// Why a store failed, without the runtime's text (which could carry
@@ -366,21 +374,23 @@ pub struct CloseCounts {
 
 // The defined reasons' wire numbers are distinct, so a number finds at most
 // one slot; checked at build time.
-#[allow(
-    clippy::indexing_slicing,
-    reason = "a compile-time check: an index out of range fails the build"
-)]
-const _: () = {
-    let mut i = 0;
-    while i < CloseReason::ALL.len() {
-        let mut j = i + 1;
-        while j < CloseReason::ALL.len() {
-            assert!(CloseReason::ALL[i].as_u32() != CloseReason::ALL[j].as_u32());
-            j += 1;
+const _: () = assert!(distinct(&CloseReason::ALL));
+
+/// Whether no two of `reasons` share a wire number.
+const fn distinct(reasons: &[CloseReason]) -> bool {
+    let mut rest = reasons;
+    while let [first, tail @ ..] = rest {
+        let mut others = tail;
+        while let [other, more @ ..] = others {
+            if first.as_u32() == other.as_u32() {
+                return false;
+            }
+            others = more;
         }
-        i += 1;
+        rest = tail;
     }
-};
+    true
+}
 
 impl CloseCounts {
     fn slot(reason: CloseReason) -> Option<usize> {
@@ -541,6 +551,20 @@ mod tests {
             StoreFailureCause::of(&StorageError::Io("x".into())),
             StoreFailureCause::Io
         );
+    }
+
+    #[test]
+    fn two_close_reasons_with_one_wire_number_are_found() {
+        // The build-time check behind `CloseCounts`' slots. `Other(11)` has
+        // `TIMEOUT`'s number; the defined reasons have one number each.
+        assert!(distinct(&CloseReason::ALL));
+        assert!(distinct(&[]));
+        assert!(!distinct(&[
+            CloseReason::Timeout,
+            CloseReason::Shutdown,
+            CloseReason::Other(11)
+        ]));
+        assert!(!distinct(&[CloseReason::Shutdown, CloseReason::Shutdown]));
     }
 
     #[test]

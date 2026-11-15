@@ -13,7 +13,7 @@
 //!
 //! | Class | Kinds | Merged per | Bound | When full |
 //! | --- | --- | --- | --- | --- |
-//! | [`IssueClass::Local`] | store failure, misconfigured, unreadable, open report, local chunk corrupt, own counter ahead, open limit, the clock rule's four | folder and kind | one entry per folder and kind | never, for an engine (below) |
+//! | [`IssueClass::Local`] | store failure, misconfigured, unreadable, open report, local chunk corrupt, own counter ahead, open limit, counter exhausted, the clock rule's four | folder and kind | one entry per folder and kind | never, for an engine (below) |
 //! | [`IssueClass::Record`] | writer fault, chunk corrupt, size mismatch | folder, kind and record | [`MAX_RECORD_ISSUES_PER_FOLDER`] per folder | the folder's oldest record entry is evicted |
 //! | [`IssueClass::ProvenPeer`] | a fault of a peer that proved a key of a folder this device holds | device and cause | [`MAX_PEER_ISSUES`] | the oldest proven-peer entry is evicted |
 //! | [`IssueClass::UnprovenPeer`] | a fault of any other peer, its device ID proven or not | cause | one entry per cause | never more |
@@ -42,9 +42,10 @@ use crate::issues::bump;
 
 /// How many local kinds one folder can raise: a store failure for each of
 /// its two causes, Misconfigured, Unreadable, the open report, a local chunk
-/// corrupt, its own counter ahead, the open limit, and the clock rule's four
-/// (out of range, from the future, the folder's time ahead, kept closed).
-const LOCAL_KINDS: usize = 12;
+/// corrupt, its own counter ahead, the open limit, its counter exhausted, and
+/// the clock rule's four (out of range, from the future, the folder's time
+/// ahead, kept closed).
+const LOCAL_KINDS: usize = 13;
 
 /// The most local and folder-health entries the list holds: one per local
 /// kind for each of the most folders a config holds.
@@ -113,7 +114,8 @@ impl Issue {
             | IssueKind::Misconfigured
             | IssueKind::Unreadable
             | IssueKind::LocalChunkCorrupt
-            | IssueKind::OpenLimit => IssueClass::Local,
+            | IssueKind::OpenLimit
+            | IssueKind::CounterExhausted => IssueClass::Local,
         }
     }
 
@@ -484,6 +486,7 @@ mod tests {
             IssueKind::LocalChunkCorrupt,
             IssueKind::OwnCounterAhead,
             IssueKind::OpenLimit,
+            IssueKind::CounterExhausted,
             IssueKind::ClockOutOfRange,
             IssueKind::FromTheFuture,
             IssueKind::ClockAhead,

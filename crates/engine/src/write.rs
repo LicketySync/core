@@ -119,7 +119,8 @@ pub enum WriteFailure {
     /// content, such a record or a re-share.
     OwnVersionNotOnDisk,
     /// The next counter would pass `MAX_COUNTER`: the folder must be shared
-    /// again (4.4, section 5).
+    /// again (4.4, section 5), as the issue [`IssueKind::CounterExhausted`]
+    /// says.
     CounterExhausted,
     /// A put or the commit failed: the folder is paused.
     Store(StoreFailureCause),

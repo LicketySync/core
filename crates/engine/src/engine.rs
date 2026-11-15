@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use licketysync_keys::device::{DeviceKey, Libp2pIdentity};
 use licketysync_keys::{CipherHash, DeviceId, FolderId, FolderKey};
 use licketysync_protocol::connection::{Config, Connection, Event, Keys, Output, Side, Tick};
-use licketysync_protocol::limits::MAX_OPEN_FOLDERS_PER_CONNECTION;
+use licketysync_protocol::limits::{MAX_CLOCK_DAYS, MAX_OPEN_FOLDERS_PER_CONNECTION};
 use licketysync_protocol::proof::FolderCredential;
 use licketysync_protocol::{Cause, CloseReason, Report};
 
@@ -115,11 +115,11 @@ pub(crate) fn tick(cx: &dyn Context, peer: PeerId) -> Tick {
 const FREE_TICK: Duration = Duration::from_secs(60);
 
 /// This device's wall clock in whole days since the Unix epoch, for the
-/// Hello's `clock_days` (3.2): at most 2^21 − 1.
+/// Hello's `clock_days` (3.2): at most `MAX_CLOCK_DAYS`.
 fn clock_days(cx: &dyn Context) -> u32 {
     u32::try_from(cx.wall_time() / 86_400)
         .unwrap_or(u32::MAX)
-        .min((1 << 21) - 1)
+        .min(MAX_CLOCK_DAYS)
 }
 
 /// A connection's deadline as an instant of the runtime's clock.

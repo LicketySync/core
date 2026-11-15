@@ -287,7 +287,12 @@ fn run_folder<'f>(
                     Err(Stop::Store(e)) => return Err(e),
                     // The index refuses a batch before it stages anything of
                     // it (`Txn::write`), so the transaction goes on.
-                    Err(Stop::Refused(why)) => shared.sync.written = Some(Err(why)),
+                    Err(Stop::Refused(why)) => {
+                        if why == WriteFailure::CounterExhausted {
+                            counter_exhausted(folder, shared);
+                        }
+                        shared.sync.written = Some(Err(why));
+                    }
                 }
             }
             Op::Records {
@@ -381,9 +386,22 @@ fn round_cleanups(
             }
             paths.extend(w.paths);
         }
-        Err(WriteError::CounterExhausted) => shared.counters.log(Cause::CounterExhausted),
+        Err(WriteError::CounterExhausted) => counter_exhausted(folder, shared),
         Err(_) => shared.counters.bug(),
     }
+}
+
+/// This device's next counter in `folder` would pass `MAX_COUNTER`, so the
+/// index refused what it would sign (4.4, "The counter ceiling"; section 5):
+/// counted, and the issue saying the folder must be shared again raised,
+/// one entry per folder however often.
+fn counter_exhausted(folder: FolderId, shared: &mut Shared<'_>) {
+    shared.counters.log(Cause::CounterExhausted);
+    shared.issues.raise(Issue {
+        folder: Some(folder),
+        kind: IssueKind::CounterExhausted,
+        subject: Subject::None,
+    });
 }
 
 /// Why a write stopped.
