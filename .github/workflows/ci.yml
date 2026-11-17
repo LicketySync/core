@@ -359,6 +359,9 @@ jobs:
         run: cargo vet --locked
       # fuzz/Cargo.lock, which nightly.yml's fuzz jobs build from, is current.
       - run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
+      # Every fuzz target compiles (as gate.sh checks): nothing else builds them before the
+      # nightly fuzz job.
+      - run: cargo check --manifest-path fuzz/Cargo.toml --bins --locked
       # browser-tests/webtransport, a workspace of its own, as gate.sh
       # checks it: its lockfile current, audited, deny-checked against
       # deny.toml and vetted against its own supply-chain/, and its vendored

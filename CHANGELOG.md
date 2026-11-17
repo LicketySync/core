@@ -5,6 +5,11 @@ changed and why.
 
 ## Unreleased
 
+- Fuzzing: the `handshake` target no longer compiled, and the nightly fuzz job failed from a1976b5
+  on: it still passed `Config::new` the clock, which the signed watermark removed. It now calls
+  `Config::new(identity)` and fuzzes the same code. Nothing built the fuzz targets before the
+  nightly job, so `gate.sh` and CI's deps job now run `cargo check` over every fuzz target
+  (about 8 s cold, under 1 s warm) and fail on a change that breaks one.
 - Disk: the fs crate, as CI first ran it on macOS and Windows.
   - macOS: a root at `/dev`, and `/dev` beneath a root at `/`, failed with `EOVERFLOW` ("Value too
     large to be stored in data type") rather than opening, or being refused as another file system.

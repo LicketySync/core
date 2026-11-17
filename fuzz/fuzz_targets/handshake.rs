@@ -50,7 +50,7 @@ fuzz_target!(|data: &[u8]| {
     let mut fill = |b: &mut [u8]| b.fill(3);
     let keys_a = Keys { device: &ka, folders: &creds };
     let t0 = Tick::default();
-    let (mut a, _) = Connection::new(&ka, Config::new(ia, 20_751), &mut fill, t0).expect("valid config");
+    let (mut a, _) = Connection::new(&ka, Config::new(ia), &mut fill, t0).expect("valid config");
     let out = a.receive(&keys_a, &mut fill, t0, rest);
     let _ = bytes(&out, a.peer_max_message_size());
     if let Some(at) = out.wake_at {

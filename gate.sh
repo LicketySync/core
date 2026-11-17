@@ -253,6 +253,9 @@ step cargo "+$RUST_NIGHTLY" udeps --workspace --all-targets
 # fuzz/Cargo.lock, which nightly.yml's fuzz jobs build from, is current (fuzz/ is
 # a workspace of its own).
 step cargo fetch --locked --manifest-path fuzz/Cargo.toml
+# Every fuzz target compiles against today's APIs: nothing else builds them before the
+# nightly fuzz job, so an API change that broke one reached main unnoticed.
+step cargo check --manifest-path fuzz/Cargo.toml --bins --locked
 step typos
 # Semgrep as CI runs it: the project rules' cases, then the scans (the script
 # says what it checks), first tested on made-up trees. The scans cover the
