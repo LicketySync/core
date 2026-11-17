@@ -5,6 +5,28 @@ changed and why.
 
 ## Unreleased
 
+- Simulator: `engine-partition` failed the nightly long runs, in 8 of seeds 0 to 299 (29, 34, 42,
+  99, 178, 184, 195 and 289): peer 0's delete of Q, made during the cut at 50 s, found nothing on
+  its disk and was refused, and the oracle counted the refusal. The scenario took every peer to
+  have P and Q on its disk by the cut at 45 s. Since a hash a refusal frees is kept for the next
+  connection in line whose pass waits (`protocol.md` §4.6, "Several connections"), one such
+  hand-off adds up to the hold: Q's chunk, refused to peer 0 by peer 4 at 32 s, was kept for its
+  connection to peer 1, whose trigger could act only at 62 s, while its connection to Q's writer
+  could have asked at once. P and Q reached the last disk at 61 to 62 s in about a third of the
+  seeds (in 2 of 2 000 before that rule). The engine does what the spec says, and the refusal is
+  right. In 71 of the 300 seeds an editor of P or Q lacked the version it edited, so its edit was
+  concurrent with that version rather than over it, which the scenario's checks did not catch. The
+  cut now runs from 95 to 115 s with the edits at 100 s, leaving room for one more hand-off (the
+  latest arrival over seeds 0 to 11 999 was 62.25 s), and a probe at the cut checks that every peer
+  has P and Q on its disk. `engine-tree-delete` shares these times, so its cut and edits moved the
+  same way. Regression tests `the_partition_cut_waits_for_a_chunk_kept_for_a_waiting_connection`,
+  in the scenario's tests and in the gate's, which pins seeds 20 and 29, the ones the nightly
+  reported, and seed 12, the first with the latest arrival.
+  `engine-commit-persists` was in the gate's list of engine scenarios but not the command line's,
+  so the nightly, which runs every scenario `licketysync-sim list` prints, never ran it; it is
+  listed now, and `the_command_line_and_the_nightly_run_every_engine_scenario` fails when the two
+  lists differ. `nightly.yml` now gives the time the 30 engine scenarios take at its seed counts:
+  about 14 minutes in one process on a 16-thread machine, about 22 on its runner.
 - Daemon: the store's opens raced, and so did one of its crash tests.
   - Windows: eight threads opening one fresh path failed now and then with "The system cannot find
     the file specified" (`openers_of_a_fresh_path_at_once_each_open_it_or_are_refused`). An opener

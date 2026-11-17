@@ -215,6 +215,7 @@ engine_runs! {
     engine_skew => "engine-skew",
     engine_clock_ahead => "engine-clock-ahead",
     engine_disk_full => "engine-disk-full",
+    engine_commit_persists => "engine-commit-persists",
     engine_sealed_relay => "engine-sealed-relay",
     engine_late_joiner => "engine-late-joiner",
     engine_pacing => "engine-pacing",
@@ -296,7 +297,7 @@ static ALL: [NamedScenario; 11] = [
 ];
 
 /// The engine scenarios, run by name.
-static ENGINE: [NamedScenario; 30] = [
+static ENGINE: [NamedScenario; 31] = [
     NamedScenario {
         name: "engine-clean",
         about: "engines: five writers, the default workload, 1 MiB chunks",
@@ -324,7 +325,7 @@ static ENGINE: [NamedScenario; 30] = [
     },
     NamedScenario {
         name: "engine-partition",
-        about: "engines: 0,1 cut from 2,3,4 from 45 to 65 s; a conflict, an edit beats a delete",
+        about: "engines: 0,1 cut from 2,3,4 from 95 to 115 s; a conflict, an edit beats a delete",
         run: engine_partition,
     },
     NamedScenario {
@@ -346,6 +347,11 @@ static ENGINE: [NamedScenario; 30] = [
         name: "engine-disk-full",
         about: "engines: peer 0's disk full for 5 s; it pauses, resumes and converges",
         run: engine_disk_full,
+    },
+    NamedScenario {
+        name: "engine-commit-persists",
+        about: "engines: a failed commit that persists; peer 1 crashes and restarts over it",
+        run: engine_commit_persists,
     },
     NamedScenario {
         name: "engine-sealed-relay",
@@ -470,4 +476,20 @@ pub fn find(name: &str) -> Option<&'static NamedScenario> {
 /// The scenarios that must converge: all but `broken`.
 pub fn expected_to_converge() -> impl Iterator<Item = &'static NamedScenario> {
     ALL.iter().filter(|s| s.name != "broken")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug: `engine-commit-persists` was in [`engine::ALL`], which the
+    /// gate runs, but not in [`ENGINE`], so the command line could not run it
+    /// and the nightly job, which runs every scenario `list` prints, never
+    /// did. The two lists hold the same names in the same order.
+    #[test]
+    fn the_command_line_and_the_nightly_run_every_engine_scenario() {
+        let listed: Vec<&str> = ENGINE.iter().map(|s| s.name).collect();
+        let built: Vec<&str> = engine::ALL.iter().map(|(name, _)| *name).collect();
+        assert_eq!(listed, built);
+    }
 }

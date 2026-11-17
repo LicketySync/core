@@ -148,6 +148,20 @@ fn a_pending_free_chunk_named_again_is_no_change_of_state_at_the_recheck() {
     check("engine-expiry", 6).unwrap_or_else(|e| panic!("{e}"));
 }
 
+/// The bug: the partition scenario made its edits at 50 s, before peer 0
+/// had Q on its disk (Q's chunk kept for a connection whose pass waited,
+/// until 62 s), so peer 0's delete of Q was refused and the oracle counted
+/// it. The nightly long runs failed so in seed 20 before the signed
+/// watermark changed the engine's behaviour, and in seed 29 since. Seed 12
+/// is the first of seeds 0 to 11 999 whose P and Q reach every disk as late
+/// as any (62.25 s), which guards the cut's margin.
+#[test]
+fn the_partition_cut_waits_for_a_chunk_kept_for_a_waiting_connection() {
+    for seed in [12, 20, 29] {
+        check("engine-partition", seed).unwrap_or_else(|e| panic!("{e}"));
+    }
+}
+
 #[test]
 fn a_crash_and_restart_run_twice_in_one_process_replays_exactly() {
     let first = check("engine-crash", 1).unwrap_or_else(|e| panic!("{e}"));
