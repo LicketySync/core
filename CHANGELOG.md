@@ -5,6 +5,32 @@ changed and why.
 
 ## Unreleased
 
+- Daemon: the store's opens raced, and so did one of its crash tests.
+  - Windows: eight threads opening one fresh path failed now and then with "The system cannot find
+    the file specified" (`openers_of_a_fresh_path_at_once_each_open_it_or_are_refused`). An opener
+    looks at the store's `-wal` before it opens it, and another opener's SQLite removes the `-wal`
+    as it closes the store; a log removed between the look and the open is now not there, as on
+    Unix. Regression test `a_log_removed_between_its_look_and_its_open_does_not_fail_the_open`,
+    which removes the log at that point through a hook that only tests have.
+  - Windows: with no file ID here, every file at a store's temporary name counted as a second name
+    of the store and was removed, another program's included. There, a second name must now be a
+    regular file with the store's size, creation time and last write time, which every name of one
+    file shares; anything else is kept. Regression test
+    `a_file_of_another_program_at_the_temporary_name_beside_a_store_is_kept`.
+  - Unix: an open let the open lock go by closing its file, while a child that another thread was
+    spawning held a copy of the descriptor, as a child does until it starts its program; the lock
+    belongs to the open file, so it stayed held through the copy until then. A look at the lock just
+    after an open found it held
+    (`openers_at_once_are_not_all_refused_since_each_open_holds_the_open_lock`, under
+    `cargo careful test`, which runs every test of a crate in one process), and another opener
+    waited for the child. Dropping the lock now unlocks it before the file closes. Regression test
+    `a_copy_of_the_open_lock_a_spawned_child_holds_does_not_keep_it_held`.
+  - Tests: `a_writer_killed_with_a_batch_past_the_page_cache_leaves_none_of_it` killed its writer a
+    moment after the writer said it had staged its batch, and a writer on a busy machine sometimes
+    committed the batch first, so the test failed though the store was right (under
+    `cargo careful test`: 2 of 150 runs of the daemon's whole suite in one process, and 5 of 240
+    runs of the test alone under load). The writer now stops where it begins the commit and waits to
+    be killed there, so the kill always lands with the whole batch staged.
 - Fuzzing: the `handshake` target no longer compiled, and the nightly fuzz job failed from a1976b5
   on: it still passed `Config::new` the clock, which the signed watermark removed. It now calls
   `Config::new(identity)` and fuzzes the same code. Nothing built the fuzz targets before the

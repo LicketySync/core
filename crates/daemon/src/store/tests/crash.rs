@@ -24,6 +24,10 @@ const WRITER: &str = "LICKETYSYNC_STORE_CRASH_CHILD";
 /// Set beside [`WRITER`]: the writer's batches outgrow SQLite's page cache.
 const LARGE: &str = "LICKETYSYNC_STORE_CRASH_LARGE";
 
+/// Set beside [`LARGE`]: the line at which the writer stops and waits to be
+/// killed.
+const PAUSE: &str = "LICKETYSYNC_STORE_CRASH_PAUSE";
+
 /// The variable that makes this test's binary hold the store it names.
 const HOLDER: &str = "LICKETYSYNC_STORE_HOLDER";
 
@@ -71,6 +75,18 @@ fn say(line: &str) {
     out.flush().unwrap();
 }
 
+/// The writer says `line`, a point it has reached; at the one [`PAUSE`] names,
+/// it stops there until it is killed, waiting on its standard input, which the
+/// test holds open until then.
+fn reached(line: &str) {
+    say(line);
+    if std::env::var_os(PAUSE).is_some_and(|pause| pause == *line) {
+        let mut rest = Vec::new();
+        std::io::stdin().read_to_end(&mut rest).unwrap();
+        panic!("the writer was not killed at {line:?}");
+    }
+}
+
 /// Batch `n`: new keys of its own, the shared keys overwritten, the previous
 /// batch's mark deleted and its own put, and the number of the last batch,
 /// saying `staged n i` after each pair of puts.
@@ -81,7 +97,7 @@ fn write_batch(store: &mut SqliteStorage, n: u64, large: bool) {
             .put(format!("n/{n:08}/{i}").as_bytes(), &value)
             .unwrap();
         store.put(format!("shared/{i}").as_bytes(), &value).unwrap();
-        say(&format!("staged {n} {i}"));
+        reached(&format!("staged {n} {i}"));
     }
     store
         .delete(format!("mark/{:08}", n - 1).as_bytes())
@@ -105,9 +121,9 @@ fn writer(path: &Path, large: bool) {
     let start = last_batch(&store) + 1;
     for n in start..start + 1_000 {
         write_batch(&mut store, n, large);
-        say(&format!("committing {n}"));
+        reached(&format!("committing {n}"));
         store.commit().unwrap();
-        say(&format!("committed {n}"));
+        reached(&format!("committed {n}"));
     }
 }
 
@@ -154,8 +170,10 @@ fn check_batches(store: &SqliteStorage, acknowledged: u64, large: bool) -> u64 {
     last
 }
 
-/// This test's binary again, running `test` with `variable` set to `path`.
-fn start(test: &str, variable: &str, path: &Path, large: bool) -> Child {
+/// This test's binary again, running `test` with `variable` set to `path`;
+/// with `large`, a writer whose batches outgrow the page cache and which stops
+/// at that line.
+fn start(test: &str, variable: &str, path: &Path, large: Option<&str>) -> Child {
     // Semgrep's community rule flags every std::env::current_exe(): whoever
     // runs a binary can change the path it gives. Here it only names this
     // test's own binary, to start again.
@@ -167,17 +185,18 @@ fn start(test: &str, variable: &str, path: &Path, large: bool) -> Child {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if large {
-        command.env(LARGE, "1");
+    if let Some(pause) = large {
+        command.env(LARGE, "1").env(PAUSE, pause);
     }
     command.spawn().unwrap()
 }
 
 /// Runs a writer over `path` and kills it when it says `trigger` (SIGKILL on
-/// Unix); the kill lands a little after, wherever the writer has got to.
-/// Returns the last batch it said it committed, from `before`.
+/// Unix); the kill lands a little after, wherever the writer has got to, but
+/// for a `large` writer, which stops at `trigger` and waits for it. Returns
+/// the last batch it said it committed, from `before`.
 fn kill_at(test: &str, path: &Path, trigger: &str, before: u64, large: bool) -> u64 {
-    let mut child = start(test, WRITER, path, large);
+    let mut child = start(test, WRITER, path, large.then_some(trigger));
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     let mut acknowledged = before;
     let mut heard = |line: &str| {
@@ -250,7 +269,8 @@ fn a_killed_writer_leaves_each_batch_whole_or_absent() {
 }
 
 /// A writer killed with a whole batch of 4.8 MB staged, past SQLite's page
-/// cache, so that its pages are already in the log, uncommitted: the store,
+/// cache, so that its pages are already in the log, uncommitted (it stops
+/// where it begins the commit, so the kill always lands there): the store,
 /// reopened, holds none of it, and after a batch committed first, only that.
 #[test]
 fn a_writer_killed_with_a_batch_past_the_page_cache_leaves_none_of_it() {
@@ -260,7 +280,7 @@ fn a_writer_killed_with_a_batch_past_the_page_cache_leaves_none_of_it() {
     }
     let dir = scratch("crash-large");
     let path = dir.join("store");
-    let acknowledged = kill_at(LARGE_TEST, &path, "staged 1 7", 0, true);
+    let acknowledged = kill_at(LARGE_TEST, &path, "committing 1", 0, true);
     let log = fs::metadata(beside(&path, "-wal")).unwrap().len();
     assert!(
         log > 1 << 20,
@@ -269,7 +289,7 @@ fn a_writer_killed_with_a_batch_past_the_page_cache_leaves_none_of_it() {
     let store = SqliteStorage::open(&path).unwrap();
     assert_eq!(check_batches(&store, acknowledged, true), 0);
     drop(store);
-    let acknowledged = kill_at(LARGE_TEST, &path, "staged 2 7", 0, true);
+    let acknowledged = kill_at(LARGE_TEST, &path, "committing 2", 0, true);
     let store = SqliteStorage::open(&path).unwrap();
     assert_eq!(check_batches(&store, acknowledged, true), 1);
     drop(store);
@@ -296,7 +316,7 @@ fn a_second_process_is_refused_while_one_holds_the_store() {
     }
     let dir = scratch("held");
     let path = dir.join("store");
-    let mut child = start(HOLD_TEST, HOLDER, &path, false);
+    let mut child = start(HOLD_TEST, HOLDER, &path, None);
     let mut out = String::new();
     // libtest's own lines first, then ours.
     let stdout = child.stdout.take().unwrap();
@@ -332,7 +352,7 @@ fn a_second_open_in_this_process_leaves_the_lock_held() {
     let path = dir.join("store");
     let first = SqliteStorage::open(&path).unwrap();
     assert_eq!(SqliteStorage::open(&path).err(), Some(OpenError::Locked));
-    let other = start(TRY_TEST, TRIER, &path, false)
+    let other = start(TRY_TEST, TRIER, &path, None)
         .wait_with_output()
         .unwrap();
     let said = String::from_utf8_lossy(&other.stdout);
@@ -363,7 +383,7 @@ fn openers_in_other_processes_at_once_each_open_it_or_are_refused() {
     for round in 0..6 {
         let path = dir.join(format!("store-{round}"));
         let mut openers: Vec<Child> = (0..6)
-            .map(|_| start(OPENERS_TEST, OPENER, &path, false))
+            .map(|_| start(OPENERS_TEST, OPENER, &path, None))
             .collect();
         for opener in &mut openers {
             writeln!(opener.stdin.as_mut().unwrap(), "go").unwrap();

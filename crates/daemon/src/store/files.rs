@@ -248,7 +248,8 @@ pub(super) fn sync_parent(path: &Path) -> Result<(), OpenError> {
 /// opened, and the file opened must be the one examined. Elsewhere on Unix
 /// the file is opened (`O_NONBLOCK`) and examined after; on Windows a link or
 /// anything but a regular file is refused by a look first, which a race can
-/// pass.
+/// pass. A file removed between the look and the open, as another opener's
+/// SQLite removes the store's log when it closes the store, is not there.
 #[cfg(unix)]
 fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
     use rustix::fs::{Mode, OFlags};
@@ -275,6 +276,8 @@ fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
         }
         (stat.st_dev, stat.st_ino)
     };
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    between_look_and_open(path);
     let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
     let fd = match rustix::fs::open(path, flags, Mode::empty()) {
         Ok(fd) => fd,
@@ -301,8 +304,32 @@ fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     }
-    Ok(Some(File::open(path)?))
+    between_look_and_open(path);
+    match File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android", not(unix))))]
+thread_local! {
+    /// In tests, what happens to a name between [`open_nofollow`]'s look at
+    /// it and its open, where it has one (Linux, Android and Windows), as
+    /// another process might act there.
+    pub(super) static BETWEEN: std::cell::Cell<Option<fn(&Path)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android", not(unix))))]
+fn between_look_and_open(path: &Path) {
+    if let Some(act) = BETWEEN.with(std::cell::Cell::get) {
+        act(path);
+    }
+}
+
+#[cfg(all(not(test), any(target_os = "linux", target_os = "android", not(unix))))]
+fn between_look_and_open(_: &Path) {}
 
 /// Refuses a file that is not regular, not the user's (Unix), or, `one_name`,
 /// that has another name besides.
@@ -431,9 +458,29 @@ pub(super) fn verdict(header: &[u8]) -> Result<(), OpenError> {
 
 /// The open lock, held until dropped: an exclusive lock on the hidden
 /// `.<name>.lock` beside the store, a file of its own, so that the database's
-/// POSIX locks are never touched. It stays when released.
+/// POSIX locks are never touched. It stays when released. Dropped, it unlocks
+/// before it closes the file: on Unix a child that any thread of this process
+/// spawns holds a copy of every descriptor until it starts its program, and
+/// the lock, which belongs to the open file rather than to one descriptor,
+/// would stay held through that copy until then.
 #[derive(Debug)]
-pub(super) struct OpenLock(#[allow(dead_code, reason = "held for its lock")] File);
+pub(super) struct OpenLock(File);
+
+impl Drop for OpenLock {
+    fn drop(&mut self) {
+        // Closing the file lets the lock go too, so a failure here costs at
+        // most that wait.
+        let _ = self.0.unlock();
+    }
+}
+
+#[cfg(test)]
+impl OpenLock {
+    /// The lock file, open.
+    pub(super) fn file(&self) -> &File {
+        &self.0
+    }
+}
 
 /// Takes the open lock at `lock`, waiting for another opener, in this process
 /// or another, to have opened the store or failed. The name is opened without
@@ -476,13 +523,13 @@ fn open_lock(lock: &Path) -> Result<File, OpenError> {
 /// Makes a new store at `names.path` unless one is there (module
 /// documentation, "Opening"), under the open lock, `_held`. A temporary name
 /// that is a second name of the store, which a placement by hard link can
-/// leave when it stops between the link and the removal, is removed. A `-wal`
-/// or `-journal` already at the path's names is refused, named and untouched:
-/// it belongs to a store or database that is gone, and SQLite would read it
-/// into the new one.
+/// leave when it stops between the link and the removal, is removed; any
+/// other file there is kept. A `-wal` or `-journal` already at the path's
+/// names is refused, named and untouched: it belongs to a store or database
+/// that is gone, and SQLite would read it into the new one.
 pub(super) fn create(names: &Names, _held: &OpenLock) -> Result<(), OpenError> {
     if exists(&names.path)? {
-        if exists(&names.temp)? && file_id(&names.temp)? == file_id(&names.path)? {
+        if exists(&names.temp)? && second_name(&names.temp, &names.path)? {
             fs::remove_file(&names.temp)?;
         }
         return Ok(());
@@ -505,6 +552,28 @@ pub(super) fn create(names: &Names, _held: &OpenLock) -> Result<(), OpenError> {
     }
     made?;
     sync_parent(&names.path)
+}
+
+/// Whether `temp` is another name of the file at `path`: the same device and
+/// inode on Unix. Windows gives no file ID here, so there both must be
+/// regular files with the same size, creation time and last write time,
+/// which every name of one file shares.
+fn second_name(temp: &Path, path: &Path) -> Result<bool, OpenError> {
+    #[cfg(unix)]
+    {
+        Ok(file_id(temp)? == file_id(path)?)
+    }
+    #[cfg(not(unix))]
+    {
+        let (a, b) = (fs::symlink_metadata(temp)?, fs::symlink_metadata(path)?);
+        let same =
+            |x: io::Result<std::time::SystemTime>, y| matches!((x, y), (Ok(x), Ok(y)) if x == y);
+        Ok(a.is_file()
+            && b.is_file()
+            && a.len() == b.len()
+            && same(a.created(), b.created())
+            && same(a.modified(), b.modified()))
+    }
 }
 
 /// Removes, under the open lock, a temporary file a crash left: a regular

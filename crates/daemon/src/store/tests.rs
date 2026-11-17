@@ -786,6 +786,75 @@ fn openers_at_once_are_not_all_refused_since_each_open_holds_the_open_lock() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// Regression: on Windows, an opener looked at the store's log, another
+/// opener's SQLite removed it as it closed the store, and the open of it
+/// failed: "The system cannot find the file specified" (eight threads
+/// opening one fresh path). A log removed between the look and the open is
+/// not there, as on Unix.
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+#[test]
+fn a_log_removed_between_its_look_and_its_open_does_not_fail_the_open() {
+    let dir = scratch("removed-after-look");
+    let path = dir.join("store");
+    let mut store = SqliteStorage::open(&path).unwrap();
+    store.put(b"k", b"v").unwrap();
+    store.commit().unwrap();
+    drop(store);
+    fs::write(beside(&path, "-wal"), b"").unwrap();
+    let remove_log: fn(&Path) = |p| {
+        if p.as_os_str().to_string_lossy().ends_with("-wal") {
+            fs::remove_file(p).unwrap();
+        }
+    };
+    files::BETWEEN.with(|between| between.set(Some(remove_log)));
+    let opened = SqliteStorage::open(&path);
+    files::BETWEEN.with(|between| between.set(None));
+    let store = opened.unwrap();
+    assert_eq!(store.get(b"k"), Ok(Some(b"v".to_vec())));
+    drop(store);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Regression: on Windows, which gives no file ID here, any file at a
+/// store's temporary name counted as a second name of the store and was
+/// removed, another program's included. Only a second name is.
+#[test]
+fn a_file_of_another_program_at_the_temporary_name_beside_a_store_is_kept() {
+    let dir = scratch("theirs-beside");
+    let path = dir.join("store");
+    drop(SqliteStorage::open(&path).unwrap());
+    let temp = temp_of(&path);
+    fs::write(&temp, b"someone's notes").unwrap();
+    let store = SqliteStorage::open(&path).unwrap();
+    assert_eq!(store.scan(b""), Ok(Vec::new()));
+    assert_eq!(fs::read(&temp).unwrap(), b"someone's notes");
+    drop(store);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Regression: an open let the open lock go by closing its file, while a
+/// child that another thread was spawning held a copy of the descriptor, as a
+/// child does until it starts its program; the lock, which belongs to the open
+/// file, stayed held through the copy, and a look at it just after the open
+/// found it held (`cargo careful test`, every test in one process). A copy of
+/// the descriptor no longer keeps the lock held once it is dropped.
+#[test]
+fn a_copy_of_the_open_lock_a_spawned_child_holds_does_not_keep_it_held() {
+    let dir = scratch("lock-copy");
+    let lock = lock_of(&dir.join("store"));
+    let held = files::lock_open(&lock).unwrap();
+    let copy = held.file().try_clone().unwrap();
+    drop(held);
+    let other = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    assert!(other.try_lock().is_ok(), "let go while a copy is open");
+    drop((copy, other));
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn openers_of_a_fresh_path_at_once_each_open_it_or_are_refused() {
     let dir = scratch("together");
