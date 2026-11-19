@@ -1,15 +1,6 @@
 # LicketySync keys
 
-Status: draft for phase 0, rewritten 2026-10-22 for the shared-key model the owner chose on
-2026-10-18 (plan, Decisions: "Key model simplified"), the owner's answers of 2026-10-22 and the
-coordinator's rulings R-K1 to R-K6 and S-1 to S-4 of the same day, and amended on 2026-11-08 for
-the owner's answer of 2026-11-03 that relays are public only (§2.1: a relay learns no folder ID;
-`threat-model.md` TM-25), and on 2026-11-10 for the owner's decision of that day on the list of a
-device's hole-punch coordinators (§2.2, §6.3: never in the DHT), and on 2026-11-12 for the signed
-watermark that replaces the clock rule and the folder's own time (§0, §3.4, §4, §9 item 8;
-`protocol.md` §4.4), and on 2026-11-13 for consistency with the threat model: what a sealed holder
-can test (§1.3), what a LAN beacon links (§2.2), how closely Padmé shows a size (§3.2 to §3.4), and
-what a browser invite is (§6.3). This file is what `licketysync-keys` implements and what reviewers
+Status: draft. This file is what `licketysync-keys` implements and what reviewers
 check it against. The plan ("LicketySync: Project Plan") is the design; where this file and the
 plan disagree, raise it. `suites.md` fixes the algorithms and their crates; `threat-model.md` names
 the adversaries; `protocol.md` puts these keys and records on the wire. **Issues** is the list of
@@ -20,15 +11,15 @@ Each section says in plain words what the thing is for, then defines it exactly.
 "phase N" is not needed for phase 0 ("simulated peers converge") and may be left unimplemented, but
 its format is fixed now.
 
-**What this file no longer has.** The drafts of 2026-10-14 to 2026-10-18 described an issued-keys
-model. Removed on 2026-10-22, with nothing in its place unless this file says so: the owner (root)
+**What this file no longer has.** The drafts described an issued-keys
+model. Removed, with nothing in its place unless this file says so: the owner (root)
 key and its 24-word recovery phrase, the master secret, the identity key and its catalogue key,
 issued, per-person and child keys, key IDs, grants and their chains, `may_share`, expiry and
 renewal, revocation, suspension, lift, rotation, epochs of data keys and their ladder, wrapping a
 data key to a public key (X-Wing through HPKE), the key-record quotas and refusal memory, per-key
-device admission, fork evidence, hybrid ML-DSA signatures, the exported root file, the Folder record
-(ruling S-2), separate handshake proofs per tier (ruling S-1) and the drafts' version vectors
-(ruling R-K6; version vectors of another form came back on 2026-10-25, `protocol.md` §4.4). The
+device admission, fork evidence, hybrid ML-DSA signatures, the exported root file,
+the Folder record, separate handshake proofs per tier and the drafts' version vectors
+(version vectors of another form are `protocol.md` §4.4's). The
 drafts never shipped, so their field numbers, record types and labels carry no compatibility duty:
 where this file still marks one `reserved` or "never used", that is only a reading aid, and
 `suites.md`'s rule that a label is never reused applies from the first release on.
@@ -68,7 +59,7 @@ where this file still marks one `reserved` or "never used", that is only a readi
   keys, fixed when the folder is made (§1.1); nothing moves a folder to another suite (§7).
 - A **tier** is one byte: `1` write, `2` read, `3` sealed. Lower numbers can do more.
 - No key expires, and nothing in this file compares a key or a signature with a clock. Nor is a
-  record's counter, inside its seal, compared with a clock, since 2026-11-12: when written it is at
+  record's counter, inside its seal, compared with a clock: when written it is at
   least its writer's clock, or `CLOCK_FLOOR_MAX` when the clock reads later (the clock floor), and
   it is at most a fixed ceiling; deletions are forgotten only by a watermark, a counter that a
   write holder signs in a cleanup's sealed part, when its own clock says it has held them a year
@@ -119,7 +110,7 @@ production signing path and need no test-only signing mode. Verification is alwa
 which rejects small-order and non-canonical components, and every public key is checked as section
 0.3 says before it is used.
 
-Deviation from the drafts (ruling R-K1, after owner answer 1 of 2026-10-22, "Ed25519 alone"): there
+Deviation from the drafts: there
 is no ML-DSA and no hybrid signature anywhere, neither on records nor in the handshake. A later
 suite may add post-quantum signatures (`suites.md` §5); what holds until then is
 `threat-model.md` TM-33.
@@ -182,9 +173,9 @@ ws: the write secret, 32 random bytes
 
 Every derived key is 32 bytes and nothing below a node yields the node: `ak` does not give `dk`,
 `dk` does not give `ws` or `folder_sk`, and `folder_vk` gives nothing secret. Paths exist only
-inside an index record's sealed metadata, under `rk` with the rest of the metadata (decision), and,
-as keyed path tags that name no path to anyone without `tk`, in the record's clear fields (§3.5,
-added 2026-10-25). The keys last as long as the folder. There are no epochs: a folder that needs new
+inside an index record's sealed metadata, under `rk` with the rest of the metadata, and,
+as keyed path tags that name no path to anyone without `tk`, in the record's clear fields (§3.5).
+The keys last as long as the folder. There are no epochs: a folder that needs new
 keys is a new folder (§7).
 
 ### 1.3 The three keys
@@ -234,7 +225,7 @@ but it lets its holder confirm the folder's presence on a LAN and compute its DH
 values may carry it because they are not logs (`suites.md` §4.1).
 
 There is no folder-wide signed record. The drafts' Folder record, and the revision and required
-features it last carried, are gone for now (ruling S-2): every reader decodes every format code its
+features it last carried, are gone for now: every reader decodes every format code its
 release implements (§3.2), and features are negotiated per connection in the Hello
 (`protocol.md` §5). A folder-level requirement, if one is ever needed, is a later phase's design.
 
@@ -313,9 +304,9 @@ DHT key, not to the identity the transport will authenticate; how the item is pl
 is phase 2's design. It never carries the list of hole-punch coordinators the device keeps
 reservations with either, nor the public relays it keeps reservations with (phase 7), since an
 address through a coordinator or a relay names the device's peer ID and the coordinator's or
-relay's: those go only to the peers of the device's folders and in invites (§6.3; the
-owner's decision of 2026-11-10, "Peers now, alias later"; `threat-model.md` TM-25). **Phase 2
-item** (the same decision): a rotating alias that coordinators accept in place of the device's peer
+relay's: those go only to the peers of the device's folders and in invites (§6.3;
+`threat-model.md` TM-25). **Phase 2
+item**: a rotating alias that coordinators accept in place of the device's peer
 ID, so that the address record can carry the list without the peer ID. Announcements cannot be
 linked across days without the folder ID, except through the stable DHT key itself (§8.1).
 
@@ -436,11 +427,11 @@ cipher_hash    = H("licketysync/v1/hash/chunk", stored)          # 32 bytes; wha
   writer stored, so the fault is the writer's.
 - **Compression codes**: `0` none, `1` deflate, `2` zstd, `3` lz4; the code sits inside the
   ciphertext because ciphertext itself does not compress. A reader decodes every code its release
-  implements and treats any other as a writer fault (ruling S-2). Phase 0 implements and writes `0`
+  implements and treats any other as a writer fault. Phase 0 implements and writes `0`
   only. A writer cannot know which releases will read its chunks, so a code other than `0` is
   written only by releases that every supported release of major 1 can read: a decoder added before
   1.0 (when no release has shipped) becomes part of major 1's baseline, and a code added after 1.0
-  needs a folder-level requirement first, a later phase's design (decision). Known cost:
+  needs a folder-level requirement first, a later phase's design. Known cost:
   compressing before encrypting makes the padded length depend on the content's compressibility, a
   CRIME-style length channel on top of the size leak Padmé already bounds; the threat model records
   it, and compression stays off by default.
@@ -492,9 +483,9 @@ Padmé (`suites.md` §2.3).
 ### 3.4 Sealed metadata
 
 Everything that would name a file or date it (path, kind, true size, times, mode, plaintext chunk
-hashes, and, since 2026-10-25, the writer's device ID and counter, the version vector and the
+hashes, the writer's device ID and counter, the version vector and the
 deletion marks) sits in the sealed part of its index record (`protocol.md` §4.4, `SealedMeta`),
-which only read and write holders open; a cleanup's issuer, counter and, since 2026-11-12, the
+which only read and write holders open; a cleanup's issuer, counter and the
 watermark it carries sit in its own sealed part (`CleanupMeta`), which still fits 256 bytes.
 
 ```
@@ -522,8 +513,8 @@ it to everything else, and its random nonce keeps two seals distinct even for on
 after the length check, a path whose tag (§3.5) is not the record's `path_tag` and a malformed dot
 or vector among them, are writer faults (`protocol.md` §4.4 step 7).
 
-**Why powers of two, and what they cost** (the coordinator's ruling of 2026-10-25, for the owner's
-review, so that sealed peers see almost nothing). Padmé, which pads chunks, would show a sealed
+**Why powers of two, and what they cost** (so that sealed peers see almost nothing).
+Padmé, which pads chunks, would show a sealed
 part's length to within 16 bytes at a typical record's size (128 to 511 bytes): about 8 % at about
 200 bytes, up to about 12 % below 256 bytes; and under 1/16, about 6 %, from 256 bytes (§3.3); and
 with it how long the path is and how many entries the vector has, that is roughly how many devices
@@ -551,14 +542,14 @@ The hash is keyed, so nobody without `tk` can compute a tag from a guessed path 
 paths in one directory are unrelated, so they show nothing about the tree. A read or write holder
 finds which records lie beneath a directory from their paths. The keys crate computes tags for the
 index and protocol crates; nobody else calls BLAKE3 for them (`suites.md` §2.4). (An earlier draft
-of 2026-10-25 built tags as chains of hashes that sealed peers could check; signed cleanups made
+built tags as chains of hashes that sealed peers could check; signed cleanups made
 that unnecessary.)
 
 ## 4. Handshake proofs
 
 At the folder proof (`protocol.md` §3.5) each side shows that it holds a key to the folder, without
-sending the key and in a way bound to the one connection. There is one proof for all three tiers
-(ruling S-1): possession of the access key `ak`, which every tier holds. The keys and values it
+sending the key and in a way bound to the one connection. There is one proof for all three tiers:
+possession of the access key `ak`, which every tier holds. The keys and values it
 needs are derived here, so that the protocol crate computes none of them itself.
 
 ```
@@ -582,7 +573,7 @@ proof_key   = BLAKE3_keyed(payload_key, folder_id || th)                  # 32 b
 - Every tier holds `ak` (write and read holders derive it from `dk`), so every holder computes the
   hints and proof keys of its folders, and nobody without a key can: a relay, or anyone who knows
   only the folder ID, can neither open a proof nor tell which folder one is for. The drafts keyed
-  both with the folder ID, which every person who ever saw a key string knew (decision).
+  both with the folder ID, which every person who ever saw a key string knew.
 - `ak` itself keys nothing: it is only the parent of `hint_key` and `payload_key`, so no key is used
   raw for two purposes (§0).
 - The folder ID in the hint and the proof key binds a key's halves (§1.3): a read or sealed key made
@@ -661,8 +652,8 @@ An index record's body, and a cleanup's, are `protocol.md` §4.4's. Any write ho
 sealed metadata is §3.4's. The `device_id` inside a record's seal is the device ID of the device
 that wrote it (§8.1), as the signer claims it, and nothing proves it: every write holder signs with
 the same key. With the record's `counter` it is the record's dot, which orders that device's records
-and which other records' vectors name (`protocol.md` §4.4); it is never shown as the record's author
-(ruling S-4). Two records with one dot are concurrent versions (`protocol.md` §4.4); nothing in a
+and which other records' vectors name (`protocol.md` §4.4); it is never shown as the record's
+author. Two records with one dot are concurrent versions (`protocol.md` §4.4); nothing in a
 record says which person made it.
 
 ## 6. Key strings, words, QR codes, links and files
@@ -673,15 +664,15 @@ for QR codes and links, not for typing: a camera reads it in one go, and the che
 damaged scan or a stray edit. The write key can also be written down as words (§6.2).
 
 Showing a write key in any of these forms, or exporting it, requires the operating system's own user
-authentication on that device (owner's answer of 2026-10-22; `threat-model.md` TM-39), since it is
+authentication on that device (`threat-model.md` TM-39), since it is
 full control of the folder: the platform's prompt (the login password, Windows Hello, Touch ID or a
 phone's PIN or biometrics, polkit on a Linux desktop), or, on a device that has no such prompt, such
-as a headless box, the key store's passphrase (§8.2) (decision). The rule fails closed: the prompt or
+as a headless box, the key store's passphrase (§8.2). The rule fails closed: the prompt or
 the passphrase is asked at that moment, every time; an unlocked key store, a running daemon or a
 local process that holds the local API's token does not count, so nothing exports a write key
 without the person. A device that has neither such a prompt nor a passphrase-protected key store
 refuses to show, export or link a write key until the person sets one of them. A read or sealed key
-is shown on the person's explicit action alone, since neither can change anything (decision).
+is shown on the person's explicit action alone, since neither can change anything.
 
 ### 6.1 Key strings: Bech32m
 
@@ -692,7 +683,7 @@ payload_sealed = be16(suite) || folder_vk || ak        # 66 bytes
 key_string     = Bech32m(hrp, to_5bit(payload))        # BIP-350; hrp "lsw" write, "lsr" read, "lss" sealed
 ```
 
-- Decision kept from the drafts, with one prefix per tier (ruling R-K3): Bech32m over z-base-32,
+- Bech32m, with one prefix per tier, chosen over z-base-32,
   Base58Check and Crockford base32. QR alphanumeric mode packs 45 symbols at 5.5 bits each, so any
   base-32 alphabet written in upper case fits it, while Base58's mixed case forces byte mode. Its
   alphabet omits the confusable `1`, `b`, `i` and `o`, its checksum is a 30-bit BCH code chosen for
@@ -725,8 +716,8 @@ key_string     = Bech32m(hrp, to_5bit(payload))        # BIP-350; hrp "lsw" writ
 
 ### 6.2 The write key as words
 
-- The write key can also be shown and entered as 24 words (owner answer 3 of 2026-10-22: "Yes, also
-  as words"): the BIP39 encoding of `ws` with the English word list. Checksum =
+- The write key can also be shown and entered as 24 words:
+  the BIP39 encoding of `ws` with the English word list. Checksum =
   `SHA-256(ws)[0..1]` (8 bits), appended to the 256 bits, split into 24 groups of 11 bits, each an
   index into the list. BIP39's PBKDF2 "seed" step is **not** used: the words are the secret itself.
 - **Display**: lower case, numbered 1 to 24.
@@ -746,8 +737,7 @@ key_string     = Bech32m(hrp, to_5bit(payload))        # BIP-350; hrp "lsw" writ
   phrase (the same list and length), which the threat model notes (TM-39).
 - The words carry no suite: 24 words always mean a suite 1 write secret. A later suite defines its
   own word form (`suites.md` §5).
-- Only the write key has words: read and sealed keys are 66 bytes, beyond what BIP39 encodes
-  (decision; the owner's answer named the write key).
+- Only the write key has words: read and sealed keys are 66 bytes, beyond what BIP39 encodes.
 
 ### 6.3 Link form
 
@@ -765,8 +755,8 @@ referrer or log, and removes it from the page's address whenever the page has on
 included (TM-18). `a` and `c` are appended only when the sender chooses, or automatically for
 browser invites and parcel links (phase 6); `c` is base64url without padding. A **browser invite**
 is a link made for someone to open in the browser client, which cannot use LAN discovery or the DHT
-and so must be told where to dial (the spec author's reading of the plan's term, for the owner's
-review): a native device makes one when its person says, as they make the link, that it is for a
+and so must be told where to dial:
+a native device makes one when its person says, as they make the link, that it is for a
 browser, and appends then the addresses at which a browser can reach it at that moment (its
 WebTransport listener's, phase 6) and, in `c`, the hash of the certificate that listener serves,
 which lasts at most 14 days (`suites.md`, transport). That listener is a setting of the device, off
@@ -794,11 +784,8 @@ after import on request.
 
 ## 7. Making, unlinking and sharing again
 
-There is no re-key feature and nothing in the protocol for it (owner answer 2 of 2026-10-22:
-"Unlink existing folder without deleting files. Start a new share and specify the existing folder.
-No history is preserved. Only one copy is needed. No protocol changes. Manually (outside of client)
-inform others about new share keys."). These are local actions on one device; peers see only their
-effects.
+There is no re-key feature and nothing in the protocol for it. These are local actions on one
+device; peers see only their effects.
 
 ### 7.1 Making a folder (a new share)
 
@@ -815,7 +802,7 @@ folder over its own copy of the same files, such as the directory of a folder it
 (§7.3), adopts every file that already matches a record without downloading it (plan, Sync engine:
 "identical content is not a change") and treats a local file that differs from the record for its
 path as a concurrent version, kept as a conflict copy, never as a silent overwrite in either
-direction (decision; an engine rule, phase 1). One directory belongs to at most one folder on a
+direction (an engine rule, phase 1). One directory belongs to at most one folder on a
 device, so a device unlinks the old folder before it shares or joins the new one over the same
 directory.
 
@@ -835,8 +822,8 @@ folder by hand: every device that stays unlinks the old folder (§7.3); one of t
 as a new folder (§7.2); the new key is given to the others outside the client; and each joins over
 its own copy. Before any of this the app advises pausing the folder, so that nothing more arrives
 from the person being removed, and restoring from the archive whatever they changed or deleted,
-since deletions that arrive from peers are applied without a brake and only the archive keeps them
-(owner's answer of 2026-10-22). It states plainly:
+since deletions that arrive from peers are applied without a brake and only the archive keeps them.
+It states plainly:
 
 - the removed person keeps the old folder, its key and every copy they already had;
 - any device still using the old key keeps syncing with them, so every device that stays must
@@ -903,7 +890,7 @@ stored key when needed, and lives in memory only in zeroised types.
   in clear in the file's header so that a later release can raise them on the next unlock.
 - The key store, its byte layout, its label in section 10 and its Argon2id use are all phase 1's,
   fixed by the change that adds the daemon's key store; phase 0 stores no key on disk and uses no
-  Argon2id (decision). The browser client's store is phase 6's design.
+  Argon2id. The browser client's store is phase 6's design.
 - A device erases a folder's key from the store when the folder is unlinked (§7.3) or lowered
   (§1.3, replaced by the lower key).
 
@@ -926,7 +913,7 @@ on this device) and at most the existing device's own tier, derived locally (§1
 key this way requires the operating system's own user authentication on the sending device, asked
 at that moment and failing closed, as showing one does (§6). The link channel runs only over QUIC or TCP with TLS 1.3, whose key exchange
 offers the hybrid X25519MLKEM768 group, never over WebSocket, whose transport is classical end to
-end (`suites.md` §2.6), because folder keys cross it (decision). Which folders the person's devices
+end (`suites.md` §2.6), because folder keys cross it. Which folders the person's devices
 hold (the catalogue) is exchanged between linked devices over the same channel and kept in each
 device's key store (§8.2); keeping it consistent is phase 5's design. Message types for linking are
 reserved in `protocol.md` §4.1.
@@ -1030,17 +1017,15 @@ The modes are the ones `suites.md` §2.4 fixes: `derive_key` only from uniformly
 material; the labelled hash `H` for identifiers over public data, the identity hashes of §0.3
 included; keyed BLAKE3 where the output must mean nothing without the key, always under a key that
 a `derive_key` label below made for that one use, so keyed uses have no labels of their own; the
-signature prefix `M`. Removed on 2026-10-22 with the issued-keys model and rulings S-1 and S-2:
+signature prefix `M`. Removed with the issued-keys model:
 every `identity/`, `epoch/` and `wrap/` label, `folder/root-seed`, `folder/chunk-hash-key` (now
 `data/chunk-hash-key`), `key/ml-dsa-65`, `key/x-wing`, `hash/id/identity`, `hash/id/key`, the keyed
 `handshake/folder-hint` and `handshake/proof-key` (now the derived hint key and payload key), and
 the `sig/` labels `folder`, `folder-proof`, `grant`, `grant-pop`, `rotation`, `wrap`, `revocation`,
-`suspension`, `lift` and `root-rotation`. Removed on 2026-10-25 with the per-writer cursors
-(`protocol.md` §4.5): `hash/writer-digest`. Added then: `data/path-tag-key`, `data/chunk-gear-key`,
-`hash/set-leaf`, `hash/set-node` and `sig/cleanup` (the `hash/path-tag` label of an earlier draft of
-that day went with its chains). Removed with the gear table, before any release:
-`data/chunk-gear-key`; added with the chunker that replaced it: `data/chunk-table-key` and
-`data/chunk-cut-key`.
+`suspension`, `lift` and `root-rotation`. Removed with the drafts' per-writer cursors:
+`hash/writer-digest`; and with an earlier draft's chains of path tags (§3.5): `hash/path-tag`.
+Removed with the gear table, before any release: `data/chunk-gear-key`; added with the chunker that
+replaced it: `data/chunk-table-key` and `data/chunk-cut-key`.
 
 | Label | Mode | Material / input | Output |
 | --- | --- | --- | --- |

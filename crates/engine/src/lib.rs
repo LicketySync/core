@@ -9,16 +9,12 @@
 //! Status: the engine runs the real `licketysync-keys`,
 //! `licketysync-protocol` and `licketysync-index` crates on the
 //! deterministic simulator (`licketysync-sim`), where every gate scenario
-//! converges: the latest-only index and its exchange, with fixed-size chunks
-//! and an in-memory store. It touches no real disk or network yet. By the
-//! plan's roadmap, phase 1 ("LAN sync from the command line") brings scanning
-//! and watching the disk, conflict copies on a real disk, ignore files and a
-//! per-path sync status, with LAN discovery and QUIC in `licketysync-net`;
-//! the keys crate's keyed chunker replaces the fixed-size chunks from
-//! phase 1 (`keys.md` §3.2) and `SQLite` the in-memory store (the plan's
-//! decision of 2026-10-14). The local API comes in phase 3; selective sync,
-//! versioning and the archive come in phase 5; and the roadmap does not yet
-//! place compression, the change journals or the deletion brake. The plan
+//! converges, with fixed-size chunks; it touches no real disk or network
+//! yet. Phase 1 brings the real disk (scanning, watching, conflicts, ignore
+//! files, the deletion brake and the Trash can archive), a per-path sync
+//! status and the keyed chunker (`keys.md` §3.2), with LAN discovery and
+//! QUIC in `licketysync-net` and the daemon that runs the engine on its
+//! SQLite store. The plan
 //! ("LicketySync: Project Plan") is the specification; `spec/` carries the
 //! protocol, the keys and the threat model as they are written down.
 //!

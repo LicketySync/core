@@ -125,6 +125,34 @@ changed and why.
   `a_log_refused_as_access_denied_past_every_wait_fails_the_open`. Each puts the log in that state
   for real (a handle opened with `FILE_FLAG_DELETE_ON_CLOSE` and closed while another stays open)
   and acts in place of the waits through a hook only tests have.
+- Spec: `protocol.md` §9's plain-words account of what LAN discovery shows still said that anyone
+  on the network sees how many folders a device announces and how far its clock is off. Since the
+  beacon of `keys.md` §2.2 it carries no clock and shows the number of folders only to within a
+  bucket (up to 4, 8, 16, 32 or 64), and only someone who knows a folder's ID can read the
+  announcer's clock to the minute, as `keys.md` §2.2 and `threat-model.md` §5 say; §9 now agrees.
+- Spec: the four specs say what is true, not who decided it or when, as the project's rule for
+  specs asks. Gone: the dated version and status headers (now "Version 2." and "Status: draft."),
+  the "What changed on …" paragraphs (this file and git keep that history), the owner's decisions
+  and quoted answers, the coordinator's rulings and their labels (R-K1 to R-K6, S-1 to S-4, PUSH-1,
+  PUSH-2, DUP and the rest), "the spec author's choice, for the owner's review", the "(decision)"
+  markers and the trail of reviews and research. No rule changes. Where a removed phrase carried a
+  rule or its reason, the sentence now states it plainly: microseconds, since a minute does not
+  tell apart versions made in several places nearly at once; a punch-only circuit, so that no device
+  is used as a relay without its person's consent; and, kept from a deleted paragraph, that nothing
+  has been released, so a `reserved` marker is only a reading aid. `protocol.md` §8's test cases
+  PUSH-1 and PUSH-2 are now "the empty push" and "a push during a round". Dates that say when an
+  outside source was read, checked or measured stay, since without them the claim would read as
+  timeless.
+- Docs: the README's crate table gives each crate a line or two (the detail is in each crate's own
+  documentation and the specs), and adds the fs crate and the daemon's SQLite store, which it
+  called a placeholder; its status puts the deletion brake and the Trash can archive in phase 1, as
+  the plan does, where it had the archive in phase 5 and the brake unplaced. The engine's crate
+  documentation says the same. CONTRIBUTING said reviewers are named in this file; they are named
+  in the commit message only, as is the security-reviewer pass; and it now lists the gate's build
+  of every fuzz target. The index's `MemoryStore` is described as the tests' and fuzz targets'
+  store (the engine persists through its runtime's storage, and the simulator never used it), and
+  the index crate's description no longer waits for SQLite. Comments and docs no longer say who
+  approved the `idna_adapter` exception or when, nor date the stay-current rule.
 - Net: tighter transport limits, the first step on TM-22's residuals (b), (c), (h) and the new (i).
   A connection takes at most 4 streams at once (was 16) and 4 in negotiation (was 8), on QUIC and on
   TCP's yamux; a stream's negotiation ends after 5 s (was `libp2p-swarm`'s 10 s default, now

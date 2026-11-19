@@ -42,7 +42,7 @@ use {hex as _, memory_stats as _, serde_json as _};
 use {multistream_select as _, tokio as _};
 
 // idna_adapter is a dependency only to hold idna on its ASCII-only back end
-// (the owner's exception of 2026-11-03; Cargo.toml says why).
+// (an exception to the stay-current rule; Cargo.toml says why).
 use idna_adapter as _;
 
 pub mod identity;

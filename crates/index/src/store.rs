@@ -13,7 +13,7 @@
 //! rebuild): nothing is served from what the store does not hold yet.
 //! [`Store`] is the shape
 //! of a store that takes a [`ChangeSet`] and gives back the [`Stored`] state
-//! at open; [`MemoryStore`] is phase 0's, which can also model a store that
+//! at open; [`MemoryStore`] keeps it in memory for tests and fuzzing, and can also model a store that
 //! cannot stage atomically and crashes between a change's record and its
 //! removals.
 //!
@@ -238,8 +238,9 @@ pub enum Commit {
     Refuse,
 }
 
-/// The phase 0 store: everything in memory. Cloning one is taking a backup of
-/// the index, which tests and the simulator restore from.
+/// A store that keeps everything in memory, for the tests and the fuzz
+/// targets (the engine persists through its runtime's storage instead).
+/// Cloning one is taking a backup of the index, which tests restore from.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryStore {
     records: BTreeMap<RecordHash, (SignedRecord, u64)>,

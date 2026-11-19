@@ -23,10 +23,8 @@ libp2p-connection-limits = "0.7.0"
 rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs", "prefer-post-quantum", "std"] }
 futures = "0.3.34"
 # Not called: it holds idna (beneath url, beneath multiaddr) on idna_adapter's
-# 1.0 line, the ASCII-only back end, an exception to the stay-current rule
-# that the owner approved on 2026-11-03 ("Keep 1.0.0. Record this decision as
-# an exception to the rule, but we would upgrade to 1.0.* if that ever
-# appears."). `~1.0` takes any 1.0.* release as usual; deny.toml bans the
+# 1.0 line, the ASCII-only back end, an exception to the stay-current rule.
+# `~1.0` takes any 1.0.* release as usual; deny.toml bans the
 # ICU4X back end that 1.1 and later bring, and dependabot.yml skips them.
 idna_adapter = "~1.0"
 

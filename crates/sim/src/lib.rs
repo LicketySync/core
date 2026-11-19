@@ -43,7 +43,7 @@
 //! peers; the contract does not promise it, and the tests that pin it say so.
 //! The `contract` module's probing peers check the contract from the inside,
 //! one side at a time. Both sides learn of a connection's end at the same
-//! instant, a phase-0 simplification (in reality one side may believe it alive
+//! instant, a simplification (in reality one side may believe it alive
 //! until its own timeout); a per-side detection delay and a wall-clock step
 //! fault are follow-ups.
 //!

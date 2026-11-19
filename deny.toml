@@ -194,8 +194,7 @@ deny = [
   { crate = "quinn-proto", wrappers = ["quinn", "libp2p-quic"], reason = "QUIC beneath libp2p-quic only" },
   # idna (url, beneath multiaddr) on its ASCII-only back end, idna_adapter's
   # 1.0 line, which licketysync-net requires as `~1.0`: an exception to the
-  # stay-current rule that the owner approved on 2026-11-03 (1.0.* releases
-  # are still taken). Nothing here resolves or compares a Unicode host name,
+  # stay-current rule (1.0.* releases are still taken). Nothing here resolves or compares a Unicode host name,
   # and the ICU4X back end of idna_adapter 1.1 and later brings twenty crates
   # and baked data with unsafe code that cargo-geiger cannot scan (TM-7). A
   # change that moves idna_adapter past 1.0 trips this.

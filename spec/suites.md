@@ -1,11 +1,6 @@
 # LicketySync cryptographic suites
 
-Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model), amended
-2026-11-10 for the security protocol of a relay's circuit (transport, "Circuits", and the approved
-crates' rows for it), 2026-11-12 for why the cleanup record keeps its signature label when its
-layout gains a watermark (signatures, "Domain separation"), 2026-11-13 for how closely Padmé
-shows a chunk's size at each length (data encryption, "Padding"), and 2026-11-15 for where chunks
-end: a Toeplitz hash, then AES-128 (section 2.7, the `aes` crate's row in section 3.1). This file names
+Version 2. This file names
 every algorithm, parameter and crate that may perform cryptography in this workspace, the apps and
 the browser client. It is normative: first-party code uses nothing that is not listed here, and a
 change that needs something else adds it here first, with the reason, and is reviewed as a change to
@@ -17,20 +12,7 @@ it.
 
 The plan's Security paragraph lists the approved crates by name and its Encrypted connections
 section lists the algorithms; this file pins versions, fixes parameters and encodings, and records
-what was checked on 2026-10-14. Where this file decides something the plan leaves open, the decision
-is marked **(decision)** and listed in the change's report so the plan can record it.
-
-**What changed on 2026-10-22.** With the shared-key model (the owner's decision of 2026-10-18) and
-the owner's answer of 2026-10-22 ("Ed25519 alone"), the coordinator ruled that every signature is
-Ed25519 (R-K1) and that suite 1 has no key encapsulation (R-K2): X-Wing, HPKE and ML-DSA-65 leave
-suite 1, and with the owner key the exported root file (age) and the recovery phrase go too. The
-`bip39` crate stays, for the write key's words. Later rulings of the same day leave two signatures
-(index records and the DeviceProof: the folder proof is one sealed proof for every tier, S-1, and
-the Folder record is gone, S-2), derive the handshake's hint key and payload key from the access key
-so that no key is used raw for two purposes, move `bech32` to 0.12 and add `base64` 0.23 to the
-helpers. Section numbers are kept; section 2.1 is now a note. The drafts never shipped, so their
-labels carry no compatibility duty; the rule that a label is never reused applies from the first
-release on.
+what was checked on 2026-10-14.
 
 ## 1. The rule: suites are whole sets
 
@@ -51,7 +33,7 @@ suites.
   keys authenticate, so if either side sees a list other than the one its peer sent, the handshake
   fails and the connection is dropped (TM-30). A downgrade is therefore detected, not negotiated.
   `protocol.md` specifies the transcript.
-- **A folder's suite is fixed by its keys (decision 2026-10-22).** Every key string of a folder
+- **A folder's suite is fixed by its keys.** Every key string of a folder
   carries its suite and the folder ID hashes it, so every key and every record of a folder is under
   that one suite, and a record that names another is malformed. There is no per-folder minimum suite
   and nothing moves a folder to another suite: a folder under a newer suite is a new folder, made by
@@ -71,8 +53,8 @@ Suite 1 is Ed25519 for signatures, XChaCha20-Poly1305 for data, BLAKE3 for hashi
 derivation, AES-128 for where chunks end, Argon2id for passphrases (phase 1, the local key store),
 and TLS 1.3 or Noise on the transport. The 256-bit symmetric parts survive a quantum computer
 (Grover halves them to 128 bits); AES-128's key, which Grover would bring to about 64 bits of work,
-guards only where chunks end (section 2.7). Ed25519 does not, and the owner
-chose it alone (2026-10-22); `threat-model.md` TM-33 states what a future forger could do. The
+guards only where chunks end (section 2.7). Ed25519 does not, and suite 1
+uses it alone; `threat-model.md` TM-33 states what a future forger could do. The
 record layer has no public-key encryption at all: no key is ever wrapped to anyone.
 
 | Role | Algorithm | Crate (pinned range) | Sizes |
@@ -84,25 +66,23 @@ record layer has no public-key encryption at all: no key is ever wrapped to anyo
 | Passphrase (phase 1) | Argon2id v1.3, m = 64 MiB, t = 3, p = 4 | `argon2` 0.6 | salt 16, output 32 |
 | Transport | TLS 1.3 with X25519MLKEM768 over QUIC and TCP; Noise XX inside WebSocket, WebTransport and WebRTC (the WebSocket path is classical end to end as `libp2p-websocket` ships, section 2.6) | `rustls` 0.23 on `aws-lc-rs` 1; `libp2p-tls`, `libp2p-quic`, `libp2p-noise`, `libp2p-websocket`, `libp2p-identity` | as the transports specify |
 
-### 2.1 Key encapsulation (removed 2026-10-22)
+### 2.1 Key encapsulation (removed)
 
-Suite 1 has no key encapsulation (ruling R-K2). The drafts wrapped the folder's data key to every
+Suite 1 has no key encapsulation. The drafts wrapped the folder's data key to every
 issued key with X-Wing (X25519 + ML-KEM-768) through HPKE, so that sealed peers could store wrapped
 keys for years; with three shared folder keys there is nobody to wrap to, and no wrapped key is
 stored anywhere. Keys move as key strings outside the protocol, and between a person's linked
 devices over the authenticated device channel, which runs only over QUIC or TCP with TLS 1.3 and its
 hybrid X25519MLKEM768 key exchange, never over the classical WebSocket path (`keys.md`, linked
-devices) **(decision)**. The `hpke`, `x-wing` and `ml-kem` crates leave the approved list
-(section 3.1), and `deny.toml` carries no entries for them. What was checked about X-Wing and HPKE on
-2026-10-14 is in this file's history.
+devices). The `hpke`, `x-wing` and `ml-kem` crates leave the approved list
+(section 3.1), and `deny.toml` carries no entries for them.
 
 ### 2.2 Signatures: Ed25519
 
 Index records and cleanup records are signed with the folder's signing key, and the handshake's
 DeviceProof with the device key; a forged signature is a forged change or a forged identity. Nothing
 else is signed in suite 1: the folder proof is a sealed payload, not a signature (`keys.md`,
-handshake proofs). Every signature in suite 1 is Ed25519 alone (ruling R-K1, after the owner's
-answer of 2026-10-22) **(decision)**.
+handshake proofs). Every signature in suite 1 is Ed25519 alone.
 
 - **The algorithm.** Ed25519 as RFC 8032 pure Ed25519: no prehashing (not Ed25519ph), no context
   string (not Ed25519ctx). Public key 32 bytes, signature 64 bytes, secret a 32-byte seed. Crate
@@ -115,12 +95,12 @@ answer of 2026-10-22) **(decision)**.
   `keys.md` registers (`index`, `cleanup`, `device-proof`, and any the browser bundle manifest
   adds). For a record, `body` is its canonical encoding, which already contains the suite number. A
   label is never reused for two layouts; a layout change is a new label. The cleanup record's layout
-  changed on 2026-11-12 (`protocol.md`'s signed watermark: a `forget_before` field in its sealed
+  changed (`protocol.md`'s signed watermark: a `forget_before` field in its sealed
   part, and cleanups with no group) and keeps `sig/cleanup`: nothing had been released, and the
   rule applies from the first release on (the label registry, below); a cleanup encoded before the
   change decodes under the new layout as one with no watermark, `forget_before` being absent and so
   0; and one with no group was malformed before, so no signed body means two things under the one
-  label (the spec author's reading, for the owner's review).
+  label.
 - **Encodings.** A signature is exactly 64 bytes and a public key exactly 32, the canonical encoding
   of a point that is not of small order (decoding and re-encoding gives the same bytes), so one key
   has one ID; anything else is malformed and the record or message is rejected before any
@@ -136,14 +116,14 @@ answer of 2026-10-22) **(decision)**.
 - **Signing is deterministic.** Ed25519 needs no randomness and the same key and body always give
   the same signature, so test vectors reproduce through the production signing path; a record is
   identified by the hash of its body, never of its signature.
-- **Removed.** With R-K1: ML-DSA-65, the hybrid signature that required both halves, the grant's
-  proof-of-possession signature and key IDs. With S-1 and S-2: the write tier's folder-proof
+- **Removed.** ML-DSA-65, the hybrid signature that required both halves, the grant's
+  proof-of-possession signature and key IDs; the write tier's folder-proof
   signature and the Folder record's signature. What a future quantum computer could forge is TM-33;
   post-quantum signatures would come as a later suite (section 5).
 
 ### 2.3 Data encryption: XChaCha20-Poly1305
 
-The plan allows XChaCha20-Poly1305 or AES-256-GCM; suite 1 uses XChaCha20-Poly1305 **(decision)**.
+The plan allows XChaCha20-Poly1305 or AES-256-GCM; suite 1 uses XChaCha20-Poly1305.
 Its 192-bit nonce makes the content-derived nonces that sealed-peer deduplication needs safe, since
 the space is far too large for a derived nonce to collide with any random one, and it has no hardware
 dependence, so the browser build and old ARM devices run it at full speed and without the timing side
@@ -200,14 +180,14 @@ folder, file ID, kind of record or connection; the signature over the record tha
 part binds it to the rest of that record, and the suite is bound by the key, which exists under one
 suite only.
 
-**Padding (decision).** Chunks are padded before encryption with Padmé (Nikitin et al., PURBs 2019),
+**Padding.** Chunks are padded before encryption with Padmé (Nikitin et al., PURBs 2019),
 exactly as `keys.md` defines it (Padmé padding). A chunk's padded size is the one size a sealed peer
 reads (`protocol.md` §4.4), so this is the padding scheme for chunk sizes: each size is shown to
 within about 3 % from 64 KiB, about 6 % from 256 bytes to 64 KiB and about 12 % below that, at a
 cost of at most as much, 3 % on average, plus the 40 bytes of nonce and tag (`keys.md` §3.3
 tabulates it). Sealed metadata is padded to a power of two of
-at least 256 bytes, exactly the least one that holds it (the coordinator's ruling of 2026-10-25, for
-the owner's review, `keys.md` §3.4), so that its length shows a sealed peer only a size class, not
+at least 256 bytes, exactly the least one that holds it (`keys.md` §3.4), so that
+its length shows a sealed peer only a size class, not
 how long the path is nor how many devices wrote the file; it costs up to half of the sealed part,
 about a quarter on average, which takes a typical index record from about 470 to about 520 bytes
 (`protocol.md` §2). Both are written in this workspace, in the `keys` crate, because no approved
@@ -290,14 +270,13 @@ vector of its own (section 4.4), and every other label is exercised by the vecto
 construction that uses it, so a changed label fails a test. The table below is `keys.md`'s registry,
 copied row for row and byte for byte so that the two can be compared mechanically; the section
 pointers inside it are the registry's own and refer to `keys.md` and `protocol.md`, the one place
-this file carries a section number of either. Removed on 2026-10-22: the `identity/`, `epoch/` and
+this file carries a section number of either. Removed from the drafts: `hash/writer-digest`, the
+`identity/`, `epoch/` and
 `wrap/` labels, `folder/root-seed`, `folder/chunk-hash-key`, `key/ml-dsa-65`, `key/x-wing`,
 `hash/id/identity`, `hash/id/key`, the keyed `handshake/folder-hint` and `handshake/proof-key`, and
 the `sig/` labels of the drafts' key records, the Folder record, the folder proof and the grant
-proof of possession. Removed on 2026-10-25: `hash/writer-digest`; added then: `data/path-tag-key`,
-`data/chunk-gear-key`, `hash/set-leaf`, `hash/set-node` and `sig/cleanup`. Removed with the gear
-table, before any release: `data/chunk-gear-key`; added with the chunker that replaced it:
-`data/chunk-table-key` and `data/chunk-cut-key`. Since the drafts never
+proof of possession. Removed with the gear table, before any release: `data/chunk-gear-key`;
+added with the chunker that replaced it: `data/chunk-table-key` and `data/chunk-cut-key`. Since the drafts never
 shipped, the rule that a label is never reused applies from the first release on.
 
 | Label | Mode | Material / input | Output |
@@ -335,7 +314,7 @@ shipped, the rule that a label is never reused applies from the first release on
 
 BLAKE3's own guidance for `derive_key` contexts is "[application] [commit timestamp] [purpose]"; the
 format above drops the timestamp in favour of the registry and the version segment, which give the
-same global uniqueness **(decision)**.
+same global uniqueness.
 
 ### 2.5 Passphrases: Argon2id
 
@@ -343,11 +322,11 @@ A passphrase protects a key store on a device with no platform keystore (a headl
 a container) and any other place `keys.md` names where a human-chosen secret unlocks key material. It
 is never used to stretch a write secret or the write key's words, which already hold 256 bits of
 entropy. All of this is phase 1's: the key store arrives with the daemon, phase 0 stores no key on
-disk, and the keys crate has no Argon2id until then (decision).
+disk, and the keys crate has no Argon2id until then.
 
 **Parameters.** Argon2id, version 0x13 (1.3), memory m = 65536 KiB (64 MiB), iterations t = 3,
-parallelism p = 4, salt 16 bytes through the runtime's randomness trait, output 32 bytes
-**(decision)**. These are RFC 9106 section 4's second recommended option, chosen over the first
+parallelism p = 4, salt 16 bytes through the runtime's randomness trait, output 32 bytes.
+These are RFC 9106 section 4's second recommended option, chosen over the first
 (2 GiB, t = 1) because phones and the browser build must run it. Crate `argon2` 0.6 with the
 `zeroize` feature; the parameters are passed explicitly, never the crate's defaults.
 
@@ -361,7 +340,7 @@ key store), so a newer release derives with whatever the stored parameters say. 
 the defaults, the store is re-encrypted under the new parameters the next time the person unlocks it,
 which is the only time the passphrase is available; a release never changes them silently.
 
-**The exported root file (removed 2026-10-22).** The drafts exported the owner key as an age file
+**The exported root file (removed).** The drafts exported the owner key as an age file
 whose passphrase recipient is scrypt, the one passphrase not under Argon2id. There is no owner key,
 so there is no such file, and the `age` crate leaves the approved list (section 3.1).
 
@@ -373,7 +352,7 @@ protects the data: content, names and structure are encrypted under the folder's
 reach any transport, so the transport adds forward secrecy for the session and hides from a network
 observer what a sealed peer would otherwise see (threat model section 5).
 
-**One security protocol per transport (decision).** Each transport offers exactly one security
+**One security protocol per transport.** Each transport offers exactly one security
 protocol, so multistream-select has nothing to choose between before either side is authenticated:
 TLS 1.3 on QUIC and on TCP; Noise only inside WebSocket, WebTransport and WebRTC, where TLS is not
 offered (a relay's circuit is the one exception, from phase 6, and only on the listening side:
@@ -407,7 +386,7 @@ unless every crate that depends on rustls disables default features; the change 
   on `aws_lc_rs::default_provider()`, and carries a test that X25519MLKEM768 is preferred; the phase 2
   gate's packet capture confirms the group in the ClientHello. Cipher suites: `libp2p-tls`'s list is
   `TLS13_CHACHA20_POLY1305_SHA256`, `TLS13_AES_256_GCM_SHA384` and `TLS13_AES_128_GCM_SHA256`, in that
-  order of preference, and suite 1 accepts that list as it ships **(decision, deviation from the
+  order of preference, and suite 1 accepts that list as it ships **(deviation from the
   plan's "256-bit symmetric everywhere")**: two LicketySync peers share the list, so the suite chosen
   between them is the first one, and AES-128 is negotiated only with a foreign libp2p peer that offers
   nothing else; transport session keys are ephemeral and the record layer is 256-bit throughout, so
@@ -424,11 +403,11 @@ unless every crate that depends on rustls disables default features; the change 
   inside `libp2p-tls`, `ring` verifies the certificate's own self-signature (P-256 for the
   certificates we generate) and the TLS 1.3 CertificateVerify signature, and the extension's Ed25519
   signature is verified by `libp2p-identity` on `ed25519-dalek`, with its non-strict `verify` and no
-  check against small-order keys **(deviation from section 2.2, recorded 2026-11-03)**: under the
+  check against small-order keys **(deviation from section 2.2)**: under the
   identity point, say, a forged extension verifies, so `net` refuses a peer whose identity key is not
   canonical or is of small order before any stream is opened or accepted (the keys crate's check of
   every received key; the Hello's own check of the libp2p identity key is phase 1). `ring`'s other
-  roles are listed under section 3.1. **Providers are passed explicitly (decision).** `libp2p-tls` and `libp2p-quic` build on
+  roles are listed under section 3.1. **Providers are passed explicitly.** `libp2p-tls` and `libp2p-quic` build on
   `aws_lc_rs::default_provider()` and `libp2p-websocket` on `ring`, each passing its provider rather
   than using a process default. First-party code builds every rustls configuration with
   `builder_with_provider` and `rustls::crypto::aws_lc_rs::default_provider()` and never calls the
@@ -488,8 +467,7 @@ unless every crate that depends on rustls disables default features; the change 
   Inside the outer layer, Noise is classical as for every browser path (above). `wtransport` and
   the browser-only crates are in section 3.1 (proposed).
 - **Circuits** (relayed connections through a public relay or a hole-punch coordinator, phases 2
-  and 7; the spec author's choice of 2026-11-10, after the security review of that day, for the
-  owner's review). A circuit relay v2 circuit is a byte stream through the device in the middle,
+  and 7). A circuit relay v2 circuit is a byte stream through the device in the middle,
   and libp2p upgrades it with a security protocol of its own, end to end between the two peers;
   the middle sees only that channel's ciphertext. Between two native ends it is **TLS 1.3**
   through `libp2p-tls`, with the same rustls configuration as on QUIC and TCP, so its key exchange
@@ -499,7 +477,7 @@ unless every crate that depends on rustls disables default features; the change 
   of the two on a circuit: TLS, or Noise to a peer whose addresses mark it as a browser client
   (phase 6's design), a mark that phase 6 takes only from sources the device in the middle cannot
   alter, an invite or the peer exchange of a folder's peers over an end-to-end channel, never from
-  the circuit or from anything the device in the middle says (the confirm review of 2026-11-10), so
+  the circuit or from anything the device in the middle says, so
   that no relay or coordinator can make a native dialer offer Noise to a native peer. So a device
   in the middle that rewrites the negotiation gets a failed
   handshake, never a weaker one between two native ends. A native listener accepts TLS on a
@@ -511,12 +489,12 @@ unless every crate that depends on rustls disables default features; the change 
   connection, under the rules above.
 - **Tor** (phase 7) through Arti: onion-service cryptography is Tor's.
 
-**The libp2p identity key (decision).** The transport authenticates each side's libp2p identity, an
+**The libp2p identity key.** The transport authenticates each side's libp2p identity, an
 Ed25519 key. It is not the device key, which signs only the DeviceProof, because no key serves two
 protocols (TM-11). It is a separate Ed25519 key derived under `licketysync/v1/key/libp2p-identity`
 from the device seed, used for nothing but what the libp2p TLS and Noise specifications require
 (signing the libp2p extension in the certificate; signing the Noise static key) and one derivation
-inside `libp2p-quic` **(deviation, recorded 2026-11-03)**: `libp2p-quic` 0.14 derives QUIC's
+inside `libp2p-quic` **(deviation)**: `libp2p-quic` 0.14 derives QUIC's
 stateless-reset key from the identity's secret key with HKDF-SHA256 (`libp2p-identity`'s
 `derive_secret`, info `libp2p quic stateless reset key`) and keys an HMAC on `ring` with it, so that
 a device's reset tokens survive restarts. The key gains a second purpose, separated by HKDF's label,
@@ -532,7 +510,7 @@ Ed25519 key from the device seed, which signs only the BEP 44 mutable items the 
 
 The identity is one per device, so its peer ID is a stable handle across folders, days and addresses
 for anyone the device connects to and anyone who reads its DHT records (threat model, section 5).
-**Considered alternative, not adopted (for the plan to record).** A libp2p identity per folder, or one
+**Considered alternative, not adopted.** A libp2p identity per folder, or one
 rotated on a schedule, would remove that handle. Its cost: one connection per shared folder instead
 of one per peer, with the matching multiplication of handshakes, NAT traversal and relay
 reservations; a rotating identity would also defeat a LAN discovery dial's check of the peer it
@@ -614,15 +592,15 @@ that wraps it.
 ### 3.1 Cryptography
 
 The audit-status column is what the crate's own documentation says as of 2026-10-14; "none named"
-means the crate names no independent audit. Removed on 2026-10-22 (rulings R-K1 and R-K2): `hpke`,
+means the crate names no independent audit. Removed: `hpke`,
 `x-wing`, `ml-kem`, `ml-dsa` and `age`, whose roles (key wrapping, the post-quantum signature half,
 the exported root file) no longer exist; the deviation from the plan's "audited crates" that the
 unaudited post-quantum crates required goes with them.
 
 | Crate | Pin | Checked | Audit status | May be used for | May not be used for |
 | --- | --- | --- | --- | --- | --- |
-| `ed25519-dalek` | `3` | 3.0.0, 2026-07-06 | none named | Every signature in suite 1: the folder signing key, the device key, the libp2p identity key and the BEP 44 DHT signing key (section 2.6; the last signs only BEP 44 mutable items, phase 2): `SigningKey::from_bytes` on a derived seed; `verify_strict`; the canonical-encoding and small-order checks on a decoded public key; inside `libp2p-identity` only, the non-strict `verify` of the libp2p TLS extension's signature, which `libp2p-identity` 0.3.1 calls (deviation, recorded 2026-11-03; section 2.6: `net` refuses a peer whose identity key is not canonical or of small order) | `verify` (non-strict) in first-party code; `hazmat`, `legacy_compatibility`, `pkcs8`; signing anything a label does not name |
-| `libp2p-identity` | `0.3` (`net` depends on it directly, beside `libp2p-core` `0.44`) | 0.3.1, 2026-10-27 (0.3.0 is dated 2026-07-28 on crates.io, not 2026-09-11) | none named; its Ed25519 is `ed25519-dalek` | The libp2p identity key of section 2.6 with the `ed25519` and `peerid` features only (`peerid` is the `PeerId` type): an `ed25519::SecretKey` from the derived 32-byte seed, its `Keypair` and `PeerId`; inside `libp2p-quic`, `Keypair::derive_secret`, HKDF-SHA256 (`hkdf`, `hmac`, `sha2`) over the identity's secret key under the label `libp2p quic stateless reset key`, once per transport, for QUIC's stateless-reset HMAC key (read 2026-11-03; a use the libp2p QUIC transport adds beyond the TLS and Noise specifications, section 2.6); its non-strict verification of the TLS extension's Ed25519 signature, which accepts small-order keys (deviation, recorded 2026-11-03: `net` refuses such a peer, section 2.6; the Hello's check of the libp2p identity key is phase 1) | Its `secp256k1`, `ecdsa`, `rsa` and `rand` features; generating an identity from randomness instead of the derived seed; signing anything the libp2p TLS and Noise specifications do not; `derive_secret` in first-party code |
+| `ed25519-dalek` | `3` | 3.0.0, 2026-07-06 | none named | Every signature in suite 1: the folder signing key, the device key, the libp2p identity key and the BEP 44 DHT signing key (section 2.6; the last signs only BEP 44 mutable items, phase 2): `SigningKey::from_bytes` on a derived seed; `verify_strict`; the canonical-encoding and small-order checks on a decoded public key; inside `libp2p-identity` only, the non-strict `verify` of the libp2p TLS extension's signature, which `libp2p-identity` 0.3.1 calls (deviation; section 2.6: `net` refuses a peer whose identity key is not canonical or of small order) | `verify` (non-strict) in first-party code; `hazmat`, `legacy_compatibility`, `pkcs8`; signing anything a label does not name |
+| `libp2p-identity` | `0.3` (`net` depends on it directly, beside `libp2p-core` `0.44`) | 0.3.1, 2026-10-27 (0.3.0 is dated 2026-07-28 on crates.io, not 2026-09-11) | none named; its Ed25519 is `ed25519-dalek` | The libp2p identity key of section 2.6 with the `ed25519` and `peerid` features only (`peerid` is the `PeerId` type): an `ed25519::SecretKey` from the derived 32-byte seed, its `Keypair` and `PeerId`; inside `libp2p-quic`, `Keypair::derive_secret`, HKDF-SHA256 (`hkdf`, `hmac`, `sha2`) over the identity's secret key under the label `libp2p quic stateless reset key`, once per transport, for QUIC's stateless-reset HMAC key (read 2026-11-03; a use the libp2p QUIC transport adds beyond the TLS and Noise specifications, section 2.6); its non-strict verification of the TLS extension's Ed25519 signature, which accepts small-order keys (deviation: `net` refuses such a peer, section 2.6; the Hello's check of the libp2p identity key is phase 1) | Its `secp256k1`, `ecdsa`, `rsa` and `rand` features; generating an identity from randomness instead of the derived seed; signing anything the libp2p TLS and Noise specifications do not; `derive_secret` in first-party code |
 | `chacha20poly1305` | `0.11` | 0.11.0, 2026-06-28 | NCC Group 2020, no significant findings | `XChaCha20Poly1305` as section 2.3 | `ChaCha20Poly1305` (96-bit nonce) directly; the stream cipher without the MAC |
 | `aes` | `0.9` (0.9.4 or later, `zeroize` feature) | 0.9.4, 2026-11-02 | NCC Group 2020 (an earlier version), no significant findings | `Aes128Enc` block encryption, batched, as the chunker's PRF (section 2.7), under the first 16 bytes of the chunk cut key and no other key; its runtime choice of AES-NI, VAES, the ARMv8 AES instructions or the constant-time bitsliced software backend. `cpufeatures` finds the ARMv8 instructions on Linux, Android and Apple platforms but not on Windows, so a Windows-on-ARM build passes `-C target-feature=+aes` (every such processor has them) or runs the bitsliced code | Decryption; any mode of operation; any other key; the `hazmat` feature; the `aes_backend` and `aes_backend_soft` cfg flags in a shipped build |
 | `blake3` | `1` | 1.8.7, 2026-08-20 | none named; the designers' reference implementation | The labelled hash `H`, `keyed_hash`, `derive_key` under a registered label; `Hasher` for streaming; `rayon` feature for large files | Extendable output; as a password hash; as a MAC without the keyed mode; plain `hash` without a label |
@@ -634,7 +612,7 @@ unaudited post-quantum crates required goes with them.
 | `libp2p-tls`, `libp2p-quic`, `libp2p-noise` | `0.7`, `0.14`, `0.47` (`net` depends on `libp2p-tls` and `libp2p-quic` directly, not through the `libp2p` facade, whose weak `tokio` feature would put DNS, mDNS and UPnP crates in `Cargo.lock`; `libp2p-noise` directly only under the `webtransport` feature, proposed; for review, and from phase 6 for circuits with a browser end) | 0.7.0, 0.14.0, 0.47.0, 2026-09-11 | none named | The transports of section 2.6: `make_client_config` and `make_server_config` as `libp2p-tls` builds them (its `Config` on TCP and, from phase 2, inside circuits between native ends; `libp2p-quic`'s `Config::new` on QUIC); `libp2p-quic` on quinn, with its stateless-reset HMAC key on `ring` from the identity's derived secret; from phase 6, `libp2p-noise` XX inside a circuit with a browser client at one end, a native listener accepting it there beside TLS ("Circuits") | Noise patterns other than XX; Noise on QUIC or TCP; Noise inside a circuit between two native ends, or offered by a native dialer to a native peer, and inside any circuit before phase 6; TLS inside WebSocket, WebTransport or WebRTC; building a node while `SSLKEYLOGFILE` is set (both configurations carry rustls's `KeyLogFile`, which writes session secrets to that file; `net` refuses, TM-6) |
 | `libp2p-websocket` | with `libp2p` `0.57` | 0.46.0, read 2026-10-17 | none named | The WebSocket transport of section 2.6, its outer TLS classical as shipped (rustls on `ring`) | Any claim that its outer TLS is post-quantum until the phase 2 change lands; the linked-device channel |
 | `wtransport` (proposed; for review) | `0.7` (`default-features = false`, features `aws-lc-rs`, `self-signed` and `quinn`, the last only exposing quinn's transport configuration; optional, `net`'s feature `webtransport`, off by default) | 0.7.2, 2026-08-11 | none named; a small project, so TM-8's active-upstream check applies | The device-side WebTransport listener of section 2.6 (spike B): its server endpoint on quinn with `net`'s QUIC windows and stream limit and a rustls `ServerConfig` that `net` builds itself through `builder_with_provider` on `aws_lc_rs::default_provider()` with its groups and suites replaced (TLS 1.3 only, X25519MLKEM768 and X25519 permitted, the dialer's order choosing between them, `libp2p-tls`'s suite order winning, 0-RTT off). In that configuration two pieces of first-party code: a key-exchange group that delegates every call to `aws-lc-rs`'s X25519MLKEM768 or X25519 and records which one rustls chose, computing nothing itself, and a resolver that serves the one certificate and records the groups the `ClientHello` offered. Its `self-signed` builder, `rcgen` 0.14 on `aws-lc-rs`, for the ECDSA P-256 certificate valid at most 14 days; `Certificate::hash`, SHA-256 of the DER through `sha2`, for the certhash; its client and `ServerHashVerification` in tests only. Beneath it `quinn-proto` runs its stateless-reset, token and Retry cryptography on `ring`, `ring`'s role (3) below, since `libp2p-quic`'s `ring` feature unifies with it | Its `ring` and `dangerous-configuration` features; its default TLS configurations (`with_identity` and the client's defaults, which use its own provider choice); `with_no_cert_validation`; `with_native_certs` and its DNS resolver; a certificate valid more than 14 days; first-party key-exchange code that computes anything |
-| `libp2p-webtransport-websys` (browser only; proposed; for review) | `0.6` (wasm32 only, in `browser-tests/webtransport`, a workspace of its own; the published 0.6.0 source vendored with only `wasm-bindgen-futures = "=0.4.58"` relaxed to `0.4.79`, by the owner's decision of 2026-11-04, "Yes, keep the patched version until upstream releases the fix.", until a release without the pin has been out 7 days; `ci/check-vendored.sh` holds the copy to its `SHA256SUMS`) | 0.6.0, 2026-09-11 | none named | The browser half of spike B's test, and phase 6's browser client: the browser's own WebTransport with `serverCertificateHashes` (Chrome's TLS, which this file does not govern) and `libp2p-noise` as initiator with the dialed certhashes. `libp2p-noise` 0.47 does all of Noise's Diffie-Hellman, ephemeral and static, with its own keypair on `x25519-dalek` 3.0.0 (`curve25519-dalek` 5.0.0), there and on native targets; on wasm32 `snow`'s RustCrypto resolver supplies ChaChaPoly (`chacha20poly1305` 0.10) and SHA-256 (`sha2` 0.10), and its `curve25519-dalek` 4.1.3, `aes`, `ctr` and `aes-gcm` compile there only and are never selected; all `deny.toml`-wrapped. `wasm-bindgen` 0.2.129, `js-sys` and `web-sys` 0.3.106 beneath it | Native builds; changes to the vendored source beyond that one requirement |
+| `libp2p-webtransport-websys` (browser only; proposed; for review) | `0.6` (wasm32 only, in `browser-tests/webtransport`, a workspace of its own; the published 0.6.0 source vendored with only `wasm-bindgen-futures = "=0.4.58"` relaxed to `0.4.79` until a release without the pin has been out 7 days; `ci/check-vendored.sh` holds the copy to its `SHA256SUMS`) | 0.6.0, 2026-09-11 | none named | The browser half of spike B's test, and phase 6's browser client: the browser's own WebTransport with `serverCertificateHashes` (Chrome's TLS, which this file does not govern) and `libp2p-noise` as initiator with the dialed certhashes. `libp2p-noise` 0.47 does all of Noise's Diffie-Hellman, ephemeral and static, with its own keypair on `x25519-dalek` 3.0.0 (`curve25519-dalek` 5.0.0), there and on native targets; on wasm32 `snow`'s RustCrypto resolver supplies ChaChaPoly (`chacha20poly1305` 0.10) and SHA-256 (`sha2` 0.10), and its `curve25519-dalek` 4.1.3, `aes`, `ctr` and `aes-gcm` compile there only and are never selected; all `deny.toml`-wrapped. `wasm-bindgen` 0.2.129, `js-sys` and `web-sys` 0.3.106 beneath it | Native builds; changes to the vendored source beyond that one requirement |
 | `tauri` (the app's phone shell only; with it `tauri-utils` 2.10.2 and its `aes-gcm` 0.10.3, and `tauri-codegen` 2.7.4's and `wry` 0.57.1's `sha2` 0.10.9; not suite 1; re-read at each Tauri bump) | `2.12` (app's `mobile/`, Android and iOS only; features `wry`, `isolation` and `custom-protocol`) | 2.12.5, 2026-10-21 | none named | Tauri's protection of IPC inside the app's own process, never the network or the disk: the isolation pattern's AES-256-GCM over a message's arguments from the isolation frame to the shell, which the frame's WebCrypto encrypts with random 96-bit nonces and `aes-gcm` only decrypts, under a key `tauri-utils` draws when the app starts; SHA-256 of the scripts and styles the content security policy lists by hash, the isolation frame's script and style among them, in `tauri-codegen` at build time and in `wry` on Android. Tauri draws that key, its invoke key and the policy's nonces with `getrandom` 0.3.4, not the approved 0.4 line (section 4.3), and panics if it fails. It authenticates the arguments, not the command name: the capability's command list is the boundary (TM-27) | Any first-party use of these primitives or of `getrandom` 0.3; Tauri's `rustls-tls`, `native-tls` and `native-tls-vendored` features (its HTTP client's TLS); anything that protects a folder's data, a key or a connection to a peer |
 
 Transitive dependencies these crates pull in, among them `curve25519-dalek`, `sha2`, `p256`, `snow`,
@@ -652,7 +630,7 @@ crates on the graph today, and a change that adds another adds its entry. Becaus
 includes dev-dependencies, an entry for a crate that test tooling also reaches lists that tool among
 its wrappers (`proptest` for `chacha20`), and a second configuration, `deny-production.toml`, with
 `[graph] exclude-dev = true` and the same entry without the tool, which `gate.sh` and CI also run,
-keeps the test-only path out of production builds, as the `cargo tree` check does **(decision)**.
+keeps the test-only path out of production builds, as the `cargo tree` check does.
 `ring` has six roles, all beneath listed crates, four of them in the graph today: (1) in
 `libp2p-tls`, verifying the certificate's self-signature and the TLS 1.3 CertificateVerify
 signature; (2) in `rcgen`, generating the certificate's P-256 key and its self-signature; (3) in
@@ -666,7 +644,7 @@ added to `ring`'s wrappers); and, not in the graph yet, (6) in `libp2p-websocket
 (rustls's `ring` provider, which also turns on `webpki`'s `ring` feature). `ring`'s `deny.toml`
 wrappers
 are what `cargo tree -e no-dev -i ring` showed when `net` was added (2026-11-03): `libp2p-tls`,
-`rcgen`, `quinn-proto` and `libp2p-quic` **(decision; `deny.toml` bans `openssl`, `openssl-sys`,
+`rcgen`, `quinn-proto` and `libp2p-quic` **(`deny.toml` bans `openssl`, `openssl-sys`,
 `md5`, `sha1`, `rust-crypto`, `pkcs8`, `der` and `spki` outright, restricts the crates `keys` and
 `net` use, and the primitives beneath them, to listed wrappers, and confines `rand` beneath the
 libp2p crates and `quinn-proto` and, with `rand_xorshift`, beneath `proptest`; `deny-production.toml`
@@ -694,7 +672,7 @@ The simulator's reproducible randomness comes from its own seeded statistical ge
 in the `sim` crate, which feeds the runtime's randomness trait in simulator runs only and is not
 cryptography; TM-5 permits exactly that generator and nothing else written here (section 4.3).
 
-**The write key's words (decision).** The words encode 256 bits of entropy per BIP39: 24 words from
+**The write key's words.** The words encode 256 bits of entropy per BIP39: 24 words from
 the English word list, the last 8 bits a checksum. The write secret is that entropy itself, the 32
 bytes the words encode, and nothing else (`keys.md`, the write key as words). BIP39's PBKDF2 seed
 function, and its optional passphrase, are not used: the write secret is a uniformly random 256-bit
@@ -729,8 +707,8 @@ newtype over `Zeroizing<[u8; 32]>` or a struct deriving `Zeroize, ZeroizeOnDrop`
   default (`threat-model.md` TM-6).
 - Memory locking (`mlock`) and swap are the operating system's concern and are not promised.
 
-**Deviation: the libp2p identity's seed beneath `libp2p-identity` (recorded 2026-11-03, to raise
-upstream).** `net` hands the identity's 32-byte seed to `libp2p-identity` 0.3.1 from the keys crate's
+**Deviation: the libp2p identity's seed beneath `libp2p-identity` (to raise upstream).**
+`net` hands the identity's 32-byte seed to `libp2p-identity` 0.3.1 from the keys crate's
 zeroizing buffer, which `ed25519::SecretKey::try_from_bytes` wipes, but beyond that point the rules
 above do not hold: its `ed25519::SecretKey` is a plain array that is `Clone` and is not wiped on drop,
 `Keypair::secret` and `derive_secret` (which `libp2p-quic` calls for the stateless-reset key, section
@@ -776,7 +754,7 @@ implementation is the one place a failure is handled, and it stops the process w
 `std::process::exit` and a distinct exit code, never a panic and never `std::process::abort()`, whose
 SIGABRT can write a core dump holding keys (TM-6); the daemon also switches core dumps off at startup
 (a phase 1 item); and nothing ever falls back to a weaker source; the operating system is out of
-scope (`threat-model.md` section 3.12) **(decision 2026-10-17)**. The browser build enables the
+scope (`threat-model.md` section 3.12). The browser build enables the
 `wasm_js` feature in the binary crate only, so a library crate never decides the backend. The engine
 draws randomness through its runtime trait; in a simulator run that trait is backed by the
 simulator's own seeded statistical generator, SplitMix64 in the `sim` crate, so that a failure
@@ -810,14 +788,13 @@ them is named after the primitive or label (`fn vector_derive_key_folder_data_ke
 
 ## 5. Suite 2 (placeholder)
 
-Suite 2 does not exist. It will when post-quantum signatures are added (the owner's answer of
-2026-10-22: suite agility may add them in a later version), when a flaw is found in Ed25519,
-XChaCha20-Poly1305 or BLAKE3, or when a preference for AES-256-GCM on hardware with AES instructions
-is judged worth a second cipher. A folder never moves between suites: a folder under suite 2 is a new
-folder, made by unlinking and sharing again (`keys.md`, making, unlinking and sharing again). Suite 2
-would use the label prefix `licketysync/v2/` and, if its write secret is not 32 bytes, a word form of
-its own. Nothing about it is specified here, deliberately: a suite is a whole set and is written down
-whole.
+Suite 2 does not exist. It will when post-quantum signatures are added, when a flaw is found in
+Ed25519, XChaCha20-Poly1305 or BLAKE3, or when a preference for AES-256-GCM on hardware with AES
+instructions is judged worth a second cipher. A folder never moves between suites: a folder under
+suite 2 is a new folder, made by unlinking and sharing again (`keys.md`, making, unlinking and
+sharing again). Suite 2 would use the label prefix `licketysync/v2/` and, if its write secret is not
+32 bytes, a word form of its own. Nothing about it is specified here, deliberately: a suite is a
+whole set and is written down whole.
 
 ## Appendix: what was checked on 2026-10-14
 
@@ -831,10 +808,9 @@ self-signature) from its manifest and source; `ring`'s other roles (snow's resol
 `quinn-proto`, and `libp2p-websocket` enabling rustls's `ring` provider feature) from those crates'
 manifests and source; that `libp2p-websocket` 0.46.0 builds its outer TLS on the `ring` provider with
 no way to pass another, that `libp2p-tls` passes `aws-lc-rs` explicitly, and that `ring` also
-verifies the CertificateVerify signature in `libp2p-tls`, from the round-4 security review of
-2026-10-17. The rewrite of 2026-10-22 removed X-Wing, HPKE, ML-DSA-65 and age; it read `bech32`
+verifies the CertificateVerify signature in `libp2p-tls`, as of 2026-10-17; `bech32`
 0.12.0 (its changelog: the release adds the error-correction API this file bars) and `base64` 0.23.1
 (its release notes: SIMD engines behind the default `simd-unsafe` feature, which stays off) from the
-crates as published.
+crates as published, read on 2026-10-22.
 The crate pins are to be confirmed against `cargo search` when the first of these dependencies is
 added to `Cargo.toml`, in the change that adds it.

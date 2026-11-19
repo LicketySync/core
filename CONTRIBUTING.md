@@ -42,8 +42,8 @@ plan's "Engineering practice" section. The short version:
   checks what each build read (`spec/threat-model.md` TM-7 says why).
 - Dead code is removed in the same change that orphans it.
 - Every bug fix lands with a regression test named after the bug.
-- Every change updates `CHANGELOG.md` and names its reviewers there and in the
-  commit message.
+- Every change updates `CHANGELOG.md` and names its reviewers in the commit
+  message.
 
 ## Review checklist
 
@@ -62,7 +62,7 @@ full, the tests, the threat model and the plan, and walks this list:
   as untrusted; no host contacted that `spec/allowed-hosts.txt` does not list.
 - Docs and `CHANGELOG.md` updated.
 - Touches keys, protocol, paths or the API? The security-reviewer pass is
-  recorded in the changelog entry.
+  recorded in the commit message.
 
 A finding blocks the commit until it is fixed and re-reviewed, or the reviewer
 agrees it is not one.
@@ -100,8 +100,9 @@ group. The groups:
    libp2p-webtransport-websys is the copy `vendor/SHA256SUMS` lists) and
    `ci/check-wasm-bindgen.sh` (its wasm-bindgen is the pinned
    wasm-bindgen-cli's).
-5. **Unused dependencies and the fuzz lockfile**: `cargo udeps` on the pinned
-   nightly; `fuzz/Cargo.lock` current (`cargo fetch --locked`).
+5. **Unused dependencies and the fuzz targets**: `cargo udeps` on the pinned
+   nightly; `fuzz/Cargo.lock` current (`cargo fetch --locked`), and every fuzz
+   target compiles (`cargo check` on `fuzz/`).
 6. **Scans**: typos; Semgrep (`ci/semgrep-scan.sh`, tested first by
    `ci/test-semgrep-scan.sh`): the project rules' own cases, then their scan
    and the community rules'; gitleaks over the working tree
@@ -146,7 +147,7 @@ that belongs to a workspace crate in `target/llvm-cov-target`, but before a run
 removes only the crate it measures. A binary of another crate left by an
 earlier run, such as engine's, which links the index, then carries the index
 code of that run, and its coverage map counts the old code against the new
-files: the index measurement failed for no reason (twice, 2026-11-08).
+files: the index measurement failed for no reason (twice).
 `cargo llvm-cov clean --workspace` removes every workspace crate's artifacts
 and the profile data there, and keeps the build of the dependencies. It takes
 under a second and the measurements take about as long after it as before
@@ -277,16 +278,14 @@ the tag names that commit is checked by hand
 at least 7 days old (`cooldown` in `.github/dependabot.yml`; security updates
 come at once).
 
-**Which release.** The owner's "Stay current" rule (the owner's messages of
-2026-10-25, quoted in the project's CLAUDE.md): every pin is the newest
-release that has been out for at least 7 days, or a newer one at once when it
-fixes a critical or high vulnerability. A crate's date is its
-crates.io publish date; an action's, tool's or image's, its GitHub release's
-`published_at` (`gh api repos/<owner>/<repo>/releases/tags/<tag>`) or the
-image tag's push date; a stable Rust's, its release day (`rustup check` shows
-the newest); a nightly's, its date. Any request to these services carries a
-User-Agent with no personal data, such as
-`licketysync-ci-check (+https://github.com/LicketySync)`.
+**Which release.** The stay-current rule: every pin is the newest release that
+has been out for at least 7 days, or a newer one at once when it fixes a
+critical or high vulnerability. A crate's date is its crates.io publish date;
+an action's, tool's or image's, its GitHub release's `published_at`
+(`gh api repos/<owner>/<repo>/releases/tags/<tag>`) or the image tag's push
+date; a stable Rust's, its release day (`rustup check` shows the newest); a
+nightly's, its date. Any request to these services carries a User-Agent with no
+personal data, such as `licketysync-ci-check (+https://github.com/LicketySync)`.
 
 **Moving a pin**, the one procedure for every key: edit `ci/pins.env`; edit
 the workflow copies, running `./gate.sh` until it no longer stops at one (each
@@ -337,7 +336,7 @@ change:
   workspace's graph uses looks unused to it, so prune neither store from the
   other's workspace (the browser workspace's exemptions live in its own
   store, `browser-tests/webtransport/supply-chain/`, for that reason). One
-  exception, which the owner approved on 2026-11-03: `idna_adapter`, idna's
+  exception: `idna_adapter`, idna's
   back end chosen by its version, stays on its 1.0 line, the ASCII-only one
   (`crates/net/Cargo.toml` requires `~1.0`, `deny.toml` bans the ICU4X back
   end of later lines, and `dependabot.yml` skips them); a 1.0.* release is
