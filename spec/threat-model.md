@@ -2073,7 +2073,16 @@ disappearance of its own that it did not mean; neither stops a write holder who 
 and what they limit is how much is lost for good. Unlinking a folder keeps its archive as ordinary
 files (`keys.md` §7.3), so what a removed person destroyed can still be restored after the others
 share again (TM-42). Stops partial files appearing as complete and limits what a hostile or mistaken
-writer can destroy. Enforced by `engine` and `app`.
+writer can destroy. A rename into place may use a `renameat2` flag only with a fallback that keeps the
+same guarantee. ZFS before 2.2 and NFS answer `RENAME_NOREPLACE` and `RENAME_EXCHANGE` with `EINVAL`,
+many FUSE file systems and some SMB ones refuse at least `RENAME_EXCHANGE`, and some sandboxes answer
+`ENOSYS` or `EPERM`. The fallback for a no-replace rename keeps its no-overwrite guarantee: a hard
+link, then an unlink of the temporary name, as the daemon's store does (two steps, so a crash can
+leave both names). It runs beneath the folder's root through the TM-4 directory handle (`linkat` and
+`unlinkat`, never `AT_SYMLINK_FOLLOW`), after the temporary file's identity is checked again. Where a
+hard link fails too (FAT and exFAT, some SMB and FUSE mounts), placement fails with a plain notice
+and never falls back to a replace. An exchange has no atomic fallback, so placement must not depend
+on one. Enforced by `engine` and `app`.
 
 **TM-36. Retired 2026-10-22.** Was "The phrase derives everything and nothing derives the phrase".
 There is no phrase and no owner key; within a folder, one-way derivation from the write secret is

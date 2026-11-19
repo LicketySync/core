@@ -739,7 +739,7 @@ fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 /// Whether a no-replace rename failed because the file system refuses the
-/// flag: `EINVAL` on Linux and Android (some network and FUSE file systems),
+/// flag: `EINVAL` on Linux and Android (some network and FUSE file systems, and ZFS before 2.2),
 /// `ENOTSUP` on macOS and iOS (a volume without `VOL_CAP_INT_RENAME_EXCL`).
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 pub(super) fn refuses_flag(e: rustix::io::Errno) -> bool {

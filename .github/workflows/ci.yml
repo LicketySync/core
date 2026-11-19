@@ -132,6 +132,9 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
       - run: cargo nextest run --workspace --all-features --no-fail-fast
+        env:
+          # A namespace or mount test that cannot run fails, not skips.
+          LICKETYSYNC_REQUIRE_NS: ${{ runner.os == 'Linux' && '1' || '' }}
       - run: cargo test --workspace --doc
       # What rustc read for every workspace crate in this system's build
       # (ci/check-dep-info.sh): a .d file reflects its build's cfg.

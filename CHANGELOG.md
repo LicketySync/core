@@ -7528,3 +7528,13 @@ changed and why.
   agents' IDs (`a` and 16 hex digits), one of which in this line holds a fragment
   typos rejects; those merge edits were not re-reviewed.
 - Index: `raw_unhold` removes a record from each derived index with two helpers, one for counts and one for sets, so each index takes one line there; behaviour is unchanged.
+- Fs: the symlink-then-directory race test no longer fails where the temporary directory refuses
+  `RENAME_EXCHANGE`. Found on a build machine with ZFS 2.1, which answers every `renameat2` flag
+  with `EINVAL`: the test's swapper died at its first swap and the test failed, though the resolver,
+  which never renames, passed every other test there. The test now probes with one swap and back;
+  where the directory refuses, it runs again in a namespace on a tmpfs (skipped, saying why, where
+  none can be made), a failed swap stops the resolving threads at once, and a regression test runs
+  the race on a tmpfs in a namespace on every file system; CI's Linux test job sets
+  `LICKETYSYNC_REQUIRE_NS`, which makes a skipped namespace or mount test fail, and the race's child
+  must print that it ran. TM-35 says a rename into place may use a `renameat2` flag only with a
+  fallback of the same guarantee. Users are unaffected: only the test changed.

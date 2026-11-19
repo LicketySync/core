@@ -152,17 +152,43 @@ fn in_child() -> bool {
 /// user and mount namespace, `unshare -Urm`, and asserts that it passed
 /// there. Where no such namespace can be made (no unshare, or the kernel or
 /// a security module forbids it to unprivileged users), prints why and
-/// returns.
+/// returns; where the variable [`REQUIRE_NS`] is set, fails instead.
 fn in_namespace(test: &str) {
+    in_namespace_marked(test, None);
+}
+
+/// The variable that makes a skipped namespace or mount a failure, so that
+/// a job that must run those tests (CI's Linux test job) cannot pass by
+/// skipping them.
+const REQUIRE_NS: &str = "LICKETYSYNC_REQUIRE_NS";
+
+/// What the race prints, on stderr, when it has run to its end.
+const RACE_RAN: &str = "licketysync-fs: the race ran";
+
+/// Reports that `test` is skipped for `why`, or fails where [`REQUIRE_NS`]
+/// is set.
+fn skip(test: &str, why: &str) {
+    assert!(
+        std::env::var_os(REQUIRE_NS).is_none_or(|v| v.is_empty()),
+        "{test} cannot run, and {REQUIRE_NS} is set: {why}"
+    );
+    eprintln!("skipped {test}: {why}");
+}
+
+/// As [`in_namespace`], and when `marker` is given, the child's stderr must
+/// hold it too, or the child's own skip line (printed only where
+/// [`REQUIRE_NS`] is unset): a child that skipped passes its test, and is no
+/// race.
+fn in_namespace_marked(test: &str, marker: Option<&str>) {
     match Command::new("unshare").args(["-Urm", "true"]).output() {
         Ok(out) if out.status.success() => {}
         Ok(out) => {
             let why = String::from_utf8_lossy(&out.stderr);
-            eprintln!("skipped {test}: `unshare -Urm` fails here: {}", why.trim());
+            skip(test, &format!("`unshare -Urm` fails here: {}", why.trim()));
             return;
         }
         Err(e) => {
-            eprintln!("skipped {test}: no unshare here: {e}");
+            skip(test, &format!("no unshare here: {e}"));
             return;
         }
     }
@@ -182,8 +208,12 @@ fn in_namespace(test: &str) {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        out.status.success() && stdout.contains("1 passed"),
-        "{test} in a namespace:\n{stdout}\n{stderr}"
+        out.status.success()
+            && stdout.contains("1 passed")
+            && marker.is_none_or(|m| {
+                stderr.contains(m) || stderr.contains(&format!("skipped {test}:"))
+            }),
+        "{test} in a namespace (expected marker {marker:?}):\n{stdout}\n{stderr}"
     );
     eprint!("{stderr}");
 }
@@ -274,32 +304,120 @@ fn tm_4_symlink_then_directory() {
 /// refused at the link at least [`RACE_EACH`] times. Nothing lands outside.
 /// Bounded by counts, never by time: each resolving thread stops after
 /// [`RACE_CAP`] resolutions, and the swapping thread after [`RACE_SWAPS`]
-/// swaps. Linux only: it swaps with `RENAME_EXCHANGE`, which the file
-/// systems the tests meet there all have.
+/// swaps. Linux only: it swaps with `RENAME_EXCHANGE`, which not every file
+/// system has (ZFS before 2.2, NFS, SMB and many FUSE file systems
+/// answer `EINVAL`). Where the temporary directory refuses it, the test runs
+/// again in a namespace, on a tmpfs, skipped where none can be made (a
+/// failure where [`REQUIRE_NS`] is set).
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn tm_4_symlink_then_directory_race() {
+    const NAME: &str = "resolver::tests::tm_4_symlink_then_directory_race";
+    if !exchange_refused() {
+        race(&Scratch::new());
+    } else if in_child() {
+        race_on_tmpfs(NAME);
+    } else {
+        eprintln!("{NAME}: the temporary directory refuses RENAME_EXCHANGE");
+        in_namespace_marked(NAME, Some(RACE_RAN));
+    }
+}
+
+/// A temporary directory that refuses `RENAME_EXCHANGE` (a ZFS before 2.2)
+/// made this test fail at its first swap; the race on a tmpfs in a
+/// namespace, which every kernel allows to swap, is covered here on every
+/// file system.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_temporary_directory_that_refuses_rename_exchange_races_on_a_tmpfs() {
+    const NAME: &str =
+        "resolver::tests::a_temporary_directory_that_refuses_rename_exchange_races_on_a_tmpfs";
+    if in_child() {
+        race_on_tmpfs(NAME);
+    } else {
+        in_namespace_marked(NAME, Some(RACE_RAN));
+    }
+}
+
+/// Whether the system's temporary directory refuses `RENAME_EXCHANGE`
+/// (`EINVAL`), found by swapping a directory with a link and back. Any other
+/// error fails the test.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn exchange_refused() -> bool {
+    let s = Scratch::new();
+    set_up_race(&s);
+    let top = rustix::fs::open(s.root(), DIRECTORY, Mode::empty()).unwrap();
+    for _ in 0..2 {
+        match rustix::fs::renameat_with(&top, "a", &top, "spare", rustix::fs::RenameFlags::EXCHANGE)
+        {
+            Ok(()) => {}
+            Err(Errno::INVAL) => return true,
+            Err(e) => panic!("the probe swap failed: {e}"),
+        }
+    }
+    false
+}
+
+/// The race on a tmpfs mounted over a fresh scratch directory, in the
+/// child's namespace; skipped, saying why, where it cannot be mounted (a failure
+/// where [`REQUIRE_NS`] is set).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn race_on_tmpfs(test: &str) {
+    let s = Scratch::new();
+    let tmpfs = [OsStr::new("-t"), OsStr::new("tmpfs"), OsStr::new("tmpfs")];
+    // Declared after the scratch, so it is undone before the scratch is removed.
+    let Some(_mount) = Mount::new(&tmpfs, &s.base) else {
+        skip(test, "no tmpfs can be mounted here");
+        return;
+    };
+    fs::create_dir(s.root()).unwrap();
+    fs::create_dir(s.outside()).unwrap();
+    race(&s);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn set_up_race(s: &Scratch) {
+    fs::create_dir(s.at("a")).unwrap();
+    symlink(s.outside(), s.at("spare")).unwrap();
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+/// Sets `stop` when the thread holding it panics, so that the swapper ends.
+struct StopOnPanic<'a>(&'a std::sync::atomic::AtomicBool);
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl Drop for StopOnPanic<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn race(s: &Scratch) {
     const RACE_EACH: usize = 20;
     const RACE_CAP: usize = 200_000;
     const RACE_SWAPS: usize = 20_000_000;
-    let s = Scratch::new();
-    fs::create_dir(s.at("a")).unwrap();
-    symlink(s.outside(), s.at("spare")).unwrap();
+    set_up_race(s);
     let top = rustix::fs::open(s.root(), DIRECTORY, Mode::empty()).unwrap();
     let both = roots(&s.root());
     let stop = std::sync::atomic::AtomicBool::new(false);
+    let stop = &stop;
     let outcomes: Vec<(usize, usize)> = std::thread::scope(|scope| {
         let swapper = scope.spawn(|| {
             let mut swaps = 0;
             while !stop.load(Ordering::Relaxed) && swaps < RACE_SWAPS {
-                rustix::fs::renameat_with(
+                if let Err(e) = rustix::fs::renameat_with(
                     &top,
                     "a",
                     &top,
                     "spare",
                     rustix::fs::RenameFlags::EXCHANGE,
-                )
-                .unwrap();
+                ) {
+                    // So that the resolving threads stop at once.
+                    stop.store(true, Ordering::Relaxed);
+                    panic!("the swap failed: {e}");
+                }
                 swaps += 1;
             }
         });
@@ -307,11 +425,14 @@ fn tm_4_symlink_then_directory_race() {
             .iter()
             .map(|root| {
                 scope.spawn(move || {
+                    let _guard = StopOnPanic(stop);
                     let deep = ip("a/b/x");
                     let shallow = ip("a/x");
                     let (mut through, mut refused) = (0, 0);
                     for _ in 0..RACE_CAP {
-                        if through >= RACE_EACH && refused >= RACE_EACH {
+                        if stop.load(Ordering::Relaxed)
+                            || (through >= RACE_EACH && refused >= RACE_EACH)
+                        {
                             break;
                         }
                         match root.parent(&deep, Create::Directories) {
@@ -343,6 +464,7 @@ fn tm_4_symlink_then_directory_race() {
         );
     }
     assert!(s.outside_is_empty());
+    eprintln!("{RACE_RAN}");
 }
 
 #[test]
