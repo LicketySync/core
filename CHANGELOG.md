@@ -5,6 +5,7 @@ changed and why.
 
 ## Unreleased
 
+- Fs, tests: the `RACE_RAN` marker is compiled only where the race tests that print it are (Linux and Android); on macOS it was unused, and `-D warnings` failed the test build of `main`.
 - Keys, spec: the keyed chunker. Where a file's chunks end is now decided by the construction of
   Truong, Merz, Scarlata, Günther and Paterson (CCS 2025, ePrint 2025/558, Theorem 4.5): a pair of
   tabulated Toeplitz hashes over GF(2)[x] mod x^64 + x^4 + x^3 + x + 1, under two secret tables,

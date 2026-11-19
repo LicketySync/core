@@ -163,6 +163,7 @@ fn in_namespace(test: &str) {
 const REQUIRE_NS: &str = "LICKETYSYNC_REQUIRE_NS";
 
 /// What the race prints, on stderr, when it has run to its end.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const RACE_RAN: &str = "licketysync-fs: the race ran";
 
 /// Reports that `test` is skipped for `why`, or fails where [`REQUIRE_NS`]
