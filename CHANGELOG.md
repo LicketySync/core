@@ -7447,3 +7447,4 @@ changed and why.
   moved this entry below the 2026-10-14 line and made `.typos.toml` ignore review
   agents' IDs (`a` and 16 hex digits), one of which in this line holds a fragment
   typos rejects; those merge edits were not re-reviewed.
+- Index: `raw_unhold` removes a record from each derived index with two helpers, one for counts and one for sets, so each index takes one line there; behaviour is unchanged.

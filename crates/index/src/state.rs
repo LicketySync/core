@@ -260,6 +260,26 @@ fn log(undo: Option<&mut Vec<Undo>>, entry: Undo) {
     }
 }
 
+/// Takes one off the count at `key` and drops the entry at zero.
+fn dec_count<K: Ord>(map: &mut BTreeMap<K, u32>, key: &K) {
+    if let Some(n) = map.get_mut(key) {
+        *n = n.saturating_sub(1);
+        if *n == 0 {
+            map.remove(key);
+        }
+    }
+}
+
+/// Removes `value` from the set at `key` and drops the set when it empties.
+fn remove_from_set<K: Ord, V: Ord>(map: &mut BTreeMap<K, BTreeSet<V>>, key: &K, value: &V) {
+    if let Some(set) = map.get_mut(key) {
+        set.remove(value);
+        if set.is_empty() {
+            map.remove(key);
+        }
+    }
+}
+
 impl State {
     // Queries.
 
@@ -674,27 +694,12 @@ impl State {
         }
         self.trie.remove(held.record.key());
         for c in held.record.chunks() {
-            if let Some(n) = self.chunks.get_mut(&c.cipher_hash) {
-                *n = n.saturating_sub(1);
-                if *n == 0 {
-                    self.chunks.remove(&c.cipher_hash);
-                }
-            }
+            dec_count(&mut self.chunks, &c.cipher_hash);
         }
         if let Some(tag) = held.record.path_tag() {
-            if let Some(set) = self.at_tag.get_mut(&tag) {
-                set.remove(hash);
-                if set.is_empty() {
-                    self.at_tag.remove(&tag);
-                }
-            }
+            remove_from_set(&mut self.at_tag, &tag, hash);
             for name in held.record.replaces() {
-                if let Some(n) = self.named_at.get_mut(&(tag, *name)) {
-                    *n = n.saturating_sub(1);
-                    if *n == 0 {
-                        self.named_at.remove(&(tag, *name));
-                    }
-                }
+                dec_count(&mut self.named_at, &(tag, *name));
             }
         } else {
             self.cleanups.remove(hash);
@@ -702,49 +707,24 @@ impl State {
         for (i, g) in held.record.groups().iter().enumerate() {
             let gi = u32::try_from(i).unwrap_or(u32::MAX);
             for name in &g.forget {
-                if let Some(set) = self.forgets.get_mut(name) {
-                    set.remove(&(*hash, gi));
-                    if set.is_empty() {
-                        self.forgets.remove(name);
-                    }
-                }
+                remove_from_set(&mut self.forgets, name, &(*hash, gi));
             }
-            if let Some(b) = g.because
-                && let Some(set) = self.by_because.get_mut(&b)
-            {
-                set.remove(&(*hash, gi));
-                if set.is_empty() {
-                    self.by_because.remove(&b);
-                }
+            if let Some(b) = g.because {
+                remove_from_set(&mut self.by_because, &b, &(*hash, gi));
             }
         }
         if let Some(c) = held.counter() {
-            if let Some(n) = self.counters.get_mut(&c) {
-                *n = n.saturating_sub(1);
-                if *n == 0 {
-                    self.counters.remove(&c);
-                }
-            }
+            dec_count(&mut self.counters, &c);
             self.expirable.remove(&(c, *hash));
             if let Some(m) = held.meta() {
                 self.by_path.remove(&m.dot.device, m.path.as_bytes(), hash);
                 if m.tree {
                     self.tree_dirs.remove(&m.path, hash);
                 }
-                if let Some(set) = self.paths.get_mut(&m.path) {
-                    set.remove(hash);
-                    if set.is_empty() {
-                        self.paths.remove(&m.path);
-                    }
-                }
+                remove_from_set(&mut self.paths, &m.path, hash);
             } else {
                 let w = held.applied().map_or(0, Applied::forget_before);
-                if let Some(n) = self.watermarks.get_mut(&w) {
-                    *n = n.saturating_sub(1);
-                    if *n == 0 {
-                        self.watermarks.remove(&w);
-                    }
-                }
+                dec_count(&mut self.watermarks, &w);
             }
         }
         Some(held)
