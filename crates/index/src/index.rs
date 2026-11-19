@@ -899,12 +899,19 @@ impl Txn<'_> {
             // replaced by a name is never noted (above).
             _ => return Ok((false, None)),
         };
-        while self.ix.s.notes.len() >= self.ix.bounds.stale_known {
-            let Some((_, oldest)) = self.ix.s.note_order.iter().next().map(|(n, h)| (*n, *h))
-            else {
-                break;
-            };
-            self.ix.s.remove_note(&oldest, Some(&mut self.undo));
+        // Room for the one about to be added: the oldest go first. Chosen
+        // before any is removed, so that no loop depends on a removal.
+        let excess = (self.ix.s.notes.len() + 1).saturating_sub(self.ix.bounds.stale_known);
+        let oldest: Vec<RecordHash> = self
+            .ix
+            .s
+            .note_order
+            .values()
+            .take(excess)
+            .copied()
+            .collect();
+        for h in oldest {
+            self.ix.s.remove_note(&h, Some(&mut self.undo));
         }
         let nr = self.ix.s.next_note;
         self.ix.s.add_note(

@@ -580,6 +580,59 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_holding_only_pending_frees_did_not_exist_and_any_other_row_means_it_did() {
+        // The folder's index was created before when any key of it is found;
+        // pending frees are chunks' business, not the index's, so they alone
+        // say nothing: the folder is created afresh and its frees are kept.
+        let f = FolderId([9; 32]);
+        let load_of = |entries: &[(Vec<u8>, Vec<u8>)]| {
+            let mut s = FakeStorage::default();
+            for (key, value) in entries {
+                s.put(key, value).unwrap();
+            }
+            s.commit().unwrap();
+            load(&s, &f).unwrap()
+        };
+        let free = (free_key(&f, &CipherHash([6; 32])), Vec::new());
+        let loaded = load_of(core::slice::from_ref(&free));
+        assert!(!loaded.existed, "only frees");
+        assert_eq!(loaded.pending_free, BTreeSet::from([CipherHash([6; 32])]));
+        assert_eq!(loaded.stored.undecodable, 0);
+        // A bad free row among them counts and still does not make it exist.
+        let bad_free = (key_of(FREES, &f, b"short"), Vec::new());
+        let loaded = load_of(&[free.clone(), bad_free]);
+        assert!(!loaded.existed, "frees, one bad");
+        assert_eq!(loaded.pending_free.len(), 1);
+        assert_eq!(loaded.stored.undecodable, 1);
+        // One bad row of each other kind makes it exist, frees kept.
+        let mut slot = [4u8; 32].to_vec();
+        slot.push(2);
+        let others = vec![
+            (
+                "record",
+                (record_key(&f, &RecordHash([1; 32])), b"x".to_vec()),
+            ),
+            (
+                "base only",
+                (key_of(BASE_ONLY, &f, &[2; 32]), b"x".to_vec()),
+            ),
+            ("slot", (key_of(SLOTS, &f, &slot), [3; 32].to_vec())),
+            ("meta", (meta_key(&f), b"short".to_vec())),
+            (
+                "arrival",
+                (key_of(ARRIVALS, &f, &[6; 32]), b"short".to_vec()),
+            ),
+            ("peer", (key_of(PEERS, &f, &[5; 32]), b"x".to_vec())),
+        ];
+        for (kind, row) in others {
+            let loaded = load_of(&[free.clone(), row]);
+            assert!(loaded.existed, "a bad {kind} row");
+            assert_eq!(loaded.stored.undecodable, 1, "a bad {kind} row");
+            assert_eq!(loaded.pending_free.len(), 1, "a bad {kind} row");
+        }
+    }
+
+    #[test]
     fn the_layout_keeps_folders_and_kinds_apart() {
         let (f, g) = (FolderId([1; 32]), FolderId([2; 32]));
         let c = CipherHash([3; 32]);

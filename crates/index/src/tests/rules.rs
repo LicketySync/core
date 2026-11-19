@@ -1204,3 +1204,66 @@ fn per_peer_state_at_its_horizon_stays_at_a_rounds_end_and_goes_past_it() {
     assert!(txn.index().peer(&dev(1)).is_none(), "past it: gone");
     assert!(txn.index().peer(&dev(2)).is_some());
 }
+
+/// Renumbering stores only the records whose number changed: one that keeps
+/// its number (the first, numbered 1) is not put again in the commit's
+/// change set, though the renumbering unholds and holds it (4.5, "Local
+/// sequence and epoch").
+#[test]
+fn a_renumbering_puts_only_the_records_whose_number_changed() {
+    use licketysync_protocol::limits::MAX_LOCAL_SEQ;
+    let mut d = Dev::writer(0xd0);
+    let a = d.put("a", 1);
+    let f1 = d.put("f", 2);
+    let f2 = d.put("f", 3);
+    let g = d.put("g", 4);
+    assert!(!d.holds(&f1));
+    assert_eq!(numbers(&d), vec![(a, 1), (f2, 3), (g, 4)]);
+    d.ix.s.meta = StoredMeta {
+        next_seq: MAX_LOCAL_SEQ + 1,
+        ..d.ix.s.meta
+    };
+    let mut txn = d.ix.begin();
+    let w = txn
+        .write(&[Change::Put(file("h", 5, 9_000))], d.clock, &mut |b| {
+            d.rng.fill(b);
+        })
+        .unwrap();
+    let (changes, _pending) = txn.finish();
+    let h = w.records[0].0;
+    let put: Vec<(RecordHash, u64)> = changes.put.iter().map(|(r, s)| (r.hash(), *s)).collect();
+    assert_eq!(put, vec![(f2, 2), (g, 3), (h, 4)], "a keeps its number 1");
+}
+
+/// A tree delete is covered only by a later tree delete: a file at the
+/// directory's own path whose vector covers the tree delete's dot (signed by
+/// a write-key holder, here forged around the rules a writer keeps) does not
+/// make a tree delete that arrives after it obsolete, and the tree delete
+/// still drops what it covers beneath.
+#[test]
+fn a_file_at_a_tree_deletes_path_covering_its_dot_does_not_refuse_it() {
+    use super::kit::{chunk, entry};
+    let mut w = Dev::writer(0xd0);
+    let x = w.put("d/x", 1);
+    let tree = w.tree_delete("d").records[0].0;
+    let covered = w.counter(&tree);
+    let mut meta = sealed_file("d", dev(0xe0), covered + 1);
+    meta.vector = vec![entry(w.id(), covered)];
+    let e = forge("d", &[chunk(7)], &meta, &[]);
+    let mut r = Dev::reader(0xa1);
+    r.take(&w, &[x]);
+    assert_eq!(
+        r.judge(&e).unwrap(),
+        licketysync_protocol::connection::Judgement::Held
+    );
+    let e = e.hash();
+    assert!(r.holds(&x) && r.holds(&e));
+    let j = r.take(&w, &[tree]);
+    assert_eq!(
+        j,
+        vec![licketysync_protocol::connection::Judgement::Held],
+        "the tree delete is held"
+    );
+    assert!(r.holds(&tree) && r.holds(&e));
+    assert!(!r.holds(&x), "what it covers beneath is dropped");
+}

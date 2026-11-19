@@ -5,6 +5,15 @@ changed and why.
 
 ## Unreleased
 
+- Index, engine: three mutants of the index that tests missed or hung on, and a store rule no test held.
+  A tree delete is covered only by a later tree delete: one that arrives after a file at its own path
+  whose vector covers its dot (a write-key holder can sign one) is held and drops what it covers
+  beneath (`State::replacer`). A renumbering of the local sequence puts only the records whose number
+  changed (`State::changes`). Making room for a note no longer loops until a removal succeeds: it
+  picks the oldest notes first and removes those, so a removal that does nothing fails the bounds
+  test instead of hanging it. The engine's `store::load` is tested to find a folder that holds only
+  pending frees not to have existed (its frees kept), and one bad row of any other kind to have
+  existed.
 - Fs, tests: the `RACE_RAN` marker is compiled only where the race tests that print it are (Linux and Android); on macOS it was unused, and `-D warnings` failed the test build of `main`.
 - Keys, spec: the keyed chunker. Where a file's chunks end is now decided by the construction of
   Truong, Merz, Scarlata, Günther and Paterson (CCS 2025, ePrint 2025/558, Theorem 4.5): a pair of
