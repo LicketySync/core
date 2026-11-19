@@ -47,12 +47,18 @@
 
 use core::convert::Infallible;
 use core::fmt;
+use core::task::{Context, Poll};
 
 use futures::future::Either;
 use libp2p_core::muxing::StreamMuxerBox;
-use libp2p_core::transport::{Boxed, Transport as _};
+use libp2p_core::transport::{Boxed, PortUse, Transport as _};
 use libp2p_core::upgrade::Version;
+use libp2p_core::{Endpoint, Multiaddr};
 use libp2p_identity::{DecodingError, PeerId};
+use libp2p_swarm::{
+    ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
+    THandlerOutEvent, ToSwarm,
+};
 use licketysync_keys::device::Libp2pIdentity;
 
 use crate::limits::{Limits, LimitsError, has_memory_limit};
@@ -70,33 +76,21 @@ pub const KEY_LOG_VARIABLE: &str = "SSLKEYLOGFILE";
 /// A device's swarm.
 pub type Swarm = libp2p_swarm::Swarm<Behaviour>;
 
-pub use behaviour::Behaviour;
-
-mod behaviour {
-    // The derive converts each behaviour's event into `Event`; the two limit
-    // behaviours' events are `Infallible`, so those conversions are
-    // unreachable by construction, which rustc's nightly (1.101) reports
-    // inside the macro's output.
-    #![allow(
-        unreachable_code,
-        reason = "the derive's conversions of Infallible events, unreachable by construction"
-    )]
-
-    use libp2p_swarm::NetworkBehaviour;
-
-    use super::Event;
-    use crate::sync;
-
-    /// The behaviours of a node, in the order the swarm consults them: the
-    /// connection limits, the memory limit (none on iOS yet, TM-22's
-    /// residual (d)), then the sync streams.
-    #[derive(NetworkBehaviour)]
-    #[behaviour(prelude = "libp2p_swarm::derive_prelude", to_swarm = "Event")]
-    pub struct Behaviour {
-        pub(super) connection_limits: libp2p_connection_limits::Behaviour,
-        pub(super) memory_limit: super::MemoryLimit,
-        pub(super) sync: sync::Behaviour,
-    }
+/// The behaviours of a node, in the order the swarm consults them: the
+/// connection limits, the memory limit (none on iOS yet, TM-22's residual
+/// (d)), then the sync streams.
+///
+/// Written out, not derived: the derive would run each behaviour's handler
+/// beside the others, and give an inbound stream the longest of their
+/// negotiation timeouts, which for the two limit behaviours' handlers (they
+/// run no protocol) is `libp2p-swarm`'s 10 s default. Here a connection's one
+/// handler is the sync behaviour's, so every stream negotiates within
+/// [`Limits::negotiation_timeout`]; the limit behaviours give only their
+/// verdicts.
+pub struct Behaviour {
+    connection_limits: libp2p_connection_limits::Behaviour,
+    memory_limit: MemoryLimit,
+    sync: sync::Behaviour,
 }
 
 /// The process-memory limit: `libp2p-memory-connection-limits`, which
@@ -139,23 +133,154 @@ impl Behaviour {
     }
 }
 
+/// A limit behaviour's event, which never exists, as the node's.
+fn never<T>(event: ToSwarm<Infallible, Infallible>) -> ToSwarm<Event, T> {
+    event
+        .map_in(|never| match never {})
+        .map_out(|never| match never {})
+}
+
+impl NetworkBehaviour for Behaviour {
+    type ConnectionHandler = sync::Handler;
+    type ToSwarm = Event;
+
+    fn handle_pending_inbound_connection(
+        &mut self,
+        connection_id: ConnectionId,
+        local_addr: &Multiaddr,
+        remote_addr: &Multiaddr,
+    ) -> Result<(), ConnectionDenied> {
+        self.connection_limits.handle_pending_inbound_connection(
+            connection_id,
+            local_addr,
+            remote_addr,
+        )?;
+        self.memory_limit.handle_pending_inbound_connection(
+            connection_id,
+            local_addr,
+            remote_addr,
+        )?;
+        self.sync
+            .handle_pending_inbound_connection(connection_id, local_addr, remote_addr)
+    }
+
+    fn handle_established_inbound_connection(
+        &mut self,
+        connection_id: ConnectionId,
+        peer: PeerId,
+        local_addr: &Multiaddr,
+        remote_addr: &Multiaddr,
+    ) -> Result<THandler<Self>, ConnectionDenied> {
+        // The limit behaviours' handlers run no protocol; only their verdicts
+        // are kept.
+        let libp2p_swarm::dummy::ConnectionHandler = self
+            .connection_limits
+            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)?;
+        let libp2p_swarm::dummy::ConnectionHandler = self
+            .memory_limit
+            .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)?;
+        self.sync.handle_established_inbound_connection(
+            connection_id,
+            peer,
+            local_addr,
+            remote_addr,
+        )
+    }
+
+    fn handle_pending_outbound_connection(
+        &mut self,
+        connection_id: ConnectionId,
+        maybe_peer: Option<PeerId>,
+        addresses: &[Multiaddr],
+        effective_role: Endpoint,
+    ) -> Result<Vec<Multiaddr>, ConnectionDenied> {
+        let mut combined = self.connection_limits.handle_pending_outbound_connection(
+            connection_id,
+            maybe_peer,
+            addresses,
+            effective_role,
+        )?;
+        combined.extend(self.memory_limit.handle_pending_outbound_connection(
+            connection_id,
+            maybe_peer,
+            addresses,
+            effective_role,
+        )?);
+        combined.extend(self.sync.handle_pending_outbound_connection(
+            connection_id,
+            maybe_peer,
+            addresses,
+            effective_role,
+        )?);
+        Ok(combined)
+    }
+
+    fn handle_established_outbound_connection(
+        &mut self,
+        connection_id: ConnectionId,
+        peer: PeerId,
+        addr: &Multiaddr,
+        role_override: Endpoint,
+        port_use: PortUse,
+    ) -> Result<THandler<Self>, ConnectionDenied> {
+        let libp2p_swarm::dummy::ConnectionHandler = self
+            .connection_limits
+            .handle_established_outbound_connection(
+                connection_id,
+                peer,
+                addr,
+                role_override,
+                port_use,
+            )?;
+        let libp2p_swarm::dummy::ConnectionHandler =
+            self.memory_limit.handle_established_outbound_connection(
+                connection_id,
+                peer,
+                addr,
+                role_override,
+                port_use,
+            )?;
+        self.sync.handle_established_outbound_connection(
+            connection_id,
+            peer,
+            addr,
+            role_override,
+            port_use,
+        )
+    }
+
+    fn on_swarm_event(&mut self, event: FromSwarm) {
+        self.connection_limits.on_swarm_event(event);
+        self.memory_limit.on_swarm_event(event);
+        self.sync.on_swarm_event(event);
+    }
+
+    fn on_connection_handler_event(
+        &mut self,
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+        event: THandlerOutEvent<Self>,
+    ) {
+        self.sync
+            .on_connection_handler_event(peer_id, connection_id, event);
+    }
+
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<ToSwarm<Event, THandlerInEvent<Self>>> {
+        if let Poll::Ready(event) = self.connection_limits.poll(cx) {
+            return Poll::Ready(never(event));
+        }
+        if let Poll::Ready(event) = self.memory_limit.poll(cx) {
+            return Poll::Ready(never(event));
+        }
+        self.sync.poll(cx).map(|event| event.map_out(Event::Sync))
+    }
+}
+
 /// What a node's behaviours report.
 #[derive(Debug)]
 pub enum Event {
     /// The sync behaviour's event.
     Sync(sync::Event),
-}
-
-impl From<sync::Event> for Event {
-    fn from(event: sync::Event) -> Self {
-        Self::Sync(event)
-    }
-}
-
-impl From<Infallible> for Event {
-    fn from(never: Infallible) -> Self {
-        match never {}
-    }
 }
 
 /// Why a node was not built.
@@ -233,7 +358,20 @@ fn build_on(os: &str, identity: &Libp2pIdentity, limits: &Limits) -> Result<Swar
     let keypair = identity::keypair(identity).map_err(BuildError::Identity)?;
     let peer_id = keypair.public().to_peer_id();
     let transport = transport(&keypair, limits)?;
-    let behaviour = Behaviour {
+    let config = libp2p_swarm::Config::with_tokio_executor()
+        .with_idle_connection_timeout(limits.idle_timeout)
+        .with_max_negotiating_inbound_streams(to_usize(limits.max_negotiating_inbound_streams));
+    Ok(libp2p_swarm::Swarm::new(
+        transport,
+        behaviour(limits),
+        peer_id,
+        config,
+    ))
+}
+
+/// The node's behaviours, every bound taken from `limits`.
+fn behaviour(limits: &Limits) -> Behaviour {
+    Behaviour {
         connection_limits: libp2p_connection_limits::Behaviour::new(
             libp2p_connection_limits::ConnectionLimits::default()
                 .with_max_pending_incoming(Some(limits.max_pending_incoming))
@@ -244,14 +382,8 @@ fn build_on(os: &str, identity: &Libp2pIdentity, limits: &Limits) -> Result<Swar
                 .with_max_established(Some(limits.max_established_total)),
         ),
         memory_limit: memory_limit(limits),
-        sync: sync::Behaviour::new(limits.max_inbound_sync_streams),
-    };
-    let config = libp2p_swarm::Config::with_tokio_executor()
-        .with_idle_connection_timeout(limits.idle_timeout)
-        .with_max_negotiating_inbound_streams(to_usize(limits.max_negotiating_inbound_streams));
-    Ok(libp2p_swarm::Swarm::new(
-        transport, behaviour, peer_id, config,
-    ))
+        sync: sync::Behaviour::new(limits.max_inbound_sync_streams, limits.negotiation_timeout),
+    }
 }
 
 /// QUIC, then TCP with TLS and yamux, as one transport.
@@ -299,13 +431,24 @@ fn to_usize(n: u32) -> usize {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test code")]
+#[allow(clippy::unwrap_used, clippy::panic, reason = "test code")]
 mod tests {
     use core::time::Duration;
 
+    use libp2p_core::ConnectedPoint;
+    use libp2p_swarm::ConnectionHandler as _;
+    use libp2p_swarm::behaviour::ConnectionEstablished;
     use licketysync_keys::secret::DeviceSeed;
 
     use super::*;
+
+    /// The peer of the public test seed `[byte; 32]`, never a real key (TM-6).
+    fn peer(byte: u8) -> PeerId {
+        identity::peer_id(&Libp2pIdentity::from_device_seed(&DeviceSeed::from_bytes(
+            [byte; 32],
+        )))
+        .unwrap()
+    }
 
     #[test]
     fn each_quic_bound_comes_from_limits() {
@@ -328,6 +471,151 @@ mod tests {
         assert_eq!(config.max_concurrent_stream_limit, 7);
         assert_eq!(config.max_connection_data, 3 << 20);
         assert_eq!(config.max_stream_data, 1 << 20);
+    }
+
+    /// The defaults QUIC is built with: TM-22's 5 s handshake (residual (b))
+    /// and 4 streams a connection (residual (h)).
+    #[test]
+    fn default_quic_config_has_the_5_s_handshake_and_4_streams() {
+        // A public test seed, never a real key (TM-6).
+        let seed = DeviceSeed::from_bytes([0xa2; 32]);
+        let keypair = identity::keypair(&Libp2pIdentity::from_device_seed(&seed)).unwrap();
+        let config = quic_config(&keypair, &Limits::default());
+        assert_eq!(config.handshake_timeout, Duration::from_secs(5));
+        assert_eq!(config.max_concurrent_stream_limit, 4);
+    }
+
+    /// A connection's one handler is the sync behaviour's, so every stream,
+    /// inbound or outbound, negotiates within the limits' 5 s. Derived, the
+    /// node would run the limit behaviours' handlers beside it, and an
+    /// inbound stream would get the longest of their timeouts, `libp2p-swarm`'s
+    /// 10 s.
+    #[test]
+    fn every_stream_negotiates_within_5_s_not_the_10_s_of_libp2p() {
+        let mut node = behaviour(&Limits::default());
+        let addr = Multiaddr::empty();
+        let inbound = node
+            .handle_established_inbound_connection(
+                ConnectionId::new_unchecked(1),
+                peer(1),
+                &addr,
+                &addr,
+            )
+            .unwrap();
+        let mut outbound = node
+            .handle_established_outbound_connection(
+                ConnectionId::new_unchecked(2),
+                peer(2),
+                &addr,
+                Endpoint::Dialer,
+                PortUse::Reuse,
+            )
+            .unwrap();
+        for handler in [&inbound, &outbound] {
+            assert_eq!(*handler.listen_protocol().timeout(), Duration::from_secs(5));
+        }
+        // An id from the behaviour (it answers at once, the swarm not having
+        // told it of the connection), handed to the handler as the swarm would.
+        outbound.on_behaviour_event(node.sync().open(peer(2), ConnectionId::new_unchecked(2)));
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        match outbound.poll(&mut cx) {
+            Poll::Ready(libp2p_swarm::ConnectionHandlerEvent::OutboundSubstreamRequest {
+                protocol,
+            }) => assert_eq!(*protocol.timeout(), Duration::from_secs(5)),
+            _ => panic!("no outbound request"),
+        }
+    }
+
+    /// Tells `node` that `connection` to `peer` is established, as the swarm
+    /// does, at `endpoint`.
+    fn established(
+        node: &mut Behaviour,
+        connection: ConnectionId,
+        peer: PeerId,
+        endpoint: &ConnectedPoint,
+    ) {
+        node.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+            peer_id: peer,
+            connection_id: connection,
+            endpoint,
+            failed_addresses: &[],
+            other_established: 0,
+        }));
+    }
+
+    /// What `refused` says, as `libp2p-connection-limits` words it.
+    fn exceeded(refused: Option<ConnectionDenied>) -> String {
+        refused
+            .unwrap()
+            .downcast_ref::<libp2p_connection_limits::Exceeded>()
+            .unwrap()
+            .to_string()
+    }
+
+    /// The node's own behaviour, as `build` makes it, holds 32 established
+    /// inbound connections and 48 in all, so that strangers who fill every
+    /// inbound slot leave 16 for this side's dials (TM-22's residual (i)), and
+    /// 48 outbound; each limit is named by its own refusal.
+    #[test]
+    fn established_connections_stop_at_32_inbound_leaving_16_for_dials_out_and_48_in_all() {
+        let addr = Multiaddr::empty();
+        let listener = ConnectedPoint::Listener {
+            local_addr: addr.clone(),
+            send_back_addr: addr.clone(),
+        };
+        let dialer = ConnectedPoint::Dialer {
+            address: addr.clone(),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        let inbound = |node: &mut Behaviour, n: u8| {
+            let connection = ConnectionId::new_unchecked(n.into());
+            let handler =
+                node.handle_established_inbound_connection(connection, peer(n), &addr, &addr);
+            if handler.is_ok() {
+                established(node, connection, peer(n), &listener);
+            }
+            handler.err()
+        };
+        let outbound = |node: &mut Behaviour, n: u8| {
+            let connection = ConnectionId::new_unchecked(n.into());
+            let handler = node.handle_established_outbound_connection(
+                connection,
+                peer(n),
+                &addr,
+                Endpoint::Dialer,
+                PortUse::Reuse,
+            );
+            if handler.is_ok() {
+                established(node, connection, peer(n), &dialer);
+            }
+            handler.err()
+        };
+
+        let mut node = behaviour(&Limits::default());
+        for n in 0..32 {
+            assert!(inbound(&mut node, n).is_none(), "inbound {n}");
+        }
+        assert_eq!(
+            exceeded(inbound(&mut node, 32)),
+            "connection limit exceeded: at most 32 established incoming connections are allowed"
+        );
+        for n in 33..49 {
+            assert!(outbound(&mut node, n).is_none(), "outbound {n}");
+        }
+        assert_eq!(
+            exceeded(outbound(&mut node, 49)),
+            "connection limit exceeded: at most 48 established connections are allowed"
+        );
+
+        let mut node = behaviour(&Limits::default());
+        for n in 0..48 {
+            assert!(outbound(&mut node, n).is_none(), "outbound {n}");
+        }
+        assert_eq!(
+            exceeded(outbound(&mut node, 48)),
+            "connection limit exceeded: at most 48 established outgoing connections are allowed"
+        );
     }
 
     /// TM-22's residual (d) on `build`'s own path, from any OS: a node asked

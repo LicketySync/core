@@ -568,23 +568,25 @@ amplify through QUIC, whose three-to-one anti-amplification
 limit stays at its default (TM-22), or through the DHT (TM-24). A panic on malformed input is made
 unlikely and caught before merge rather than made impossible: every decoder is fuzzed, `unwrap`,
 `expect` and `panic` are denied, and indexing on untrusted data warns and the gate treats warnings
-as errors (TM-3, TM-23, rust-libp2p 2026 QUIC panic). What it can still do to the transport as phase
-0 builds it, each a phase 1 item required before 1.0 (TM-22's residuals (a) to (c), owner,
-2026-11-03, and (h), owner, 2026-11-08): cost the device a QUIC connection and a TLS server
-handshake per Initial it sends, whatever the limits, at its own send rate, so that memory and CPU
-follow that rate and connections are refused while they last; hold every pending slot with
-connections that never finish their handshake, locking every inbound peer out for the handshake
-timeout (10 s) at a time; as one TCP peer that delays its yamux pings, grow its connection's receive
-window toward yamux's 1 GiB ceiling; and, as one QUIC peer that sends its stream data as small
-datagrams back to back, which the device's GRO coalesces into one read each whether or not the
-sender used GSO, keep alive far more memory than its connection's 4 MiB window counts, about 2 GiB
-at the 64 KiB a read that is the realistic bound, by reading the code, not measured; (h) concerns
-the native program, whose QUIC connections, those it accepts and those it dials, run on quinn, not
-the browser client, whose QUIC is the browser's own. On iOS it can do nothing to the transport,
-because there is none yet: `net` has no memory limit there and refuses to start until it has one
-(TM-22's residual (d); the owner's answer of 2026-11-03 on the iOS gap: required before 1.0, fixed
-in phase 4). Denial of service by sheer traffic volume is out of scope (3.12); a write holder's
-flood is section 3.6's.
+as errors (TM-3, TM-23, rust-libp2p 2026 QUIC panic). What it can still do to the transport as
+built, each a phase 1 item required before 1.0 (TM-22's residuals (a) to (c), (h) and (i)): cost the
+device a QUIC connection and a TLS server handshake per Initial it sends, whatever the limits, at
+its own send rate, so that memory and CPU follow that rate and connections are refused while they
+last; hold every pending slot with connections that never finish their handshake, locking every
+inbound peer out for the handshake timeout (5 s) at a time; hold every inbound established slot with
+connections from fresh identities that never send a Hello, so that other peers' dials to the device
+are refused while it keeps them open (the device's own dials keep 16 slots); as one TCP peer that
+delays its yamux pings, grow its connection's receive window toward yamux's 1 GiB ceiling, and, by
+stalling its streams in negotiation, keep one-byte frames alive continuously, bounded today only by
+its send rate (64 MiB a connection at yamux's starting window); and, as one QUIC peer that ends each
+64 KiB read with a one-byte frame, keep alive far more memory than its connection's 4 MiB window
+counts, continuously: 498 MiB for its 4 streams (measured) and about 625 MiB with its CRYPTO stream
+(by reading quinn-proto); (h) concerns the native program, whose QUIC connections, those it accepts
+and those it dials, run on quinn, not the browser client, whose QUIC is the browser's own. On iOS it
+can do nothing to the transport, because there is none yet: `net` has no memory limit there and
+refuses to start until it has one (TM-22's residual (d): required before 1.0, fixed in phase 4).
+Denial of service by sheer traffic volume is out of scope (3.12); a write holder's flood is section
+3.6's.
 
 ### 3.11 Supply-chain and update attackers
 
@@ -1036,53 +1038,70 @@ beacons come; and it starts at most 4 discovery dials at once and 16 a minute, o
 addresses. Stated residuals: a flood of beacons from many forged sources spends that budget, so
 honest beacons are dropped while it lasts, a denial of LAN discovery, which an attacker on the LAN
 has by other means; and the same budget drops honest beacons on a LAN of more than about 900
-announcing devices. libp2p's connection, stream and transient connection
-limits are set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is residual (a)
-below); QUIC's three-to-one anti-amplification limit stays at its default; and the advisory feed in
-CI (cargo-audit, daily) catches the next such advisory in a dependency. Eight residuals of the
-transport as phase 0 builds it (`net` on
-`libp2p-quic` 0.14, `libp2p-yamux` 0.48 and `libp2p-memory-connection-limits` 0.6), each required
-before 1.0: (a) to (c), from the security review of 2026-11-03, each a phase 1 item ("I want safety
-limits in version 1.0, no matter what. It is fine to pass until phase 1, but it must not get
-lost.", owner, 2026-11-03), and (d), from the iOS build of the same day, a phase 4 item by the
-owner's separate answer on it, below, and (e) to (g), of spike B's WebTransport listener, each a
-phase 6 item, and (h), from spike B's follow-ups, a phase 1 item beside (a) to (c) (owner,
-2026-11-08): (a) **QUIC Initials cost per Initial, not per limit.**
-`libp2p-quic` accepts every Initial quinn hands it before the swarm's limits are asked, so each
-one, from an attacker who never answers, costs a QUIC connection and a TLS
-server handshake (the X25519MLKEM768 encapsulation and the certificate's signature) whatever
-`max_pending_incoming` is, until it is refused and drained or times out; the review measured 10 000
-Initials at about 412 MB of memory (about 41 KB each) and seconds of CPU, and connections refused
-while they lasted. The cost therefore scales with the attacker's send rate; quinn's Retry (address
-validation before any state) or its incoming-connection cap would bound it, and `libp2p-quic`
-exposes neither. **Required before 1.0 (owner, 2026-11-03)**; phase 1 item "QUIC Initial limit":
-Retry under load or a lower incoming cap, through an upstream change or QUIC configured by `net`
-itself, and a QUIC Initial flood test with the bound it then states. (b) **One pending counter for
+announcing devices. libp2p's connection, stream and transient connection limits are
+set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is residual (a) below); QUIC's
+three-to-one anti-amplification limit stays at its default; and the advisory feed in CI
+(cargo-audit, daily) catches the next such advisory in a dependency. Nine residuals of the transport
+as built (`net` on `libp2p-quic` 0.14, `libp2p-yamux` 0.48 and `libp2p-memory-connection-limits`
+0.6), each required before 1.0: (a) to (c), (h) and (i), phase 1 items; (d), a phase 4 item; and (e)
+to (g), of the WebTransport listener, phase 6 items. The stream counts below (4 a connection, 4
+negotiating) are those of the one protocol `net` runs, and are derived again when phase 2 adds
+identify, DCUtR and relays, each of which needs streams of its own (on yamux the limit counts both
+directions, and a stream past it ends the connection). (a) **QUIC Initials cost per Initial, not per
+limit.** `libp2p-quic` accepts every Initial quinn hands it before the swarm's limits are asked, so
+each one, from an attacker who never answers, costs a QUIC connection and a TLS server handshake
+(the X25519MLKEM768 encapsulation and the certificate's signature) whatever `max_pending_incoming`
+is, until it is refused and drained or times out; 10 000 Initials cost about 412 MB of memory
+(measured, about 41 KB each) and seconds of CPU, and connections refused while they lasted. The cost therefore
+scales with the attacker's send rate; quinn's Retry (address validation before any state) or its
+incoming-connection cap would bound it, and `libp2p-quic` exposes neither. **Required before 1.0**;
+phase 1 item "QUIC Initial limit": Retry under load or a lower incoming cap, through an upstream
+change or QUIC configured by `net` itself, and a QUIC Initial flood test with the bound it then
+states. (b) **One pending counter for
 every source.** `max_pending_incoming` (32) connections that never finish their handshake, TCP
 sockets that never speak or QUIC handshakes never answered, lock every inbound peer out for the
-handshake timeout (10 s), and an attacker can renew them for as long as it likes. **Required before
-1.0 (owner, 2026-11-03)**; phase 1 item "pending lockout": a per-address pending limit, budgets per
-transport, and Retry when the pending slots are full. (c) **yamux's window on TCP.** `libp2p-yamux`
-0.48 does not set yamux's connection receive window, whose ceiling stays yamux's 1 GiB; the window
-auto-tunes from the round trip yamux measures with its pings and the rate this side reads, so a
-remote that delays its ping answers inflates the estimate and can grow one connection's window, and
-what it may send unread, toward that ceiling. **Required before 1.0 (owner, 2026-11-03)**; phase 1
-item "yamux window": yamux configured by `net` with `max_connection_receive_window`, or an upstream
-setter. (d) **No process-memory limit on iOS, so no node on iOS.**
+handshake timeout (5 s, on QUIC and TCP), and an attacker can renew them for as long as it likes.
+**Required before 1.0**; phase 1 item "pending lockout": what remains is an admission behaviour of
+`net`'s own, with at most 4 pending connections a source (IPv6 by /64, except on the LAN) and the 32
+split into budgets per address class (LAN, public) and per transport, which refuses a QUIC
+connection before TLS once `net`'s own QUIC transport accepts lazily and sends Retry ((a)), and
+lockout tests on TCP and QUIC. (c) **yamux's window and frames on TCP.** `libp2p-yamux` 0.48 does
+not set yamux's connection receive window, whose ceiling stays yamux's 1 GiB; the window auto-tunes
+from the round trip yamux measures with its pings and the rate this side reads, so a remote that
+delays its ping answers inflates the estimate and can grow one connection's window, and what it may
+send unread, toward that ceiling. And yamux keeps each frame as an allocation of its own, 64 to
+73 bytes for a one-byte frame (measured), so unread one-byte frames hold about 64 times their bytes:
+16 MiB in a stream's initial 256 KiB window. With 4 streams a connection and 4 negotiating, no
+stream waits unaccepted, but a stream holds such frames while it is not read: a sync stream, this
+side's own included, for as long as the engine leaves it unread; and a stream in negotiation whose
+dialer sends requests (multistream-select's `ls`) and never reads the answers, since once this
+side's send window is full multistream-select waits to flush and stops reading, until the 5 s
+negotiation timeout, renewed at once with a new stream, so continuously (measured: 27.8 MiB for one
+connection in 5 s). That is 16 MiB a stream at yamux's starting window, and more where the window
+has grown: a stalled negotiation can first grow its own, with large valid protocol proposals that
+this side reads and answers `na` (yamux doubles a window whose updates come within twice the round
+trip it measures, which the dialer stretches by answering pings late), then stall with `ls`. So
+today that memory is bounded only by the dialer's send rate over the 5 s, held at about five times
+what it sends, and becomes 16 MiB a stream and 64 MiB a connection once the window is fixed.
+**Required before 1.0**; phase 1 item "yamux window": what remains is yamux configured by an adapter
+of `net`'s own on yamux 0.14, with a fixed connection window of 256 KiB a stream (1 MiB a
+connection), a window test, and a memory test that first grows a negotiating stream's window and
+then stalls it; the frames' memory is bounded only by yamux merging small frames into a stream's
+buffer (upstream) or by a cap on the answers one negotiation may send.
+(d) **No process-memory limit on iOS, so no node on iOS.**
 `libp2p-memory-connection-limits` 0.6 requires sysinfo 0.38, which does not build for iOS on libc
 0.2.190 and later (libc keeps four of the items it uses for macOS only), so on iOS `net` builds
 without it, and `net`'s `node::build` refuses to build a node there
 (`BuildError::NoMemoryLimitOnThisPlatform`, before it does anything else; `limits::has_memory_limit`
 allows only Linux, Android, macOS and Windows): no iOS device runs the transport, so none takes a
 connection without the memory limit. **Required before 1.0, fixed in phase 4, and
-`net` refuses to start on iOS until then** (the owner's answer of 2026-11-03 on the iOS gap,
-recorded under the same 1.0 safety-limits rule); phase 4 item "iOS memory limit": an iOS memory
+`net` refuses to start on iOS until then**; phase 4 item "iOS memory limit": an iOS memory
 check of `net`'s own, or an upstream release of `libp2p-memory-connection-limits` on a sysinfo that
 builds for iOS, with the iOS refusal lifted and the memory-limit test compiled for iOS again.
 Three more, of the WebTransport listener spike B adds to `net` (feature `webtransport`, off by
-default, so in no build that ships; proposed, for review), each **required before 1.0, phase 6
+default, so in no build that ships), each **required before 1.0, phase 6
 (browser client)**: (e) **WebTransport sessions are not counted.** Each connection is held to
-`net`'s QUIC limits, as QUIC's own are: at most 16 bidirectional and 16 unidirectional streams open
+`net`'s QUIC limits, as QUIC's own are: at most 4 bidirectional and 4 unidirectional streams open
 at once, 4 MiB unread a stream and a connection, and 64 KiB of unread datagrams (quinn's default is
 about 1.25 MB) plus one more in `wtransport`'s channel for the connection (its `Driver::init`: a
 `tokio` `mpsc` of capacity 1), so before authentication a connection holds at most about 4.06 MiB of
@@ -1100,13 +1119,13 @@ still holds a slice), and the one in `wtransport`'s channel can keep a whole rea
 184 MiB a connection (about 2.9 MiB on macOS and iOS). And quinn's check of a stream's
 over-allocation takes each frame's allocation to be its packet's payload, not the read the packet
 shares, and otherwise compacts a stream only above 2 048 chunks, so each stream's data may keep up
-to about 184 MiB alive, about 5.75 GiB a connection across its 32 streams. (These are upper bounds,
+to about 184 MiB alive, about 1.44 GiB a connection across its 8 streams. (These are upper bounds,
 from quinn's 94 208-byte buffer. The realistic bound is a read of 64 KiB, Linux's GRO and UDP limit,
 since quinn 0.11.12 copies only the bytes a read brought (`endpoint.rs`, line 798):
 about 128 MiB a connection for its datagrams (2 049 × 65 536 bytes), 128 MiB a stream (2 048 ×
-65 536 bytes) and 4 GiB a connection across its 32 streams, and (h)'s 2.9 GiB becomes 2 GiB across
-16 streams. GRO coalesces datagrams that arrive back to back, so the sender needs no GSO. Neither
-set is measured.) But the listener takes every connection quinn hands it, with
+65 536 bytes) and 1 GiB a connection across its 8 streams; (h) measured the stream figure on the
+swarm's QUIC. GRO coalesces datagrams that arrive back to back, so the sender needs no GSO. Neither
+set is measured on the listener.) But the listener takes every connection quinn hands it, with
 no count of sessions per listener or per address and outside the swarm's connection and memory
 limits, so the total grows with the number of dialers at their own rate, and an Initial costs what
 residual (a) says. Phase 6 item "WebTransport limits": sessions counted with the swarm's limits (or
@@ -1132,18 +1151,37 @@ process-wide, the last handshake's, so with handshakes at the same time it can n
 session's; QUIC and TCP record no such facts. Phase 6 item "handshake facts": per-connection facts
 shared by the three transports, as TM-33's evidence. (h) **QUIC's windows bound bytes, not memory.**
 QUIC's windows are set (`net`'s limits, 4 MiB a connection, for the swarm's QUIC and for the
-WebTransport listener alike), and they bound bytes, not memory: by reading quinn 0.11.12 and
-quinn-proto 0.11.19 (not measured), residual (e)'s stream effect applies to the swarm's QUIC too
-(`libp2p-quic` 0.14: datagrams off, 16 bidirectional streams), whose stream data, sent as small
-datagrams back to back, which the device's GRO coalesces into one read whether or not the sender
-used GSO, may keep about 2 GiB alive a connection at the realistic 64 KiB a read, (e), and at most
-about 2.9 GiB by quinn's buffer, against the 1 GiB process limit, which only refuses new
-connections. It concerns the native program, whose QUIC connections, those it accepts and those it
-dials, run on quinn, not the browser client, whose QUIC is the browser's own. **Required before 1.0
-(owner, 2026-11-08)**; phase 1 item "QUIC stream memory", beside residuals (a) to (c): confirm it
-with a raw quinn peer that sends such datagrams, with GSO and without, then bound it. Stops resource
-exhaustion through unbounded streams, connections and registrations, and amplification through QUIC
-(go-libp2p and rust-libp2p 2022; rendezvous 2026). The
+WebTransport listener alike), and they bound bytes, not memory: residual (e)'s stream effect applies
+to the swarm's QUIC too (`libp2p-quic` 0.14: datagrams off, 4 bidirectional streams). Measured with
+a raw quinn peer, which needs no folder key, one-byte frames that each end a 64 KiB read (one large
+datagram with a junk packet coalesced in front, or the last of 64 GSO segments that GRO reads at
+once) keep about 125 MiB alive a stream before quinn compacts it: 498 MiB for a connection's 4
+streams. By reading quinn-proto, the connection's CRYPTO stream can hold one more buffer of 2 049
+reads, so about 625 MiB a connection at 64 KiB reads, and up to about 0.9 GiB
+(5 × 2 049 × 94 208 bytes) on an interface whose GRO reads fill quinn's 94 208-byte buffer; and
+every pending connection's CRYPTO stream can hold one such buffer, about 125 MiB, before any
+identity is proved (residual (a)). So two connections pass the 1 GiB process limit, which only
+refuses new connections. A stream in negotiation holds its reads until the 5 s negotiation timeout
+and the peer renews it at once with another, so the hold is continuous; a sync stream, this side's
+own included, holds them for as long as the engine leaves it unread. It concerns the native program,
+whose QUIC connections, those it accepts and those it dials, run on quinn, not the browser client,
+whose QUIC is the browser's own. **Required before 1.0**; phase 1 item "QUIC stream memory", beside
+residuals (a) to (c): what remains is `net`'s own QUIC transport ((a)), whose socket hands quinn one
+datagram a buffer and drops those above the 1 472 bytes quinn advertises, so that a frame keeps at
+most about 1.65 KiB alive (12.4 MiB measured for a connection's 4 streams; with its CRYPTO stream
+about 16.5 MiB, 5 × 2 049 × 1.65 KiB, and about 20 MiB with its other buffers, by estimate, so 48
+connections about 960 MiB, too close to the 1 GiB limit to rest on); a QUIC memory test that states
+the bound, from which the established-connection limit or the process limit is set; and quinn
+counting the read behind a frame, or copying small frames, upstream. (i) **Established slots held by
+strangers.** Anyone can finish a handshake with a fresh identity, so connections from one host that
+never send a Hello, each kept open by a stream it stalls in negotiation every few seconds, hold
+every inbound established slot (measured on QUIC), and other peers' dials to the device are refused
+while they last. `max_established_incoming` (32) is below `max_established_total` (48), so the
+device's own dials keep 16 slots (tested). **Required before 1.0**; phase 1 item "established
+lockout": budgets of established connections per source, and a budget for connections whose peer has
+not yet proved a key to a folder, which `net` closes when they open no sync stream within
+`HELLO_TIMEOUT` (10 s). Stops resource exhaustion through unbounded streams, connections and
+registrations, and amplification through QUIC (go-libp2p and rust-libp2p 2022; rendezvous 2026). The
 stated costs: any Hello that passes its checks costs one Ed25519 signature (the DeviceProof sent in
 answer) and one verification; a FolderProof from a peer with no key to the folder costs a lookup in
 the connection's hint table and nothing else, so an outsider cannot make a device verify anything;

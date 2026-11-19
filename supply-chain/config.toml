@@ -569,11 +569,6 @@ version = "0.48.0"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
 
-[[exemptions.libp2p-swarm-derive]]
-version = "0.36.0"
-criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-net, spike A): the libp2p transport stack (rust-libp2p, libp2p/rust-libp2p, the project's own crate). Not covered by the imported audits at this version."
-
 [[exemptions.libp2p-tcp]]
 version = "0.45.0"
 criteria = "safe-to-deploy"
@@ -1007,7 +1002,7 @@ notes = "Phase 0 exemption (licketysync-keys): build-time only, proc-macro parsi
 [[exemptions.syn]]
 version = "3.0.9"
 criteria = "safe-to-deploy"
-notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): build-time only, proc-macro parsing (libp2p-swarm-derive, thiserror-impl, tokio-macros, futures-macro, displaydoc and serde_derive); dtolnay. Not covered by the imported audits at this version."
+notes = "Phase 0 exemption (licketysync-keys; licketysync-net, spike A, makes it a production dependency): build-time only, proc-macro parsing (thiserror-impl, tokio-macros, futures-macro, displaydoc and serde_derive); dtolnay. Not covered by the imported audits at this version."
 
 [[exemptions.sysinfo]]
 version = "0.38.4"

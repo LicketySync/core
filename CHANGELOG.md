@@ -5,6 +5,51 @@ changed and why.
 
 ## Unreleased
 
+- Net: tighter transport limits, the first step on TM-22's residuals (b), (c), (h) and the new (i).
+  A connection takes at most 4 streams at once (was 16) and 4 in negotiation (was 8), on QUIC and on
+  TCP's yamux; a stream's negotiation ends after 5 s (was `libp2p-swarm`'s 10 s default, now
+  `Limits::negotiation_timeout`, at most the idle timeout) and a connection's handshake after 5 s
+  (was 10 s), on QUIC and TCP; and a node holds at most 48 established connections in all and 48
+  outbound (was 128 each), of which at most 32 inbound (was 128), so that strangers who fill every
+  inbound slot leave 16 for its own dials (`Limits::check` now requires fewer inbound than in all).
+  The protocol runs one stream per connection and nothing else in `net` opens one (no identify or
+  ping; the limit behaviours run no protocol; QUIC's keep-alive and yamux's pings are frames), so two
+  streams are in use when each side opens one; on yamux one past the limit, opened by either side,
+  ends the connection. With 4 streams a QUIC connection whose one-byte frames each end a 64 KiB read
+  keeps 498 MiB alive in its streams, measured, where 16 kept about 2 GiB, and its CRYPTO stream
+  about 125 MiB more, by reading quinn-proto, so about 625 MiB a connection; on TCP no stream waits
+  unaccepted, but a stream in negotiation whose dialer never reads the answers still holds one-byte
+  frames until the timeout: 16 MiB at yamux's starting window, more where the dialer grew the window
+  first, so bounded today only by its send rate until yamux's window is fixed; a stalled stream's
+  hold, renewed at once, and a stalled handshake's lockout of the pending slots are halved, not
+  ended. The WebTransport listener (feature `webtransport`, off by default) shares the stream limit:
+  4 bidirectional and 4 unidirectional streams.
+  - The node's behaviour is written out instead of derived. The derive runs every behaviour's
+    handler beside the others and gives an inbound stream the longest of their negotiation
+    timeouts, and the limit behaviours' handlers, which run no protocol, carry `libp2p-swarm`'s
+    10 s, so the sync handler's 5 s would have held only for outbound streams. A connection's one
+    handler is now the sync behaviour's. `libp2p-swarm`'s `macros` feature goes with the derive, and
+    with it `libp2p-swarm-derive`, whose supply-chain exemption goes too, and `heck`, which imported
+    audits covered, leave the build.
+  - Tests: `tests/stream_limits.rs` dials a node over raw QUIC and raw TCP with yamux and stalls
+    each stream after multistream-select's header. At the defaults, four stalled streams are dropped
+    at 5 s, not 10; a fifth QUIC stream gets no credit until they go; a fifth yamux stream ends the
+    connection; and with five streams allowed, the fifth waits to negotiate until one of the four is
+    dropped. At other values (2 yamux streams; 2 negotiating of 3) the same hold, so that a fixed
+    number fails. The TCP handshake test runs at the defaults (5 s) and at 1 s. A node whose 32
+    inbound slots strangers hold refuses a 33rd and still dials out. Unit tests check QUIC's
+    configuration (5 s, 4 streams), that a connection's streams negotiate within 5 s both ways, the
+    established limits, each by its own refusal, and the new rules of `Limits::check`.
+  - TM-22's (a) to (c) and (h), (e)'s stream counts, the new (i) and section 3.10 state the values
+    and figures, and what remains: an admission behaviour with budgets per source, address class and
+    transport, and for established connections whose peer has proved no key; yamux configured by
+    `net` with a fixed window, its memory test growing a negotiating stream's window before it
+    stalls it, and small frames merged upstream or a negotiation's answers capped;
+    `net`'s own QUIC transport with Retry, lazy accept and a socket that hands quinn one datagram a
+    buffer; and the lockout, window and memory tests with their bounds, the last of which sets the
+    established-connection limit or the process limit (48 connections at about 20 MiB each, by
+    estimate, is too close to 1 GiB to rest on). TM-22 also says that the stream counts are derived
+    again when phase 2 adds identify, DCUtR and relays.
 - Spec: LAN discovery's beacon, carriers and listener are specified. Spec text only: `protocol`,
   `net`, `daemon` and `cli` implement it in phase 1. Until now the beacon was only its hashes, and
   what it carried in the clear linked a device's beacons: its port, its exact number of folders and

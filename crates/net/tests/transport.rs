@@ -15,10 +15,13 @@
 //! - (e) `{quic,tcp}_connection_past_the_established_limit_is_refused`,
 //!   `tcp_flood_of_idle_connections_stays_within_the_pending_limit_and_memory_bound`
 //!   (in `tests/tcp_flood.rs`, a binary of its own),
-//!   `tcp_connection_that_never_speaks_ends_at_the_handshake_timeout`,
+//!   `tcp_connection_that_never_speaks_ends_at_the_5_s_handshake_timeout`,
+//!   `tcp_handshake_timeout_comes_from_the_limits`,
+//!   `tcp_a_dial_out_succeeds_while_strangers_hold_every_inbound_slot`,
 //!   `connections_are_refused_above_the_memory_limit` (every target but iOS,
 //!   which has no memory limit yet, so no node),
-//!   `second_sync_stream_on_one_connection_is_refused`
+//!   `second_sync_stream_on_one_connection_is_refused`, and the stream limits
+//!   in `tests/stream_limits.rs`
 //! - (f) `{quic,tcp}_pieces_arrive_in_order_at_most_64_kib_and_the_end_is_reported`
 //! - (g) `peer_id_of_the_keys_test_seed_is_the_keys_vector`
 //!
@@ -654,13 +657,131 @@ async fn tcp_connection_past_the_established_limit_is_refused() {
     connection_past_the_established_limit_is_refused(Kind::Tcp).await;
 }
 
+/// Runs a stranger's swarm until the test ends, holding a sync stream to
+/// `peer` open on each connection it makes, so that neither side closes the
+/// connection as idle. (A stream stalled in negotiation would not do: the
+/// node drops it at 5 s, and the idle timeout runs again.)
+fn stay_connected(mut swarm: Swarm, peer: PeerId) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut streams = Vec::new();
+        loop {
+            match swarm.select_next_some().await {
+                SwarmEvent::ConnectionEstablished { connection_id, .. } => {
+                    let _ = swarm.behaviour_mut().sync().open(peer, connection_id);
+                }
+                SwarmEvent::Behaviour(Event::Sync(sync::Event::Opened { stream, .. })) => {
+                    streams.push(stream);
+                }
+                _ => {}
+            }
+        }
+    })
+}
+
+/// TM-22's residual (i): with the default limits, 32 strangers fill every
+/// inbound slot and a 33rd is refused, but the node's own dial out still
+/// connects, to one of the 16 slots only its dials can use. Each stranger
+/// holds a stream open, so that no connection closes at the 30 s idle
+/// timeout however slowly the test runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn tcp_connection_that_never_speaks_ends_at_the_handshake_timeout() {
+async fn tcp_a_dial_out_succeeds_while_strangers_hold_every_inbound_slot() {
+    let mut node = node_of(0xa0, &Limits::default());
+    let addr = listening(&mut node, Kind::Tcp).await;
+    let mut its_peer = node_of(0xe0, &Limits::default());
+    let its_peer_addr = listening(&mut its_peer, Kind::Tcp).await;
+    let _its_peer = serve(its_peer, Serve::Echo);
+
+    // The strangers, one at a time, each kept connected by its own task; the
+    // node's ends of their streams are kept here.
+    let mut strangers = Vec::new();
+    let mut held = Vec::new();
+    for start in 1..=33u8 {
+        let mut stranger = node_of(start, &Limits::default());
+        stranger
+            .dial(
+                DialOpts::peer_id(peer_of(0xa0))
+                    .addresses(vec![addr.clone()])
+                    .build(),
+            )
+            .unwrap();
+        strangers.push(stay_connected(stranger, peer_of(0xa0)));
+        let outcome = within("the node sees the stranger", async {
+            loop {
+                match node.select_next_some().await {
+                    SwarmEvent::ConnectionEstablished { peer_id, .. } => return Ok(peer_id),
+                    SwarmEvent::IncomingConnectionError { error, .. } => return Err(error),
+                    SwarmEvent::Behaviour(Event::Sync(sync::Event::Accepted {
+                        stream, ..
+                    })) => {
+                        held.push(stream);
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await;
+        match (start, outcome) {
+            (1..=32, Ok(peer)) => assert_eq!(peer, peer_of(start)),
+            (33, Err(ListenError::Denied { cause })) => assert_eq!(
+                cause
+                    .downcast_ref::<libp2p_connection_limits::Exceeded>()
+                    .unwrap()
+                    .to_string(),
+                "connection limit exceeded: at most 32 established incoming connections are allowed"
+            ),
+            (start, other) => panic!("stranger {start}: {other:?}"),
+        }
+    }
+    within("every stranger's stream", async {
+        while held.len() < 32 {
+            if let SwarmEvent::Behaviour(Event::Sync(sync::Event::Accepted { stream, .. })) =
+                node.select_next_some().await
+            {
+                held.push(stream);
+            }
+        }
+    })
+    .await;
+    assert_eq!(node.network_info().num_peers(), 32);
+
+    // The node's own dial.
+    connect(&mut node, peer_of(0xe0), &its_peer_addr).await;
+    assert_eq!(node.network_info().num_peers(), 33);
+    for stranger in strangers {
+        stranger.abort();
+    }
+    drop(held);
+}
+
+/// TM-22's residual (b): the default limits end a TCP upgrade at 5 s.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcp_connection_that_never_speaks_ends_at_the_5_s_handshake_timeout() {
+    let waited = tcp_connection_that_never_speaks(&Limits::default()).await;
+    // At 5 s, not at the 10 s it was.
+    assert!(
+        waited >= Duration::from_secs(5) && waited < Duration::from_secs(10),
+        "ended after {waited:?}"
+    );
+}
+
+/// The TCP upgrade's timeout is the limits' own, not a fixed 5 s.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tcp_handshake_timeout_comes_from_the_limits() {
     let limits = Limits {
         handshake_timeout: Duration::from_secs(1),
         ..Limits::default()
     };
-    let mut listener = node_of(0xa0, &limits);
+    let waited = tcp_connection_that_never_speaks(&limits).await;
+    assert!(
+        waited >= limits.handshake_timeout && waited < Duration::from_secs(5),
+        "ended after {waited:?}"
+    );
+}
+
+/// Holds one TCP socket open and silent against a node with `limits`, and
+/// returns how long after it connected the node ended its upgrade.
+async fn tcp_connection_that_never_speaks(limits: &Limits) -> Duration {
+    let mut listener = node_of(0xa0, limits);
     let addr = listening(&mut listener, Kind::Tcp).await;
     let port = addr
         .iter()
@@ -714,13 +835,9 @@ async fn tcp_connection_that_never_speaks_ends_at_the_handshake_timeout() {
         }
         other => panic!("not the handshake timeout: {other:?}"),
     }
-    // At the limit's timeout, not the default's.
-    assert!(
-        waited >= limits.handshake_timeout && waited < Limits::default().handshake_timeout,
-        "ended after {waited:?}"
-    );
     assert_eq!(pending(&listener), 0, "the pending slot is free again");
     drop(silent);
+    waited
 }
 
 // iOS has no memory limit yet, and no node is built there (TM-22's residual

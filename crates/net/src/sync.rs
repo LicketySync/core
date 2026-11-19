@@ -21,16 +21,17 @@
 //! negotiation and is dropped by libp2p. The streams still negotiating are
 //! bounded by the swarm's `max_negotiating_inbound_streams`, and the streams
 //! open at once by the muxer's stream limit (both in
-//! [`crate::limits::Limits`]). A stream's negotiation ends after 10 s,
-//! `libp2p-swarm`'s `SubstreamProtocol` default, which is kept: it is not
-//! taken from the limits (the commit and the CHANGELOG list it among the
-//! library defaults). Requests to open a stream are this side's own
+//! [`crate::limits::Limits`]). A stream's negotiation, either way, ends after
+//! the timeout the behaviour is built with
+//! ([`Limits::negotiation_timeout`](crate::limits::Limits::negotiation_timeout)),
+//! and the stream is dropped. Requests to open a stream are this side's own
 //! and are answered, one event each, when the stream opens, fails or its
 //! connection closes.
 
 use core::convert::Infallible;
 use core::fmt;
 use core::task::{Context, Poll};
+use core::time::Duration;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -129,6 +130,7 @@ pub enum Event {
 pub struct Behaviour {
     protocols: Arc<[StreamProtocol]>,
     max_inbound: u32,
+    negotiation_timeout: Duration,
     next_id: u64,
     /// Requests not yet answered, by connection, so that a connection that
     /// closes answers its own.
@@ -145,18 +147,21 @@ impl fmt::Debug for Behaviour {
         f.debug_struct("Behaviour")
             .field("protocols", &self.protocols)
             .field("max_inbound", &self.max_inbound)
+            .field("negotiation_timeout", &self.negotiation_timeout)
             .finish_non_exhaustive()
     }
 }
 
 impl Behaviour {
-    /// A behaviour that speaks [`PROTOCOLS`] and accepts at most
-    /// `max_inbound` streams over each connection's life.
+    /// A behaviour that speaks [`PROTOCOLS`], accepts at most `max_inbound`
+    /// streams over each connection's life, and ends a stream's negotiation,
+    /// inbound or outbound, after `negotiation_timeout`.
     #[must_use]
-    pub fn new(max_inbound: u32) -> Self {
+    pub fn new(max_inbound: u32, negotiation_timeout: Duration) -> Self {
         Self {
             protocols: PROTOCOLS.into(),
             max_inbound,
+            negotiation_timeout,
             next_id: 0,
             pending: HashMap::new(),
             connections: HashMap::new(),
@@ -204,6 +209,7 @@ impl Behaviour {
             protocols: Arc::clone(&self.protocols),
             accepted: 0,
             max_inbound: self.max_inbound,
+            negotiation_timeout: self.negotiation_timeout,
             to_open: VecDeque::new(),
             events: VecDeque::new(),
         }
@@ -341,6 +347,7 @@ pub struct Handler {
     protocols: Arc<[StreamProtocol]>,
     accepted: u32,
     max_inbound: u32,
+    negotiation_timeout: Duration,
     /// Requests from the behaviour not yet handed to the connection. Only
     /// this side's own requests are queued here.
     to_open: VecDeque<OpenId>,
@@ -354,6 +361,7 @@ impl fmt::Debug for Handler {
         f.debug_struct("Handler")
             .field("accepted", &self.accepted)
             .field("max_inbound", &self.max_inbound)
+            .field("negotiation_timeout", &self.negotiation_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -374,7 +382,7 @@ impl ConnectionHandler for Handler {
         } else {
             Vec::new()
         };
-        SubstreamProtocol::new(Upgrade { protocols }, ())
+        SubstreamProtocol::new(Upgrade { protocols }, ()).with_timeout(self.negotiation_timeout)
     }
 
     fn poll(
@@ -391,7 +399,8 @@ impl ConnectionHandler for Handler {
                         protocols: self.protocols.to_vec(),
                     },
                     id,
-                ),
+                )
+                .with_timeout(self.negotiation_timeout),
             });
         }
         Poll::Pending
@@ -482,6 +491,9 @@ mod tests {
 
     use super::*;
 
+    /// A negotiation timeout neither `Limits`'s default nor libp2p's.
+    const TIMEOUT: Duration = Duration::from_millis(1_234);
+
     #[test]
     fn speaks_sync_1_only() {
         let names: Vec<&str> = PROTOCOLS.iter().map(StreamProtocol::as_ref).collect();
@@ -505,7 +517,7 @@ mod tests {
 
     #[test]
     fn offers_nothing_once_the_streams_are_used_up() {
-        let behaviour = Behaviour::new(1);
+        let behaviour = Behaviour::new(1, TIMEOUT);
         let mut handler = behaviour.handler();
         let offered = |h: &Handler| h.listen_protocol().upgrade().protocol_info().count();
         assert_eq!(offered(&handler), 1);
@@ -513,9 +525,33 @@ mod tests {
         assert_eq!(offered(&handler), 0);
     }
 
+    /// Both ways, a stream's negotiation ends at the timeout the behaviour
+    /// was built with, not at `libp2p-swarm`'s 10 s default.
+    #[test]
+    fn negotiation_ends_at_the_timeout_it_is_built_with_both_ways() {
+        let behaviour = Behaviour::new(1, TIMEOUT);
+        let mut handler = behaviour.handler();
+        assert_eq!(*handler.listen_protocol().timeout(), TIMEOUT);
+        handler.accepted = 1;
+        assert_eq!(
+            *handler.listen_protocol().timeout(),
+            TIMEOUT,
+            "nothing offered"
+        );
+        handler.on_behaviour_event(OpenId(7));
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        match handler.poll(&mut cx) {
+            Poll::Ready(ConnectionHandlerEvent::OutboundSubstreamRequest { protocol }) => {
+                assert_eq!(*protocol.timeout(), TIMEOUT);
+                assert_eq!(*protocol.info(), OpenId(7));
+            }
+            _ => panic!("no outbound request"),
+        }
+    }
+
     #[test]
     fn open_on_a_connection_not_established_answers_at_once() {
-        let mut behaviour = Behaviour::new(1);
+        let mut behaviour = Behaviour::new(1, TIMEOUT);
         let unknown = ConnectionId::new_unchecked(7);
         let id = behaviour.open(peer(1), unknown);
         assert!(behaviour.pending.is_empty(), "nothing waits for an answer");
@@ -558,7 +594,7 @@ mod tests {
         .to_peer_id();
         let addr = Multiaddr::empty();
         let connection = ConnectionId::new_unchecked(1);
-        let mut behaviour = Behaviour::new(1);
+        let mut behaviour = Behaviour::new(1, TIMEOUT);
         let inbound =
             behaviour.handle_established_inbound_connection(connection, weak, &addr, &addr);
         let outbound = behaviour.handle_established_outbound_connection(

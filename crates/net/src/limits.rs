@@ -2,23 +2,25 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Every bound the transport sets (TM-2, TM-22), in one place, with the
-//! defaults phase 0 chose. Phase 1 tunes the numbers; what is fixed here is
-//! that each one exists, is set explicitly rather than left at a library's
-//! default, and is checked before a swarm is built.
+//! Every bound the transport sets (TM-2, TM-22), in one place, with its
+//! default. What is fixed here is that each one exists, is set explicitly
+//! rather than left at a library's default, and is checked before a swarm is
+//! built.
 //!
 //! What these bound, and what they do not. TM-22 is the list of what the
-//! transports as built leave open: its lettered residuals (a) to (h), each
-//! with the phase that closes it, all required before 1.0; the last, (h),
-//! is the phase 1 item "QUIC stream memory" (the owner's decision of
-//! 2026-11-08). A new one is added there, not here. The bullets below
-//! are the ones that bear on these bounds, those of the swarm's QUIC and TCP,
-//! each with TM-22's letter where it has one; the WebTransport listener's
-//! (feature `webtransport`, off by default) are in TM-22 only.
+//! transports as built leave open: its lettered residuals (a) to (i), each
+//! with the phase that closes it, all required before 1.0. A new one is added
+//! there, not here. The bullets below are the ones that bear on these bounds,
+//! those of the swarm's QUIC and TCP, each with TM-22's letter where it has
+//! one; the WebTransport listener's (feature `webtransport`, off by default)
+//! are in TM-22 only.
 //!
 //! - At most [`Limits::max_established_total`] connections, each holding at
 //!   most [`Limits::connection_receive_window`] bytes a peer sent and this
-//!   side has not read, on QUIC.
+//!   side has not read, on QUIC. Of them at most
+//!   [`Limits::max_established_incoming`] inbound, fewer than in all, so that
+//!   this side's own dials keep the rest: anyone can finish a handshake, so
+//!   strangers can hold every inbound slot (TM-22's residual (i)).
 //! - At most [`Limits::max_pending_incoming`] connections in their handshake
 //!   as the swarm counts them, each ended by [`Limits::handshake_timeout`].
 //!   On TCP a connection one past it is refused at once and costs only its
@@ -36,34 +38,38 @@
 //! - On iOS, therefore, no node at all (TM-22's residual (d)).
 //!   `libp2p-memory-connection-limits` 0.6 does not build for iOS (its
 //!   sysinfo 0.38 uses libc items that libc 0.2.190 and later keep for
-//!   macOS), so `net` is built there without it and refuses to start. The
-//!   owner's answer of 2026-11-03 on this gap: required before 1.0, fixed in
-//!   phase 4 (an iOS memory check of `net`'s own, or an upstream release on a
-//!   sysinfo that builds for iOS), and `net` refuses to start on iOS until
-//!   then.
+//!   macOS), so `net` is built there without it and refuses to start until
+//!   phase 4 brings one (an iOS memory check of `net`'s own, or an upstream
+//!   release on a sysinfo that builds for iOS), required before 1.0.
 //! - Not bounded by any of these: QUIC Initials (TM-22's residual (a)).
 //!   `libp2p-quic` 0.14 accepts every Initial quinn hands it before the
 //!   swarm's limits are asked, so each costs a QUIC connection and a TLS
 //!   server handshake until it is refused and drained or times out, at
-//!   whatever rate an attacker sends (the security review of 2026-11-03
-//!   measured 10 000 Initials at about 412 MB, about 41 KB each, and seconds
-//!   of CPU). quinn's Retry or its incoming cap would bound this;
-//!   `libp2p-quic` exposes neither.
+//!   whatever rate an attacker sends (measured: 10 000 Initials at about
+//!   412 MB, about 41 KB each, and seconds of CPU). quinn's Retry or its
+//!   incoming cap would bound this; `libp2p-quic` exposes neither.
 //! - Not bounded either: yamux's connection receive window on TCP (TM-22's
 //!   residual (c)), which `libp2p-yamux` 0.48 does not let us set. It starts
 //!   at 256 KiB per stream and auto-tunes from the round trip yamux measures
 //!   with its pings and the rate this side reads, up to yamux's 1 GiB ceiling,
 //!   so a remote that delays its ping answers inflates the estimate and can
 //!   grow one connection's window, and what it may send unread, toward that
-//!   ceiling.
+//!   ceiling. And yamux keeps each frame as an allocation of its own, so
+//!   one-byte frames hold about 64 times their bytes: up to 16 MiB in a
+//!   stream's initial window, held while the stream is not read, a sync
+//!   stream for as long as the engine leaves it unread and a stream in
+//!   negotiation whose dialer never reads the answers until
+//!   [`Limits::negotiation_timeout`].
 //! - And not bounded: the memory behind a QUIC connection's unread bytes.
 //!   [`Limits::connection_receive_window`] counts bytes, not memory: quinn
 //!   keeps each frame's data as a slice of the buffer of the UDP read it came
 //!   in, and frees that buffer only when every slice is gone, so many small
 //!   frames can keep far more memory alive than their bytes, and the process
 //!   memory limit above only refuses new connections. TM-22's residual (h),
-//!   the phase 1 item "QUIC stream memory", states the figure, from reading
-//!   quinn's code and not measured, and requires it bounded before 1.0.
+//!   the phase 1 item "QUIC stream memory", states the figures, 498 MiB
+//!   measured for a connection's 4 streams
+//!   ([`Limits::max_streams_per_connection`]) and about 625 MiB with its
+//!   CRYPTO stream, and requires them bounded before 1.0.
 
 use core::fmt;
 use core::time::Duration;
@@ -81,8 +87,8 @@ pub const YAMUX_MAX_STREAMS: u32 = 4096;
 /// project builds `net` for, where `libp2p-memory-connection-limits` is
 /// compiled in and reads the process's resident memory through
 /// `memory-stats`. No on iOS, where it is not compiled in (TM-22's residual
-/// (d); the owner's answer of 2026-11-03: `net` refuses to start there until
-/// the limit exists). No on every other OS too: the project neither builds
+/// (d): `net` refuses to start there until the limit exists). No on every
+/// other OS too: the project neither builds
 /// `net` for nor tests any of them, and on most `memory-stats` reads nothing,
 /// so the limit would refuse nothing.
 #[must_use]
@@ -99,7 +105,9 @@ pub struct Limits {
     pub max_pending_incoming: u32,
     /// Outbound connections still in their handshake.
     pub max_pending_outgoing: u32,
-    /// Established inbound connections.
+    /// Established inbound connections. Fewer than
+    /// [`Limits::max_established_total`], so that connections anyone can
+    /// make leave room for this side's own dials.
     pub max_established_incoming: u32,
     /// Established outbound connections.
     pub max_established_outgoing: u32,
@@ -116,12 +124,21 @@ pub struct Limits {
     pub handshake_timeout: Duration,
     /// A connection with no open stream is closed after this long.
     pub idle_timeout: Duration,
-    /// Streams the remote may have open at once on one connection (QUIC's
-    /// concurrent bidirectional streams; yamux's stream count). At most
-    /// [`YAMUX_MAX_STREAMS`].
+    /// Streams open at once on one connection. QUIC: the bidirectional
+    /// streams the remote may open (it may open no unidirectional one);
+    /// yamux: the streams open in either direction, and one past it, opened
+    /// by either side, ends the connection. At most
+    /// [`YAMUX_MAX_STREAMS`]. The protocol runs one stream per connection
+    /// (`protocol.md` 3.1) and nothing else opens one, so two are in use when
+    /// each side opens one.
     pub max_streams_per_connection: u32,
-    /// Inbound streams still negotiating their protocol, per connection.
+    /// Inbound streams still negotiating their protocol, per connection; the
+    /// swarm takes no further stream from the connection until one finishes.
     pub max_negotiating_inbound_streams: u32,
+    /// A stream's protocol negotiation (multistream-select), inbound or
+    /// outbound, ends with an error after this long, and the stream is
+    /// dropped. At most [`Limits::idle_timeout`].
+    pub negotiation_timeout: Duration,
     /// Streams of `/licketysync/sync/1` the remote may open over one
     /// connection's whole life; later ones are refused in negotiation. The
     /// protocol runs one stream per connection (`protocol.md` 3.1).
@@ -137,15 +154,16 @@ impl Default for Limits {
         Self {
             max_pending_incoming: 32,
             max_pending_outgoing: 32,
-            max_established_incoming: 128,
-            max_established_outgoing: 128,
+            max_established_incoming: 32,
+            max_established_outgoing: 48,
             max_established_per_peer: 2,
-            max_established_total: 128,
+            max_established_total: 48,
             max_process_memory_bytes: 1 << 30,
-            handshake_timeout: Duration::from_secs(10),
+            handshake_timeout: Duration::from_secs(5),
             idle_timeout: Duration::from_secs(30),
-            max_streams_per_connection: 16,
-            max_negotiating_inbound_streams: 8,
+            max_streams_per_connection: 4,
+            max_negotiating_inbound_streams: 4,
+            negotiation_timeout: Duration::from_secs(5),
             max_inbound_sync_streams: 1,
             connection_receive_window: 4 << 20,
             stream_receive_window: 4 << 20,
@@ -179,6 +197,12 @@ impl Limits {
     /// [`LimitsError`] naming the first field at fault.
     pub fn check(&self) -> Result<(), LimitsError> {
         let fail = |field, rule| Err(LimitsError { field, rule });
+        if self.max_established_incoming >= self.max_established_total {
+            return fail(
+                "max_established_incoming",
+                "must be less than max_established_total",
+            );
+        }
         if self.max_streams_per_connection == 0
             || self.max_streams_per_connection > YAMUX_MAX_STREAMS
         {
@@ -189,6 +213,9 @@ impl Limits {
         }
         if self.max_negotiating_inbound_streams == 0 {
             return fail("max_negotiating_inbound_streams", "must be at least 1");
+        }
+        if self.negotiation_timeout.is_zero() {
+            return fail("negotiation_timeout", "must be longer than zero");
         }
         if self.handshake_timeout.is_zero() {
             return fail("handshake_timeout", "must be longer than zero");
@@ -203,6 +230,12 @@ impl Limits {
         }
         if self.handshake_timeout > self.idle_timeout {
             return fail("handshake_timeout", "must not be longer than idle_timeout");
+        }
+        if self.negotiation_timeout > self.idle_timeout {
+            return fail(
+                "negotiation_timeout",
+                "must not be longer than idle_timeout",
+            );
         }
         if self.stream_receive_window == 0 || self.connection_receive_window == 0 {
             return fail(
@@ -260,23 +293,26 @@ mod tests {
     }
 
     /// The defaults as TM-22 and the threat model's 3.10 quote them (32
-    /// pending, the 10 s handshake timeout, QUIC's 4 MiB connection window)
-    /// and the rest, and yamux's stream ceiling as this module derives it:
-    /// changing one changes this test and those texts together.
+    /// pending, 32 established inbound of 48, the 5 s handshake timeout, 4
+    /// streams and 4 negotiating with the 5 s negotiation timeout, QUIC's
+    /// 4 MiB connection window) and the rest, and yamux's stream ceiling as
+    /// this module derives it: changing one changes this test and those texts
+    /// together.
     #[test]
     fn defaults_are_the_values_the_threat_model_quotes() {
         let quoted = Limits {
             max_pending_incoming: 32,
             max_pending_outgoing: 32,
-            max_established_incoming: 128,
-            max_established_outgoing: 128,
+            max_established_incoming: 32,
+            max_established_outgoing: 48,
             max_established_per_peer: 2,
-            max_established_total: 128,
+            max_established_total: 48,
             max_process_memory_bytes: 1 << 30,
-            handshake_timeout: Duration::from_secs(10),
+            handshake_timeout: Duration::from_secs(5),
             idle_timeout: Duration::from_secs(30),
-            max_streams_per_connection: 16,
-            max_negotiating_inbound_streams: 8,
+            max_streams_per_connection: 4,
+            max_negotiating_inbound_streams: 4,
+            negotiation_timeout: Duration::from_secs(5),
             max_inbound_sync_streams: 1,
             connection_receive_window: 4 * 1024 * 1024,
             stream_receive_window: 4 * 1024 * 1024,
@@ -291,7 +327,11 @@ mod tests {
 
     #[test]
     fn each_rule_names_its_field() {
-        let cases: [Case; 9] = [
+        let cases: [Case; 13] = [
+            (
+                |l| l.max_established_incoming = l.max_established_total,
+                "max_established_incoming",
+            ),
             (
                 |l| l.max_streams_per_connection = 0,
                 "max_streams_per_connection",
@@ -303,6 +343,20 @@ mod tests {
             (
                 |l| l.max_negotiating_inbound_streams = 0,
                 "max_negotiating_inbound_streams",
+            ),
+            (
+                |l| l.negotiation_timeout = Duration::ZERO,
+                "negotiation_timeout",
+            ),
+            (
+                |l| l.negotiation_timeout = l.idle_timeout * 2,
+                "negotiation_timeout",
+            ),
+            // However long: longer than the idle timeout is refused, as it is
+            // for the handshake timeout.
+            (
+                |l| l.negotiation_timeout = Duration::MAX,
+                "negotiation_timeout",
             ),
             (
                 |l| l.handshake_timeout = Duration::ZERO,
