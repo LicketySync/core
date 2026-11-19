@@ -1298,6 +1298,24 @@ changed and why.
   which case is given the other's output. Each step was checked on a private server and cache.
   Comments and docs only.
 
+- CI: a run whose jobs GitHub cancelled for lack of a runner is rerun, at most twice. The macOS
+  queue left jobs unstarted for 15 minutes and then cancelled them ("The job was not acquired by
+  Runner of type hosted even after multiple attempts"), turning a run red and needing a manual
+  rerun, three times on 2026-11-17 (runs 44110056167, 44113762557, 44119568108). The new
+  `.github/workflows/ci-rerun.yml` runs when CI completes, with `actions: write` and nothing else,
+  and `ci/rerun-capacity.sh` decides. A job cancelled by a newer push through the concurrency
+  group also has no steps, so the signal is GitHub's annotation on the job, a failure-level
+  "The job was not acquired by Runner of type hosted", and not the empty step list alone. A run is
+  left alone when any job that ran did not succeed (rerunning the failed jobs would rerun that
+  real failure too: run 44110056167 had a Windows test failure beside a capacity cancellation),
+  when it is not a push or a pull request of this repository, and after attempt 2. Just before
+  the rerun the run is read again and left alone unless it is completed, still on that attempt and
+  the newest CI run of its branch and event: rerunning an outdated run joins ci.yml's concurrency
+  group and could cancel the newer commit's run. The workflow has `actions: write`, `checks: read`
+  and `contents: read`, and checks out the default branch, never the run's commit.
+  `ci/test-rerun-capacity.sh` runs the script on a stand-in `gh` that serves recorded API answers
+  for the three runs (`ci/rerun-fixtures/`) and cases made from them.
+
 - CI: `ci/test-mutants.sh` leaves no process running, whatever its caller passes on. On 2026-11-14 a
   run whose caller ignored SIGINT (a background job of a script does, and passes it on) left six
   running for good: in each of the two cases that wait for the budget's SIGINT, `timeout`, the

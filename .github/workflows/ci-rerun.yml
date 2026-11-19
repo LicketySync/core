@@ -1,0 +1,44 @@
+# Reruns the jobs of a CI run that GitHub cancelled because no runner was free
+# (the macOS runners' queue: "The job was not acquired by Runner of type hosted
+# even after multiple attempts", 15 minutes after the job started waiting), at
+# most twice, and does nothing else. ci/rerun-capacity.sh decides (ci/test-rerun-capacity.sh
+# tests it): a run with a job that really failed, a job that a newer push
+# cancelled, a job a person cancelled, or a fork's pull request is left alone.
+#
+# The workflow_run trigger runs this file from the default branch with a token
+# that can write, whatever started the run, so the job checks out the default
+# branch only (never the run's commit), runs nothing from the run, and takes
+# the run's id and attempt, both numbers, from its event.
+name: CI rerun
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  rerun:
+    name: rerun jobs cancelled for runner capacity
+    # Cheap tests first; the script repeats the rest.
+    if: >-
+      github.event.workflow_run.conclusion != 'success'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # actions: write reruns; checks: read reads the job's annotations; contents:
+    # read checks out. Both reads are of public data.
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ci/rerun-capacity.sh "$RUN_ID" "$RUN_ATTEMPT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}

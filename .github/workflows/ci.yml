@@ -561,3 +561,4 @@ jobs:
       - run: ci/test-download.sh
       - run: ci/check-downloads.sh
       - run: ci/test-rustc-wrapper.sh
+      - run: ci/test-rerun-capacity.sh

@@ -1,0 +1,11 @@
+{
+  "id": 44119568108,
+  "event": "push",
+  "status": "completed",
+  "conclusion": "success",
+  "run_attempt": 3,
+  "head_branch": "main",
+  "head_repository": {
+    "full_name": "LicketySync/core"
+  }
+}

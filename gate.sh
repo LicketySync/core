@@ -305,6 +305,9 @@ step ci/test-download.sh
 step ci/check-downloads.sh
 # The helper above that picks sccache, on a stand-in.
 step ci/test-rustc-wrapper.sh
+# The script that reruns jobs GitHub cancelled for runner capacity (ci-rerun.yml), on
+# recorded GitHub answers.
+step ci/test-rerun-capacity.sh
 # ci/check-dep-info.sh, which runs after the builds below, on toy crates.
 step ci/test-check-dep-info.sh
 # 90% line coverage on each of the crates the plan names, on the index
