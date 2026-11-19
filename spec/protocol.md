@@ -2231,8 +2231,10 @@ anything, which a write holder can do anyway by writing over it.
   which show where a file's history forked into concurrent versions and joined again; its chunk IDs
   with their padded sizes, so that it can tell which chunks are identical across files and versions
   (and so a copy or a rename, a new file ID with the chunks of a file just deleted) and the
-  approximate size of each version, and, from the sequence of chunk sizes, something of where a
-  known file's chunk boundaries fall, which keying the chunker hides only in part (`keys.md` §3.2);
+  approximate size of each version, and from the sequence of chunk sizes only what identical
+  64-byte windows show, since the chunker's cuts are otherwise pseudorandom to it: a window decides
+  alike wherever it recurs, so repeated content cuts predictably and a lightly edited copy of a
+  known file can show by its chunk lengths (`keys.md` §3.2);
   that a record with no chunks is a deletion, a tree delete, a directory or an empty file, without
   telling which; the size class of the sealed part, a power of two from 256 bytes, which grows with
   the path's length, the number of chunks and the number of devices in the vector, coarsely; and of
@@ -2262,8 +2264,9 @@ anything, which a write holder can do anyway by writing over it.
   multiple locations nearly simultaneously and the per-minute version resolution is not accurate
   enough"; "The writer's rule").
 - **Bounds** that make the largest record fit `MIN_MESSAGE_SIZE`: 32 768 chunks per record and 4 MiB
-  per chunk, so a file in major 1 is at most 128 GiB, and in practice 32 768 times the engine's
-  average chunk size, since FastCDC rarely produces maximal chunks; larger files are refused with an
+  per chunk, so a file in major 1 is at most 128 GiB, and in practice about 47 GiB, 32 768 times the
+  chunker's average of about 1.47 MiB (16 GiB at worst, when every cut lands at its minimum;
+  `keys.md` §3.2); larger files are refused with an
   issue (continuation records are a phase 7 addition). At most `MAX_VECTOR_ENTRIES` (32) vector
   entries of at most 46 encoded bytes each (1 472 bytes), and counters at most `MAX_COUNTER` (10 000
   years of microseconds, below 2^59), so that no arithmetic on counters can overflow. At most
@@ -4769,10 +4772,12 @@ it (sources read on 2026-10-25, listed in `threat-model.md`'s appendix):
   could refuse different ones, show different files and still believe they agree; without it a NAS
   can take back an old copy once the file has been written again, until a write-key device names it
   again.
-- *Pieces cut at places derived from the folder's key*, against FastCDC's published table: with the
-  published table a NAS could cut a file it already has and compare the sizes of its pieces with a
-  record's; keyed, it cannot, though published attacks recover such keys from files the attacker
-  knows (`keys.md` §3.2).
+- *Pieces cut where a universal hash, then AES-128, under the folder's keys says*, against
+  FastCDC, with its published table (a NAS could cut a file it has and compare the sizes of its
+  pieces with a record's) and with a keyed one (published attacks recover such keys from the cuts of
+  known files): the cuts are provably pseudorandom to anyone without the key, at one AES block per
+  byte after each piece's first 512 KiB, under a nanosecond each with AES instructions (`keys.md`
+  §3.2).
 - *Deletions forgotten by a signed watermark* (the owner's decisions of 2026-11-08, "Switch", and of
   2026-11-12, "A year after arrival, together"), against each device's own clock and against the
   folder's own time, the greatest counter held, which it replaces (the owner's decision of

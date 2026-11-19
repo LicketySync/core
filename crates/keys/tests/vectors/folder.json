@@ -1,9 +1,10 @@
 {
   "access_key": "f6d2d1d0528c28a4af56c508671302a26e01abfba5dc116d9ede440cafe2e90c",
-  "chunk_gear_key": "ae153d1e489d57ed167fa590a7712352d709504ace6dbac4b15b5cc0c0b7fb21",
+  "chunk_cut_key": "47af4a475ecf6d052910d6c27b1c809c534ebbd0bff1e562ba2d8d9026f11e9f",
   "chunk_hash_key": "96587d2a225cd874640a5b29ebe02d0ac5da14daa230bbf9d538feb7a4455ea4",
   "chunk_key": "0d7d74b7737d715eefdaf0633c4e95587498b06ac8c2748bf18507ef8baca24e",
   "chunk_nonce_key": "d18c6edef39fdb25cd9c692755facf64d45250be01f318637d6df0623e6ab524",
+  "chunk_table_key": "6860494329c109ff4ee32b7626e3726c15a484446e4b8406191e477d4a1ff901",
   "data_key": "009dce20c6112595006f7ac61866e3bebecf04f6fb8a2a88d46588c6ce8f2156",
   "folder_id": "68ef115ca66db962389a36adaeffaf9a8b2fc89c10a320181b9e16d4fbd18891",
   "folder_signing_seed": "bf12d69edd5842fece99939582fde823d5601647974d120f89974b7f4cd0b31a",

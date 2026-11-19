@@ -47,7 +47,7 @@ pub const DEFAULT_RESUME_PROBE: Duration = Duration::from_secs(1);
 /// the folder.
 pub const MAX_FOLDERS: usize = MAX_PROOFS_PER_CONNECTION;
 /// The default size of the fixed-size chunks a write cuts (decision: 1 MiB;
-/// `FastCDC` is phase 1, a recorded deviation from `keys.md` 3.2).
+/// the keyed chunker is phase 1, a recorded deviation from `keys.md` 3.2).
 pub const DEFAULT_CHUNK_SIZE: usize = 1 << 20;
 
 /// Everything one engine instance runs with. The runtime's factory builds a

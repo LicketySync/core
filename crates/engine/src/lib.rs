@@ -14,7 +14,7 @@
 //! plan's roadmap, phase 1 ("LAN sync from the command line") brings scanning
 //! and watching the disk, conflict copies on a real disk, ignore files and a
 //! per-path sync status, with LAN discovery and QUIC in `licketysync-net`;
-//! `FastCDC` or another keyed chunker replaces the fixed-size chunks from
+//! the keys crate's keyed chunker replaces the fixed-size chunks from
 //! phase 1 (`keys.md` §3.2) and `SQLite` the in-memory store (the plan's
 //! decision of 2026-10-14). The local API comes in phase 3; selective sync,
 //! versioning and the archive come in phase 5; and the roadmap does not yet

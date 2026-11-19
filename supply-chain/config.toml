@@ -34,6 +34,11 @@ version = "0.8.4"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): AES beneath aes-gcm in snow's RustCrypto resolver, compiled on wasm32 only and never selected by libp2p-noise (deny.toml-wrapped to aes-gcm); RustCrypto. Not covered by the imported audits at this version."
 
+[[exemptions.aes]]
+version = "0.9.4"
+criteria = "safe-to-deploy"
+notes = "Phase 1 exemption (licketysync-keys): AES-128 block encryption, the keyed chunker's PRF (suites.md 2.7 and 3.1; deny.toml wrapper licketysync-keys); RustCrypto, whose README names an NCC Group audit of an earlier version. Its unsafe code is the AES-NI, VAES and ARMv8 backends' intrinsics, counted by cargo-geiger. Not covered by the imported audits at this version."
+
 [[exemptions.aes-gcm]]
 version = "0.10.3"
 criteria = "safe-to-deploy"
@@ -238,6 +243,11 @@ notes = "Phase 0 exemption (licketysync-keys): constant-time comparison beneath 
 version = "0.10.1"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (licketysync-net, spike B, feature webtransport; for review): macOS bindings beneath security-framework, beneath rustls-native-certs (wtransport; the listener never loads native roots); servo. Not covered by the imported audits at this version."
+
+[[exemptions.cpubits]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Phase 1 exemption (licketysync-keys): a macro that selects code by the target's word size, beneath aes's software backend; no unsafe code; RustCrypto. Not covered by the imported audits at this version."
 
 [[exemptions.cpufeatures]]
 version = "0.2.17"

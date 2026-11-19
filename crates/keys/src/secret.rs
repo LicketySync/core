@@ -23,7 +23,7 @@
 //!
 //! The derivations of `keys.md` sections 1.2, 3.1 and 4 below the write
 //! secret are methods here, one label each: the data key of the write secret,
-//! the seven keys of [`DataKey`] and the two of the access key. The folder
+//! the eight keys of [`DataKey`] and the two of the access key. The folder
 //! signing key is [`crate::folder::WriteKey`]'s.
 
 use core::fmt;
@@ -151,9 +151,15 @@ secret32! {
 }
 
 secret32! {
-    /// `gk`, the keyed-BLAKE3 key of the chunker's gear table (section 3.2,
-    /// TM-14): only key holders can tell where chunk boundaries fall.
-    pub(crate) ChunkGearKey
+    /// `ctk`, the keyed-BLAKE3 key of the chunker's two tables (section 3.2,
+    /// TM-14).
+    pub(crate) ChunkTableKey
+}
+
+secret32! {
+    /// `cck`, whose first 16 bytes are the AES-128 key of the chunker's cut
+    /// decisions (section 3.2, TM-14).
+    pub(crate) ChunkCutKey
 }
 
 secret32! {
@@ -222,9 +228,14 @@ impl DataKey {
         ChunkHashKey::fill_with(|out| derive_key_into(labels::DATA_CHUNK_HASH_KEY, &self.0, out))
     }
 
-    /// `gk = derive_key("licketysync/v1/data/chunk-gear-key", dk)`.
-    pub(crate) fn chunk_gear_key(&self) -> ChunkGearKey {
-        ChunkGearKey::fill_with(|out| derive_key_into(labels::DATA_CHUNK_GEAR_KEY, &self.0, out))
+    /// `ctk = derive_key("licketysync/v1/data/chunk-table-key", dk)`.
+    pub(crate) fn chunk_table_key(&self) -> ChunkTableKey {
+        ChunkTableKey::fill_with(|out| derive_key_into(labels::DATA_CHUNK_TABLE_KEY, &self.0, out))
+    }
+
+    /// `cck = derive_key("licketysync/v1/data/chunk-cut-key", dk)`.
+    pub(crate) fn chunk_cut_key(&self) -> ChunkCutKey {
+        ChunkCutKey::fill_with(|out| derive_key_into(labels::DATA_CHUNK_CUT_KEY, &self.0, out))
     }
 
     /// `tk = derive_key("licketysync/v1/data/path-tag-key", dk)`.
@@ -267,7 +278,8 @@ const _: () = {
     zeroize_on_drop::<ChunkKey>();
     zeroize_on_drop::<ChunkNonceKey>();
     zeroize_on_drop::<ChunkHashKey>();
-    zeroize_on_drop::<ChunkGearKey>();
+    zeroize_on_drop::<ChunkTableKey>();
+    zeroize_on_drop::<ChunkCutKey>();
     zeroize_on_drop::<RecordKey>();
     zeroize_on_drop::<PathTagKey>();
     zeroize_on_drop::<HintKey>();
@@ -277,11 +289,12 @@ const _: () = {
     zeroize_on_drop::<LinkConfirmKey>();
     zeroize_on_drop::<ProofKey>();
     zeroize_on_drop::<SecretBytes>();
-    zeroize_on_drop::<crate::chunk::GearTable>();
+    zeroize_on_drop::<crate::chunker::Chunker>();
     zeroize_on_drop::<Zeroizing<[u8; 32]>>();
     zeroize_on_drop::<Zeroizing<String>>();
     // The cipher, the private keys and the word list the crate holds secrets in.
     zeroize_on_drop::<chacha20poly1305::XChaCha20Poly1305>();
+    zeroize_on_drop::<aes::Aes128Enc>();
     zeroize_on_drop::<ed25519_dalek::SigningKey>();
     zeroize_on_drop::<bip39::Mnemonic>();
 };
@@ -314,8 +327,12 @@ mod tests {
             "PathTagKey([redacted])"
         );
         assert_eq!(
-            format!("{:?}", ChunkGearKey::fill_with(|o| *o = [1; 32])),
-            "ChunkGearKey([redacted])"
+            format!("{:?}", ChunkTableKey::fill_with(|o| *o = [1; 32])),
+            "ChunkTableKey([redacted])"
+        );
+        assert_eq!(
+            format!("{:?}", ChunkCutKey::fill_with(|o| *o = [1; 32])),
+            "ChunkCutKey([redacted])"
         );
         assert_eq!(s.expose(), &[7u8; 32]);
         assert!(bool::from(s.ct_eq(&WriteSecret::from_bytes([7u8; 32]))));
@@ -360,7 +377,8 @@ mod tests {
             (*dk.chunk_key().expose(), labels::DATA_CHUNK_KEY),
             (*dk.chunk_nonce_key().expose(), labels::DATA_CHUNK_NONCE_KEY),
             (*dk.chunk_hash_key().expose(), labels::DATA_CHUNK_HASH_KEY),
-            (*dk.chunk_gear_key().expose(), labels::DATA_CHUNK_GEAR_KEY),
+            (*dk.chunk_table_key().expose(), labels::DATA_CHUNK_TABLE_KEY),
+            (*dk.chunk_cut_key().expose(), labels::DATA_CHUNK_CUT_KEY),
             (*dk.record_key().expose(), labels::DATA_RECORD_KEY),
             (*dk.path_tag_key().expose(), labels::DATA_PATH_TAG_KEY),
         ];

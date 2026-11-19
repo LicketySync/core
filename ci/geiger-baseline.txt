@@ -43,15 +43,15 @@
 #   generated <package> <file>
 cargo-geiger 0.14.0
 cli 0 0 0 0 0
-daemon 193 9366 77 5 237
+daemon 193 9420 77 5 237
 decrypt 0 0 0 0 0
-engine 94 4333 23 2 63
-fs 162 5797 32 3 111
-index 94 4333 23 2 63
-keys 94 4333 23 2 63
-net 261 20643 336 22 574
-protocol 94 4333 23 2 63
-sim 94 4333 23 2 63
+engine 94 4387 23 2 63
+fs 162 5851 32 3 111
+index 94 4387 23 2 63
+keys 94 4387 23 2 63
+net 261 20697 336 22 574
+protocol 94 4387 23 2 63
+sim 94 4387 23 2 63
 generated libsqlite3-sys bindgen.rs
 generated oid-registry oid_db.rs
 generated serde private.rs

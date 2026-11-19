@@ -2,9 +2,10 @@
 
 Version 2, 2026-10-22 (version 1, 2026-10-14, described the issued-keys model), amended
 2026-11-10 for the security protocol of a relay's circuit (transport, "Circuits", and the approved
-crates' rows for it), and 2026-11-12 for why the cleanup record keeps its signature label when its
-layout gains a watermark (signatures, "Domain separation"), and 2026-11-13 for how closely Padmé
-shows a chunk's size at each length (data encryption, "Padding"). This file names
+crates' rows for it), 2026-11-12 for why the cleanup record keeps its signature label when its
+layout gains a watermark (signatures, "Domain separation"), 2026-11-13 for how closely Padmé
+shows a chunk's size at each length (data encryption, "Padding"), and 2026-11-15 for where chunks
+end: a Toeplitz hash, then AES-128 (section 2.7, the `aes` crate's row in section 3.1). This file names
 every algorithm, parameter and crate that may perform cryptography in this workspace, the apps and
 the browser client. It is normative: first-party code uses nothing that is not listed here, and a
 change that needs something else adds it here first, with the reason, and is reviewed as a change to
@@ -67,9 +68,10 @@ suites.
 ## 2. Suite 1
 
 Suite 1 is Ed25519 for signatures, XChaCha20-Poly1305 for data, BLAKE3 for hashing and key
-derivation, Argon2id for passphrases (phase 1, the local key store), and TLS 1.3 or Noise on the
-transport. The 256-bit symmetric
-parts survive a quantum computer (Grover halves them to 128 bits). Ed25519 does not, and the owner
+derivation, AES-128 for where chunks end, Argon2id for passphrases (phase 1, the local key store),
+and TLS 1.3 or Noise on the transport. The 256-bit symmetric parts survive a quantum computer
+(Grover halves them to 128 bits); AES-128's key, which Grover would bring to about 64 bits of work,
+guards only where chunks end (section 2.7). Ed25519 does not, and the owner
 chose it alone (2026-10-22); `threat-model.md` TM-33 states what a future forger could do. The
 record layer has no public-key encryption at all: no key is ever wrapped to anyone.
 
@@ -78,6 +80,7 @@ record layer has no public-key encryption at all: no key is ever wrapped to anyo
 | Signature | Ed25519 (RFC 8032), pure, verified strictly | `ed25519-dalek` 3 | public key 32, signature 64, secret a 32-byte seed |
 | Data encryption | XChaCha20-Poly1305 | `chacha20poly1305` 0.11 | key 32, nonce 24, tag 16 |
 | Hash and key derivation | BLAKE3: hash, keyed hash, derive_key | `blake3` 1 | output 32, key 32 |
+| Chunk boundaries | A pair of tabulated Toeplitz hashes, then AES-128 (section 2.7) | `aes` 0.9 | window 64, digest 16, key 16, 20 bits read |
 | Passphrase (phase 1) | Argon2id v1.3, m = 64 MiB, t = 3, p = 4 | `argon2` 0.6 | salt 16, output 32 |
 | Transport | TLS 1.3 with X25519MLKEM768 over QUIC and TCP; Noise XX inside WebSocket, WebTransport and WebRTC (the WebSocket path is classical end to end as `libp2p-websocket` ships, section 2.6) | `rustls` 0.23 on `aws-lc-rs` 1; `libp2p-tls`, `libp2p-quic`, `libp2p-noise`, `libp2p-websocket`, `libp2p-identity` | as the transports specify |
 
@@ -219,7 +222,8 @@ its own rule, so no two jobs can produce the same output from the same input. `k
 registry lists every label in use and is the one place a label is added; the table below copies it
 and must stay identical to it. Output is always 32 bytes, truncated only where `keys.md` says so (a
 16-byte LAN beacon ID, peer tag and link beacon ID under `licketysync/v1/link/discovery`, a 20-byte
-DHT ID, the 24-byte chunk nonce, and the 8-byte entries of the chunker's gear table) and in a
+DHT ID, the 24-byte chunk nonce, the two 8-byte halves of each entry of the chunker's tables, and
+the 16-byte AES key taken from the chunk cut key) and in a
 conflict copy's name, which shows the first 4 bytes of its record hash, or 16 when shortened
 (`protocol.md` §4.4); the extendable-output mode is not used. Crate `blake3` 1 in its default build,
 which is not pure Rust: on x86-64 its build script compiles the upstream assembly with `cc`, and on
@@ -243,8 +247,8 @@ portable Rust code. Its unsafe and foreign code is accepted and shows in cargo-g
   chunk nonces under the chunk-nonce key (section 2.3); the handshake's folder hint under the hint
   key and its proof key under the payload key, both derived from the folder's access key; the path
   tag, a file's ID, under the path-tag key, so that nobody without a key can compute one (`keys.md`
-  §3.5, TM-14); the chunker's gear table under the chunk-gear key, so that only key holders can tell
-  where chunk boundaries fall (`keys.md` §3.2, TM-14, with the residual stated there); and the link
+  §3.5, TM-14); the chunker's two tables under the chunk-table key (`keys.md` §3.2, section 2.7);
+  and the link
   proof under the link-confirm key. Every key holder at every tier derives the access key and nobody
   else can, so the hint and the proof key are secret from everyone without a key to the folder (a
   network observer, a relay, a connected peer with no key), from whom they hide which folder the
@@ -291,7 +295,9 @@ this file carries a section number of either. Removed on 2026-10-22: the `identi
 `hash/id/identity`, `hash/id/key`, the keyed `handshake/folder-hint` and `handshake/proof-key`, and
 the `sig/` labels of the drafts' key records, the Folder record, the folder proof and the grant
 proof of possession. Removed on 2026-10-25: `hash/writer-digest`; added then: `data/path-tag-key`,
-`data/chunk-gear-key`, `hash/set-leaf`, `hash/set-node` and `sig/cleanup`. Since the drafts never
+`data/chunk-gear-key`, `hash/set-leaf`, `hash/set-node` and `sig/cleanup`. Removed with the gear
+table, before any release: `data/chunk-gear-key`; added with the chunker that replaced it:
+`data/chunk-table-key` and `data/chunk-cut-key`. Since the drafts never
 shipped, the rule that a label is never reused applies from the first release on.
 
 | Label | Mode | Material / input | Output |
@@ -302,7 +308,8 @@ shipped, the rule that a label is never reused applies from the first release on
 | `licketysync/v1/data/chunk-key` | derive_key | data key | `ck` (§3.1) |
 | `licketysync/v1/data/chunk-nonce-key` | derive_key | data key | `nk` (§3.1) |
 | `licketysync/v1/data/chunk-hash-key` | derive_key | data key | `hk` (§3.1) |
-| `licketysync/v1/data/chunk-gear-key` | derive_key | data key | `gk` (§3.1), the keyed-BLAKE3 key of the chunker's gear table (§3.2) |
+| `licketysync/v1/data/chunk-table-key` | derive_key | data key | `ctk` (§3.1), the keyed-BLAKE3 key of the chunker's tables (§3.2) |
+| `licketysync/v1/data/chunk-cut-key` | derive_key | data key | `cck` (§3.1), whose first 16 bytes are the chunker's AES-128 key (§3.2) |
 | `licketysync/v1/data/record-key` | derive_key | data key | `rk` (§3.1) |
 | `licketysync/v1/data/path-tag-key` | derive_key | data key | `tk` (§3.1), the keyed-BLAKE3 key of path tags, the file IDs (§3.5) |
 | `licketysync/v1/handshake/hint-key` | derive_key | access key | keyed-BLAKE3 key of the folder hint (§4) |
@@ -532,6 +539,63 @@ reservations; a rotating identity would also defeat a LAN discovery dial's check
 reaches against the beacon's peer tag, and any peer that pins an identity. Suite 1 keeps one
 identity per device and documents the handle instead.
 
+### 2.7 Chunk boundaries: a Toeplitz hash, then AES-128
+
+The chunker decides whether a chunk ends after a byte from the 64 bytes that end at it, by the
+universal-hash-then-PRF construction of Truong, Merz, Scarlata, Günther and Paterson (CCS 2025,
+ePrint 2025/558, Theorem 4.5) **(decision)**: a keyed universal hash compresses the window to 128
+bits, AES-128 under an independent key encrypts them, and a chunk ends where the first 20 bits of
+the ciphertext are zero. `keys.md` (chunk encryption) fixes the rule, the sizes and the vectors.
+
+- **The hash.** A pair of tabulated Toeplitz hashes (Krawczyk, CRYPTO 1994) over GF(2)[x] modulo
+  the public irreducible x^64 + x^4 + x^3 + x + 1: each byte of the window looks up a secret table
+  of 256 64-bit entries and is multiplied by a power of x by its position; two tables, from the
+  chunk-table key. The digests of two different windows differ by a sum of table entries with
+  nonzero coefficients, so the windows collide with probability exactly 2^-64 per table and 2^-128
+  for the pair, over the tables; the paper's proof needs only that (its section 4.3). The hash and
+  the cut loop are written in this workspace, in `keys`, because no approved crate provides them;
+  `threat-model.md` TM-5 permits them by name. The hash's output reaches no one: only AES's verdict
+  on it leaves, as chunk lengths, so a mistake in either leaks where chunks end, never contents.
+- **Cache timing.** The table loads are indexed by the window's bytes, the one memory access
+  between reading a file and sealing its chunks (with compression off, the default; the coders of
+  `keys.md` §3.2 are table-driven too) whose address the file's content chooses: entries
+  are 16 bytes, about four to a 64-byte line, so a process that shares the core's cache can learn
+  by prime and probe about the top six bits of the bytes evaluated (`threat-model.md` §5). A
+  polynomial hash by carry-less multiplication (PCLMULQDQ on x86, PMULL on ARM) has no
+  content-indexed loads, but where that instruction is missing (WebAssembly, older processors) a
+  constant-time carry-less multiply costs far more than a table load, and every device of a folder
+  runs the one rule.
+- **The PRF.** AES-128 under the first 16 bytes of the chunk-cut key, one block per evaluated
+  position, through the `aes` crate's batched encryption, of which 20 bits are read. Theorem 4.5
+  bounds what a party that asks for the cuts of q windows of its choice can tell them from coins of
+  bias λ^-1, measured as its chance of guessing which it is shown less 1/2, by Adv^PRF_AES +
+  q²·ε/(2λ), where ε is the hash's collision probability (the paper's (w−1)/|F|): with ε = 2^-128
+  and λ = 2^20, Adv^PRF_AES + q²·2^-149 (as a distinguishing advantage, twice that). Its proof
+  takes two independent decisions to differ with probability λ^-1(1−λ^-1), half the true value,
+  but its games differ only when the hidden bit picks the chunker, which halves the term back, so
+  the bound stands. The tables and the AES key are BLAKE3 outputs (section 2.4), so BLAKE3's
+  advantage as a PRF adds to it. AES is a permutation; as a PRF it costs at most q²/2^129 more
+  (2^-29 after 2^50 windows), and reading fewer bits costs nothing. Theorem 4.3 carries the bound
+  from cut decisions to chunk lengths for content whose evaluated windows do not repeat; identical
+  windows always decide alike (`keys.md`, chunk encryption). No proven construction calls its PRF
+  less often: a prefilter on the digest would give an attacker linear equations in the tables, the
+  structure of the published attacks.
+- **Why AES.** The PRF runs once per byte after each chunk's first 512 KiB, about two bytes in
+  three. With AES instructions, AES-128 costs under a nanosecond per window, at least 15 times less
+  than SipHash-2-4, ChaCha or keyed BLAKE3. Without them, its constant-time bitsliced code costs
+  tens of nanoseconds per window: 26 MB/s of input on a laptop core (measured; 510 MB/s
+  with AES-NI), an estimated 16 MB/s in WebAssembly (from AES and hash timings measured in V8) and
+  an estimated 4 to 5 MB/s on a Raspberry Pi 4, where SipHash-2-4 would be about five times faster.
+  Every device of a folder must cut alike (`keys.md`, chunk encryption) and most have AES
+  instructions, so the folder's one rule uses AES. A faster AES for the browser, RustCrypto's
+  proposed WebAssembly SIMD backend, needs no change. WebCrypto has no ECB mode: AES-CBC with a
+  zero IV encrypts one block per call, and only decryption batches (with CBC's chaining undone), so
+  cutting at WebCrypto's speed would mean defining the cut on AES-128 decryption, a change to the
+  rule before 1.0 and an entry here.
+- **Quantum.** AES-128's 128-bit key, which Grover's search would bring to about 64 bits of work,
+  guards only where chunks end: recovering it would bring back the test by chunk lengths of
+  `threat-model.md` TM-14, never contents, names or keys.
+
 ## 3. Approved crates
 
 These tables are exhaustive for two things: any crate that performs cryptography (a cipher, hash,
@@ -560,6 +624,7 @@ unaudited post-quantum crates required goes with them.
 | `ed25519-dalek` | `3` | 3.0.0, 2026-07-06 | none named | Every signature in suite 1: the folder signing key, the device key, the libp2p identity key and the BEP 44 DHT signing key (section 2.6; the last signs only BEP 44 mutable items, phase 2): `SigningKey::from_bytes` on a derived seed; `verify_strict`; the canonical-encoding and small-order checks on a decoded public key; inside `libp2p-identity` only, the non-strict `verify` of the libp2p TLS extension's signature, which `libp2p-identity` 0.3.1 calls (deviation, recorded 2026-11-03; section 2.6: `net` refuses a peer whose identity key is not canonical or of small order) | `verify` (non-strict) in first-party code; `hazmat`, `legacy_compatibility`, `pkcs8`; signing anything a label does not name |
 | `libp2p-identity` | `0.3` (`net` depends on it directly, beside `libp2p-core` `0.44`) | 0.3.1, 2026-10-27 (0.3.0 is dated 2026-07-28 on crates.io, not 2026-09-11) | none named; its Ed25519 is `ed25519-dalek` | The libp2p identity key of section 2.6 with the `ed25519` and `peerid` features only (`peerid` is the `PeerId` type): an `ed25519::SecretKey` from the derived 32-byte seed, its `Keypair` and `PeerId`; inside `libp2p-quic`, `Keypair::derive_secret`, HKDF-SHA256 (`hkdf`, `hmac`, `sha2`) over the identity's secret key under the label `libp2p quic stateless reset key`, once per transport, for QUIC's stateless-reset HMAC key (read 2026-11-03; a use the libp2p QUIC transport adds beyond the TLS and Noise specifications, section 2.6); its non-strict verification of the TLS extension's Ed25519 signature, which accepts small-order keys (deviation, recorded 2026-11-03: `net` refuses such a peer, section 2.6; the Hello's check of the libp2p identity key is phase 1) | Its `secp256k1`, `ecdsa`, `rsa` and `rand` features; generating an identity from randomness instead of the derived seed; signing anything the libp2p TLS and Noise specifications do not; `derive_secret` in first-party code |
 | `chacha20poly1305` | `0.11` | 0.11.0, 2026-06-28 | NCC Group 2020, no significant findings | `XChaCha20Poly1305` as section 2.3 | `ChaCha20Poly1305` (96-bit nonce) directly; the stream cipher without the MAC |
+| `aes` | `0.9` (0.9.4 or later, `zeroize` feature) | 0.9.4, 2026-11-02 | NCC Group 2020 (an earlier version), no significant findings | `Aes128Enc` block encryption, batched, as the chunker's PRF (section 2.7), under the first 16 bytes of the chunk cut key and no other key; its runtime choice of AES-NI, VAES, the ARMv8 AES instructions or the constant-time bitsliced software backend. `cpufeatures` finds the ARMv8 instructions on Linux, Android and Apple platforms but not on Windows, so a Windows-on-ARM build passes `-C target-feature=+aes` (every such processor has them) or runs the bitsliced code | Decryption; any mode of operation; any other key; the `hazmat` feature; the `aes_backend` and `aes_backend_soft` cfg flags in a shipped build |
 | `blake3` | `1` | 1.8.7, 2026-08-20 | none named; the designers' reference implementation | The labelled hash `H`, `keyed_hash`, `derive_key` under a registered label; `Hasher` for streaming; `rayon` feature for large files | Extendable output; as a password hash; as a MAC without the keyed mode; plain `hash` without a label |
 | `argon2` | `0.6` | 0.6.0, 2026-08-27 | none named | Argon2id with the parameters of section 2.5, `zeroize` feature; from phase 1, with the key store | Argon2i or Argon2d; the crate's defaults; the `password-hash` PHC API as a verifier |
 | `zeroize` | `1` | 1.9.1, 2026-10-06 | none named; small, widely reviewed | Every secret type: `Zeroize`, `ZeroizeOnDrop`, `Zeroizing<T>`, the `derive` feature | — |
@@ -727,7 +792,8 @@ under `crates/<crate>/tests/vectors/`, and the test fails if the output changes 
 
 - Primitives: Ed25519 (RFC 8032 section 7.1 vectors); XChaCha20-Poly1305
   (draft-irtf-cfrg-xchacha-03 Appendix A vectors); BLAKE3 (the official test vector file, all three
-  modes); BIP39 (the Trezor reference vectors, English, the 256-bit entries); and Argon2id (RFC 9106
+  modes); AES-128 (FIPS 197 Appendix C.1 and NIST SP 800-38A F.1.1, one block and batched); BIP39
+  (the Trezor reference vectors, English, the 256-bit entries); and Argon2id (RFC 9106
   section 5.3) in the phase 1 change that adds the key store, which is when the keys crate gains it.
 - Derivations: for every `derive_key` label in `keys.md`'s registry (section 2.4's table), a fixed
   32-byte input and the expected 32-byte output, generated once and committed, so that a changed

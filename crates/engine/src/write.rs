@@ -16,8 +16,8 @@
 //!    that would write one path twice in one commit (step 3). NFC is the
 //!    caller's duty in phase 0 (gap G8: no normaliser is in the dependency
 //!    set; the workloads use ASCII; phase 1's scanner adds one).
-//! 2. A file is cut into fixed-size chunks of `chunk_size` (decision:
-//!    `FastCDC` is phase 1, a recorded deviation from `keys.md` 3.2), and an
+//! 2. A file is cut into fixed-size chunks of `chunk_size` (decision: the
+//!    keyed chunker is phase 1, a recorded deviation from `keys.md` 3.2), and an
 //!    empty file has none. Each chunk is sealed by the keys crate
 //!    (`seal_chunk`: convergent, Padmé-padded, TM-12, TM-15).
 //! 3. The change, built from what is on the disk, never from what the index

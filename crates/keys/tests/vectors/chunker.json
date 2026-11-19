@@ -1,0 +1,154 @@
+{
+  "cut_bits": 20,
+  "inputs": [
+    {
+      "ends": [
+        1056629,
+        2449542,
+        3087590,
+        4433989,
+        6742937,
+        7762317,
+        8388608
+      ],
+      "len": 8388608,
+      "name": "splitmix64 seed 0, 8 MiB"
+    },
+    {
+      "ends": [],
+      "len": 0,
+      "name": "its first 0 bytes"
+    },
+    {
+      "ends": [
+        1
+      ],
+      "len": 1,
+      "name": "its first byte"
+    },
+    {
+      "ends": [
+        524287
+      ],
+      "len": 524287,
+      "name": "its first MIN - 1 bytes"
+    },
+    {
+      "ends": [
+        524288
+      ],
+      "len": 524288,
+      "name": "its first MIN bytes"
+    },
+    {
+      "ends": [
+        1056629,
+        2449542,
+        3087590,
+        4194304
+      ],
+      "len": 4194304,
+      "name": "its first MAX bytes"
+    },
+    {
+      "ends": [
+        1056629,
+        2449542,
+        3087590,
+        4194305
+      ],
+      "len": 4194305,
+      "name": "its first MAX + 1 bytes"
+    },
+    {
+      "ends": [
+        4194304,
+        8388608,
+        9437184
+      ],
+      "len": 9437184,
+      "name": "zeros, 9 MiB"
+    },
+    {
+      "ends": [
+        524288,
+        1048576
+      ],
+      "len": 1048576,
+      "name": "MIN - 64 zero bytes, the window that ends the first chunk of splitmix64 seed 0, then MIN zero bytes"
+    }
+  ],
+  "max": 4194304,
+  "min": 524288,
+  "tables": [
+    {
+      "i": 0,
+      "t0": "8fad6a91ea5dab91",
+      "t1": "69dcdcce10476571"
+    },
+    {
+      "i": 127,
+      "t0": "725d22a201904adc",
+      "t1": "6b67afef727212bc"
+    },
+    {
+      "i": 255,
+      "t0": "a955db226a97669f",
+      "t1": "019ff0027a0e46ec"
+    }
+  ],
+  "under_another_folder": {
+    "ends": [
+      538226,
+      1513585,
+      2403198,
+      3273471,
+      4622520,
+      5965689,
+      8177452,
+      8388608
+    ],
+    "input": "splitmix64 seed 0, 8 MiB",
+    "write_secret": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+  },
+  "window": 64,
+  "windows": [
+    {
+      "block": "f3917be191e7a277fb6d4162fb8e7100",
+      "bytes": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "c": "f5c342ea177658ae82b61079d653fc65",
+      "cut": false,
+      "d0": "77a2e791e17b91f3",
+      "d1": "00718efb62416dfb",
+      "name": "64 zero bytes"
+    },
+    {
+      "block": "f941762aff7431b1f24d5bab59ae9e3e",
+      "bytes": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "c": "cc95c560c45acfd5c309780a548f54cb",
+      "cut": false,
+      "d0": "b13174ff2a7641f9",
+      "d1": "3e9eae59ab5b4df2",
+      "name": "the bytes 0 to 63"
+    },
+    {
+      "block": "23b6a46fc7d69228066d5b0fa1c1e901",
+      "bytes": "ff0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "c": "4db980989eef8c5fd9ad3b1f9f3868b0",
+      "cut": false,
+      "d0": "2892d6c76fa4b623",
+      "d1": "01e9c1a10f5b6d06",
+      "name": "the bytes 0 to 63, the oldest changed to ff"
+    },
+    {
+      "block": "ad0c8e68eeb876314970bdb17ab1f3be",
+      "bytes": "9cadeef298b884dbab8e284828449c88c7e1da68b05a4ee95af947d5f00dbb25b8b4c3762777a4c49555025cc3471428bff0129369a419b72ed561dcec0e49db",
+      "c": "000005d82395f91cd330354998d87421",
+      "cut": true,
+      "d0": "3176b8ee688e0cad",
+      "d1": "bef3b17ab1bd7049",
+      "name": "the window that ends the first chunk of splitmix64 seed 0"
+    }
+  ],
+  "write_secret": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
+}

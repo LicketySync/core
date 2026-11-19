@@ -153,6 +153,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "chunker"
+path = "fuzz_targets/chunker.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "disk_names"
 path = "fuzz_targets/disk_names.rs"
 test = false

@@ -18,7 +18,7 @@
 //! - [`labelled_hash`]: `H(label, x) = BLAKE3(label || 0x00 || x)`, for every
 //!   identifier and link over public data. Plain `BLAKE3(x)` appears nowhere.
 //! - `keyed_hash` (crate-private): keyed BLAKE3 under a key that a `derive_key`
-//!   label made for that one use (`hk`, `nk`, `gk`, `tk`, the hint key, the
+//!   label made for that one use (`hk`, `nk`, `ctk`, `tk`, the hint key, the
 //!   payload key, the link-confirm key), so its input carries no label of its
 //!   own.
 //! - `signed_message` (crate-private): the signature prefix `M = label || 0x00
@@ -102,9 +102,12 @@ pub const DATA_CHUNK_KEY: DeriveLabel = d("licketysync/v1/data/chunk-key");
 pub const DATA_CHUNK_NONCE_KEY: DeriveLabel = d("licketysync/v1/data/chunk-nonce-key");
 /// The chunk hash key `hk`, from the data key (section 3.1).
 pub const DATA_CHUNK_HASH_KEY: DeriveLabel = d("licketysync/v1/data/chunk-hash-key");
-/// The chunk gear key `gk`, from the data key (section 3.1): the keyed-BLAKE3
-/// key of the chunker's gear table (section 3.2).
-pub const DATA_CHUNK_GEAR_KEY: DeriveLabel = d("licketysync/v1/data/chunk-gear-key");
+/// The chunk table key `ctk`, from the data key (section 3.1): the
+/// keyed-BLAKE3 key of the chunker's tables (section 3.2).
+pub const DATA_CHUNK_TABLE_KEY: DeriveLabel = d("licketysync/v1/data/chunk-table-key");
+/// The chunk cut key `cck`, from the data key (section 3.1), whose first 16
+/// bytes are the chunker's AES-128 key (section 3.2).
+pub const DATA_CHUNK_CUT_KEY: DeriveLabel = d("licketysync/v1/data/chunk-cut-key");
 /// The record key `rk`, from the data key (section 3.1).
 pub const DATA_RECORD_KEY: DeriveLabel = d("licketysync/v1/data/record-key");
 /// The path-tag key `tk`, from the data key (section 3.1): the keyed-BLAKE3 key
@@ -175,7 +178,8 @@ pub const REGISTRY: &[Entry] = &[
     entry!(DATA_CHUNK_KEY, DeriveKey, "data key"),
     entry!(DATA_CHUNK_NONCE_KEY, DeriveKey, "data key"),
     entry!(DATA_CHUNK_HASH_KEY, DeriveKey, "data key"),
-    entry!(DATA_CHUNK_GEAR_KEY, DeriveKey, "data key"),
+    entry!(DATA_CHUNK_TABLE_KEY, DeriveKey, "data key"),
+    entry!(DATA_CHUNK_CUT_KEY, DeriveKey, "data key"),
     entry!(DATA_RECORD_KEY, DeriveKey, "data key"),
     entry!(DATA_PATH_TAG_KEY, DeriveKey, "data key"),
     entry!(HANDSHAKE_HINT_KEY, DeriveKey, "access key"),
@@ -282,7 +286,7 @@ pub fn labelled_hash(label: HashLabel, parts: &[&[u8]]) -> [u8; 32] {
 }
 
 /// Keyed BLAKE3 under a key that a `derive_key` label made for that one use
-/// (`hk`, `nk`, `gk`, `tk`, the hint key, the payload key, the link-confirm
+/// (`hk`, `nk`, `ctk`, `tk`, the hint key, the payload key, the link-confirm
 /// key): no label in the input (`keys.md` 0). The output is written into `out`; the hasher,
 /// whose state holds the key, and its `blake3::Hash` are wiped.
 pub(crate) fn keyed_hash_into(key: &[u8; 32], parts: &[&[u8]], out: &mut [u8; 32]) {
@@ -367,7 +371,7 @@ mod tests {
             );
             assert!(seen.insert(e.label), "{} is registered twice", e.label);
         }
-        assert_eq!(REGISTRY.len(), 29);
+        assert_eq!(REGISTRY.len(), 30);
         let count = |m: Mode| REGISTRY.iter().filter(|e| e.mode == m).count();
         assert_eq!(
             (
@@ -375,7 +379,7 @@ mod tests {
                 count(Mode::Hash),
                 count(Mode::SigPrefix)
             ),
-            (16, 10, 3)
+            (17, 10, 3)
         );
     }
 

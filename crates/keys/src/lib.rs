@@ -12,10 +12,12 @@
 //!   records and cleanups, signed with the folder's write key under the label
 //!   of the record type and verified by every peer, and the record hash.
 //! - [`chunk`] and [`sealed_meta`]: chunk encryption (XChaCha20-Poly1305,
-//!   Padmé padding) with keyed BLAKE3 chunk hashes and the chunker's keyed
-//!   gear table; sealed metadata, padded to a power of two, under the
+//!   Padmé padding) with keyed BLAKE3 chunk hashes; sealed metadata, padded
+//!   to a power of two, under the
 //!   associated data of its index record or cleanup, and path tags, the file
 //!   IDs, both through a folder's [`sealed_meta::RecordKeys`].
+//! - [`chunker`]: the keyed chunker, a universal hash then AES-128, which
+//!   decides where a file's chunks end.
 //! - [`set_digest`]: the set digests that reconcile index records.
 //! - [`handshake`] and [`device`]: the hint and the sealed payload of the
 //!   folder proof (one for every tier), the device key and its proof, the
@@ -66,6 +68,7 @@
 mod aead;
 mod bytes;
 pub mod chunk;
+pub mod chunker;
 pub mod device;
 pub mod discovery;
 pub mod folder;

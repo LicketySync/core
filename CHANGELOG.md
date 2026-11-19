@@ -5,6 +5,69 @@ changed and why.
 
 ## Unreleased
 
+- Keys, spec: the keyed chunker. Where a file's chunks end is now decided by the construction of
+  Truong, Merz, Scarlata, Günther and Paterson (CCS 2025, ePrint 2025/558, Theorem 4.5): a pair of
+  tabulated Toeplitz hashes over GF(2)[x] mod x^64 + x^4 + x^3 + x + 1, under two secret tables,
+  compresses the 64 bytes that end at a byte to 128 bits; AES-128 under the folder's chunk cut key
+  encrypts them; and a chunk ends there when the first 20 bits are zero. Chunks are 512 KiB to
+  `MAX_CHUNK_PLAINTEXT` (4 MiB), about 1.47 MiB on average, and only the bytes past a chunk's first
+  512 KiB are evaluated. The keyed FastCDC gear table it replaces had no security argument: the
+  paper and Alexeev, Percival and Zhang (ePrint 2025/532) recover such keys from the cuts of files an
+  attacker knows or chose, and a sealed peer that can put files into a folder can find exact cuts by
+  comparing cipher hashes, which strips Padmé's blur. Now the cuts are pseudorandom to anyone
+  without the data key: by Theorem 4.5, one that asks for the cuts of q windows of its choice tells
+  them from coins of bias 2^-20 with an advantage (its chance of guessing, less 1/2) of at most
+  AES-128's and BLAKE3's advantages as PRFs plus q²·ε/(2·2^20) = q²·2^-149 for the pair of tables'
+  ε = 2^-128, and by Theorem 4.3 a known file's chunk lengths then confirm only its approximate
+  size and number of chunks, as long as its windows do not repeat. Identical 64-byte windows always
+  decide alike, so repeated content cuts predictably and a lightly edited copy of a known file,
+  whose cut windows stay, is recognisable by its chunk lengths with no chunk identical (`keys.md`
+  §3.2, `suites.md` §2.7, TM-5, TM-14, TM-15).
+  - `keys`: `chunker::Chunker`, from `ChunkKeys::chunker`. It is streaming: `next_cut` takes a
+    stream's bytes in pieces of any size and says where the current chunk ends, `finish` gives the
+    last chunk, `chunks` cuts a stream held in memory. It keeps the last 64 bytes in a state of
+    about 10 KiB allocated once, rolls the digests, and encrypts 64 positions per AES call. The
+    digests go to AES little-endian, as the processors that run it hold them: big-endian, the
+    block's byte swap took about a third of the loop, since LLVM built the block in an SSE
+    register and baseline x86-64 has no byte shuffle (ten SSE2 instructions where SSSE3's PSHUFB
+    is one). AES is the `aes` crate's encrypt-only `Aes128Enc`, so no decryption round keys are
+    made. The bounds' fields are private, so every chunker's bounds keep each window inside its
+    chunk: the spec's are checked when the crate builds, a test's by their constructor. The labels
+    `data/chunk-table-key` and `data/chunk-cut-key` replace `data/chunk-gear-key`; `GearTable`,
+    `GEAR_ENTRIES` and `ChunkKeys::gear_table` are gone.
+  - Every device of a folder cuts by this one rule, so identical files deduplicate across devices
+    and a file read again finds the chunks its record names; a device without AES instructions runs
+    the AES crate's constant-time bitsliced code. Measured on one core of an Intel i5-1145G7
+    (`cargo run --release -p licketysync-keys --example chunker_speed`): 510 MB/s with AES-NI,
+    26 MB/s on the bitsliced code; a Raspberry Pi 4 manages an estimated 4 to 5 MB/s.
+  - No wire format or message bound changes: `MAX_CHUNK_PLAINTEXT` is the chunker's longest chunk.
+    The engine still cuts fixed-size chunks and adopts the chunker with the disk layer.
+  - Dependency (TM-8): `aes` 0.9.4 (RustCrypto, MIT or Apache-2.0; 2026-11-02, the newest release,
+    which fixes 0.9.3's inlining regression), with `cpubits` 0.1.1 beneath it: AES-128 is the
+    construction's PRF, and this is the RustCrypto crate beside the `chacha20poly1305` and `cipher`
+    the workspace already builds on, with AES-NI, VAES, ARMv8 and constant-time software backends.
+    `deny.toml` lets only `licketysync-keys` depend on it (and snow's unselected AES-GCM); cargo-vet
+    exemptions for both; the cargo-geiger counts of `keys` and the crates above it rise by its
+    intrinsics. Its MSRV is 1.89, so the workspace's `rust-version` moves from 1.88 to 1.89, and
+    the daemon's own 1.89 (rusqlite 0.41's) gives way to the workspace's.
+  - Tests: FIPS 197 C.1 and SP 800-38A F.1.1 through the chunker's AES calls, one block and batched;
+    the irreducibility of `P` (Rabin's test); vectors (tables, the digests and ciphertexts of four
+    windows, and the cuts of SplitMix64 output, of its prefixes at the bounds' edges, of zeros and
+    under another folder's keys) computed by an independent implementation in the test and checked
+    against the chunker, one of them a cut at a chunk's first evaluated position, `MIN - 1`;
+    property tests with small bounds against that implementation, in pieces of any size, of rolling
+    against direct digests, and of shift resistance; an insertion at the spec's bounds that changes
+    only its own chunk; compile-time checks that the chunker's state and its cipher wipe themselves;
+    and a fuzz target, `chunker`, whose streams are mostly short, since one of megabytes takes most
+    of a second under the sanitizer.
+  - Spec: `keys.md` §1.2, §1.3, §3.1, §3.2, §3.3, §9 and §10; `suites.md` §2, §2.4, §2.7, the `aes`
+    row of §3.1 (with Windows on ARM's `+aes` target feature) and §4.4; `threat-model.md` TM-5,
+    TM-14, TM-15, §3.2, §3.3, §3.7 and §5 (with the residual that the table loads, indexed by a
+    file's bytes, show another user of the machine about their top six bits by cache timing; a
+    polynomial hash by carry-less multiplication would not, but is slow where that instruction is
+    missing); `protocol.md` §4.4 (what a sealed peer sees, and files of about 47 GiB in practice,
+    16 GiB at worst) and §9.
+
 - Daemon: on Windows, an open of the store failed with "Access is denied" when it met the store's
   log as another opener's SQLite was removing it
   (`openers_of_a_fresh_path_at_once_each_open_it_or_are_refused`, on Windows CI). Windows keeps the

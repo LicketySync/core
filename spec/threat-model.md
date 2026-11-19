@@ -230,8 +230,9 @@ write key or the signing key (`keys.md` §1.2); raise its tier.
 
 **Sealed key.** Can: hold a complete copy, verify ciphertext against the hashes the signed records
 name, serve it, forward it for others, give out sealed keys. Cannot: read contents, names or
-structure; see plaintext chunk hashes; test whether the folder holds a known file (TM-14), short of
-the chunk-length residual of section 5; sign; do anything in 3.3.
+structure; see plaintext chunk hashes; test whether the folder holds a known file (TM-14) beyond
+what its approximate size, its number of chunks and identical 64-byte windows show (section 5,
+`keys.md` §3.2); sign; do anything in 3.3.
 
 ### 3.3 A sealed peer or a relay
 
@@ -250,10 +251,13 @@ stated here in full (section 5 lists it): of every record, its file ID (the keye
 many files there are and how often each changes; the fingerprints of the versions it replaces, so
 where each file's history forked into concurrent versions and joined again; its chunk IDs with their
 padded sizes, so the approximate size of each version, which chunks are identical across files and
-versions, and from that a copy or a rename, and, for a file it already has, a test of whether it is
-in the folder that keyed chunk boundaries make harder but do not rule out (section 5, `keys.md`
-§3.2); that a record with no chunks is a deletion, a directory or an empty file, without telling
-which; the size class of its sealed part, a power of two from 256 bytes, which says only whether its
+versions, and from that a copy or a rename, and, for a file it already has, only the test of
+whether it is in the folder that its approximate size, its number of chunks and identical 64-byte
+windows allow: a window decides alike wherever it recurs, so repeated content cuts predictably and
+a lightly edited copy of a known file can show by its chunk lengths, and every other cut is
+pseudorandom to it (section 5, `keys.md` §3.2); that a record with no chunks is a deletion, a
+directory or an empty file, without telling which; the size class of its sealed part, a power of two
+from 256 bytes, which says only whether its
 path, its chunk count and the number of devices that wrote the file together are small or large;
 which records a cleanup named together, at a deletion or a cleanup; and when each record arrived and
 from which peer, which usually shows which device wrote it. Besides: device IDs and names of the
@@ -342,9 +346,9 @@ structure are inside the encrypted index and a path tag is a keyed hash that it 
 guessed path (TM-33, TM-14); learn from hashes whether a known file is in the folder: plaintext
 chunk hashes are keyed per folder, and the ciphertext hash of a guessed file needs the data key to
 compute, so a sealed peer cannot even name the chunk it would ask about, and its requests for hashes
-it took from the signed records confirm nothing it did not know (TM-14); its lengths are the
-residual above. A relay that holds no key to the folder also cannot open a folder proof or tell
-which folder a connection proves (TM-32).
+it took from the signed records confirm nothing it did not know (TM-14); its chunk lengths allow
+only the test above, by size, number of chunks and repeated windows. A relay that holds no key to
+the folder also cannot open a folder proof or tell which folder a connection proves (TM-32).
 
 ### 3.4 A stolen or lost device
 
@@ -477,7 +481,8 @@ attackers are another user on the same machine, a program on the LAN that resolv
 
 Can: send requests to localhost from a page the user has open; rebind a DNS name to the loopback
 address and have the browser send requests with a foreign Host header; try the socket if its
-permissions allow.
+permissions allow; from another account on the machine, time the chunker's table loads through a
+shared cache and so learn something of the byte values of the files it cuts (section 5).
 
 Cannot: have a request acted on without the token, which only the local user's CLI and web UI hold
 and which is required on every request (TM-21, Dorsey 2018); succeed with a rebound hostname, because
@@ -713,8 +718,11 @@ sees is written in this workspace; every algorithm and crate is the one `suites.
 version range it pins, and nothing not listed is used until a reviewed change adds it. The two
 padding schemes written here are Padmé, for chunks, and the power-of-two padding of sealed metadata,
 both in `keys`, which `suites.md` lists as written here because no approved crate provides them
-(`suites.md`, data encryption). The one generator written here is the simulator's seeded statistical
-one (SplitMix64 in the `sim` crate), which feeds the runtime's randomness trait in simulator runs
+(`suites.md`, data encryption). The one keyed hash written here is the chunker's pair of Toeplitz
+hashes, with the loop that cuts on them, in `keys`, whose output reaches no peer but through
+AES-128, as chunk lengths (`suites.md`, chunk boundaries). The one generator written here is the
+simulator's seeded statistical one (SplitMix64 in the `sim` crate), which feeds the runtime's
+randomness trait in simulator runs
 only, so secrets, nonces and salts in a simulated run come from it; it is not cryptography, `sim` is
 never a dependency of `daemon`, `cli` or `decrypt` (reviewed on every `Cargo.toml` change), and no
 production build contains it, so this rule permits both and says so (`suites.md`, randomness). Stops
@@ -919,16 +927,21 @@ Plaintext chunk hashes use BLAKE3 in keyed mode with a key derived from the fold
 chunk hash is a fingerprint only to read and write holders; sealed peers (not relays) see hashes of
 ciphertext only; a path appears in a record's clear fields only as a path tag, a keyed hash under a
 key derived from the data key, so a sealed peer cannot test whether a guessed path is in the folder
-either (`keys.md` §3.5); chunk boundaries come, from phase 1, from a FastCDC gear table keyed from
-the data key, so that a sealed peer cannot cut a file it has and match its chunk lengths with a
-record's, with the residual that keyed chunking yields to an attacker that knows some of the
-folder's files (`keys.md` §3.2, section 5; phase 0 cuts fixed-size chunks, whose lengths show only a
-file's size); and a "do you have this chunk" query is answered only on a connection where the folder
-is open, which takes a proof of a key to it. Stops confirmation-of-a-file through content hashes and
-deduplication used as an oracle (Tahoe-LAFS known issues; Harnik, Pinkas and Shulman-Peleg 2010;
-Syncthing 1.28.0 regression). Enforced by `keys` (`plain_hash`, `cipher_hash`, the gear table),
-`engine` (never hashes plaintext another way, and chunks with the keyed table) and `protocol`
-(have-queries are folder-scoped). What makes "never another way" hold is cargo-deny: `deny.toml`
+either (`keys.md` §3.5); chunk boundaries come, from phase 1, from a keyed chunker whose cuts are
+pseudorandom to anyone without the data key, provably so even after it has seen the cuts of files
+it knows or chose (a universal hash, then AES-128; ePrint 2025/558), so that a known file's chunk
+lengths show only its approximate size and number of chunks and what identical 64-byte windows
+show: a window decides alike wherever it recurs, so repeated content cuts predictably and a lightly
+edited copy of a known file, whose cut windows stay, is recognisable by its lengths (`keys.md`
+§3.2, section 5; phase 0 cuts fixed-size chunks, whose lengths show only a file's size); and a "do
+you have this chunk" query is answered only on a connection where the folder is open, which takes
+a proof of a key to it. Stops confirmation-of-a-file through content hashes and deduplication used
+as an oracle (Tahoe-LAFS known issues; Harnik, Pinkas and Shulman-Peleg 2010; Syncthing 1.28.0
+regression), and key recovery against keyed chunkers from the cuts of known or chosen files
+(Truong, Merz, Scarlata, Günther and Paterson 2025; Alexeev, Percival and Zhang 2025). Enforced by
+`keys` (`plain_hash`, `cipher_hash`, the chunker and its vectors), `engine` (never hashes plaintext
+another way, and, from phase 1, cuts with the keyed chunker) and `protocol` (have-queries are
+folder-scoped). What makes "never another way" hold is cargo-deny: `deny.toml`
 lets only `licketysync-keys` depend on `blake3` and on `chacha20poly1305`. `protocol` and `index`
 reach hashes only through `keys`, and `protocol` never sees plaintext. In `keys` and `protocol`, a
 Semgrep tripwire in `.semgrep/project.yml` flags every call into and every import of `blake3`
@@ -942,8 +955,9 @@ that sizes fingerprint less; what padding does not hide is listed in section 5 a
 including the CRIME-style length channel that compression before encryption opens when
 attacker-influenced bytes share a chunk with secrets: phase 0 compresses nothing, and a release that
 enables a compression states the channel first. Stops size fingerprinting, where 45% of user files
-have a unique size (PURBs, Nikitin et al. 2019). Enforced by `keys` (`padme` and the chunk layout)
-and `engine` (FastCDC's maximum chunk is at most `MAX_CHUNK_PLAINTEXT`).
+have a unique size (PURBs, Nikitin et al. 2019). Enforced by `keys` (`padme`, the chunk layout, and
+the chunker, whose longest chunk is `MAX_CHUNK_PLAINTEXT`) and `engine` (its chunks are at most
+`MAX_CHUNK_PLAINTEXT`).
 
 **TM-16. Retired 2026-10-22.** Was "Records name their predecessors; equivocation is flagged", with
 per-key device admission. With one shared write key whose holders are all trusted, two records with
@@ -2477,13 +2491,14 @@ of 2026-10-25 ("sealed peers see almost nothing") leaves in the clear (`protocol
   as Padmé shows its chunks', to within about 3 % for chunks from 64 KiB, 6 % from 256 bytes and
   12 % below that (`keys.md` §3.3), which chunks are identical across files and versions (convergent
   encryption, the cost of letting sealed peers verify and deduplicate), and from that a copy, or a
-  rename (a new file ID with the chunks of a file just replaced at another); and, for a file the
-  sealed peer already has a copy of, a test of whether it is in the folder from the sequence of
-  chunk lengths: from phase 1 chunk boundaries come from a gear table keyed from the data key, which
-  stops the plain test, but published attacks recover such keys from the chunk lengths of files an
-  attacker knows or chose (Alexeev, Percival and Zhang 2025; Truong, Merz, Scarlata, Günther and
-  Paterson 2025), after which the test works again in that folder (`keys.md` §3.2); phase 0's
-  fixed-size chunks show only each version's size;
+  rename (a new file ID with the chunks of a file just replaced at another); and, from the
+  sequence of chunk lengths, only what identical 64-byte windows show: from phase 1 the cut on a
+  window is pseudorandom to it, even after it has seen the cuts of files it knows or chose
+  (`keys.md` §3.2), but a window decides alike wherever it recurs, so repeated content (a long run
+  of one byte value) cuts predictably, and a lightly edited copy of a file it already has, whose
+  cut windows stay, is recognisable by its chunk lengths with no chunk identical; otherwise a file
+  it already has is confirmed only as far as its approximate size, its chunk count and identical
+  chunks allow, as with phase 0's fixed-size chunks;
 - that a record with no chunks is a deletion, a tree delete, a directory or an empty file, without
   telling which;
 - the **size class of each sealed part**: it is padded to the least power of two of at least 256
@@ -2548,6 +2563,16 @@ per-minute version resolution is not accurate enough"); which devices wrote the 
 deletion marks, sizes, times and modes. Holders of one tier look alike: nothing in the folder says
 which person holds which key or made which change. A key holder with the chunk-hash key can test
 whether a guessed file is in the folder: keyed hashes stop outsiders, not members.
+
+**To another user of the same machine** (section 3.7). While the chunker cuts a file, its table
+loads are indexed by the file's bytes (`suites.md`, chunk boundaries): a process that shares the
+core's cache can learn by prime and probe, for each stretch of the file it times, which ranges of
+byte values (about their top six bits) the bytes evaluated fall in, enough to tell text from
+compressed data or to find long runs of one value, and more the finer its timing. With compression
+off (the default; only code 0 is written today), nothing else between reading a file and sealing
+its chunks loads from an address the content chooses: BLAKE3, XChaCha20-Poly1305 and AES run in
+constant time. The deflate, zstd and lz4 coders of `keys.md` section 3.2 are table-driven too.
+Malware running as the same user reads the files themselves (section 3.12).
 
 **To a corporate proxy on a locked-down network.** The hostname dialled, timing and volume; the Noise
 handshake runs inside the WebSocket, so a proxy that terminates the outer TLS sees encrypted frames.
@@ -2620,7 +2645,8 @@ Read on 2026-10-14 for the plan's hardening review; the plan's Sources section h
   https://gsd.di.uminho.pt/members/cbm/ps/itc2008.pdf; and Lamport 1978, "Time, Clocks, and the
   Ordering of Events in a Distributed System" (Communications of the ACM 21(7))
 - Keyed content-defined chunking: Xia et al. 2016, "FastCDC: a Fast and Efficient Content-Defined
-  Chunking Approach for Data Deduplication" (USENIX ATC 2016); Alexeev, Percival and Zhang 2025,
+  Chunking Approach for Data Deduplication" (USENIX ATC 2016); Krawczyk 1994, "LFSR-based Hashing
+  and Authentication" (CRYPTO 1994), the Toeplitz hash; Alexeev, Percival and Zhang 2025,
   "Chunking Attacks on File Backup Services using Content-Defined Chunking",
   https://eprint.iacr.org/2025/532, and Truong, Merz, Scarlata, Günther and Paterson 2025, "Breaking
   and Fixing Content-Defined Chunking", https://eprint.iacr.org/2025/558 (both read on 2026-10-25)

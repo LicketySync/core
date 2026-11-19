@@ -145,7 +145,8 @@ fn vector_folder_derivations() {
             "chunk_key": h(dk.chunk_key().expose()),
             "chunk_nonce_key": h(dk.chunk_nonce_key().expose()),
             "chunk_hash_key": h(dk.chunk_hash_key().expose()),
-            "chunk_gear_key": h(dk.chunk_gear_key().expose()),
+            "chunk_table_key": h(dk.chunk_table_key().expose()),
+            "chunk_cut_key": h(dk.chunk_cut_key().expose()),
             "record_key": h(dk.record_key().expose()),
             "path_tag_key": h(dk.path_tag_key().expose()),
             "hint_key": h(dk.access_key().hint_key().expose()),
@@ -585,18 +586,6 @@ fn vector_chunk() {
     let other_keys = other.chunk_keys();
     let elsewhere = seal_chunk(&other_keys, &raw).unwrap();
     assert_ne!(elsewhere.stored, sealed.stored);
-    // The gear table's entries 0, 127 and 255 (keys.md 9 item 6):
-    // be64(BLAKE3_keyed(gk, u8(i))[0..8]), given as 8 bytes of hex.
-    let gear = keys.gear_table();
-    let gk = w.data_key().chunk_gear_key();
-    let gear_entries: Vec<Value> = [0u8, 127, 255]
-        .iter()
-        .map(|&i| {
-            let full = crate::labels::keyed_hash(gk.expose(), &[&[i]]);
-            assert_eq!(gear.get(i).to_be_bytes(), full[..8]);
-            json!({ "i": i, "entry": h(&gear.get(i).to_be_bytes()) })
-        })
-        .collect();
     check(
         "chunk",
         &json!({
@@ -608,13 +597,132 @@ fn vector_chunk() {
             "nonce": h(&sealed.stored[..24]),
             "stored": h(&sealed.stored),
             "cipher_hash": h(&sealed.cipher_hash.0),
-            "gear_table": gear_entries,
             "corrupt": corrupt,
             "under_another_folder": {
                 "write_secret": h(other.secret().expose()),
                 "stored": h(&elsewhere.stored),
                 "cipher_hash": h(&elsewhere.cipher_hash.0),
                 "error_under_this_folder": dbg(&open_chunk(&keys, &elsewhere.stored, &plain).err()),
+            },
+        }),
+    );
+}
+
+/// Section 9 item 6, the chunker (`keys.md` 3.2): every value computed by
+/// the independent reference in `chunker::tests::reference` (BLAKE3, the
+/// digests term by term, AES one block at a time, the rule as written), and
+/// every cut also found by the chunker itself. Windows are named by their
+/// bytes; inputs by how they are made: `SplitMix64` from seed 0 (little-endian
+/// words) and zeros. Table entries and digests are given as hexadecimal
+/// numbers, the block AES encrypts and its ciphertext as bytes.
+#[test]
+fn vector_chunker() {
+    use crate::chunker::tests::reference::{Reference, splitmix};
+    use crate::chunker::{CUT_BITS, MIN_CHUNK_LEN, WINDOW};
+    const MAX: usize = chunk::MAX_CHUNK_PLAINTEXT;
+    let ends_of = crate::chunker::tests::ends;
+    let w = folder_key();
+    let r = Reference::new(w.data_key().expose());
+    let mut chunker = w.chunk_keys().chunker();
+    let tables: Vec<Value> = [0u8, 127, 255]
+        .iter()
+        .map(|&i| json!({ "i": i, "t0": format!("{:016x}", r.table(0, i)), "t1": format!("{:016x}", r.table(1, i)) }))
+        .collect();
+    let window = |name: &str, bytes: &[u8]| {
+        let [d0, d1] = r.digests(bytes);
+        json!({
+            "name": name,
+            "bytes": h(bytes),
+            "d0": format!("{d0:016x}"),
+            "d1": format!("{d1:016x}"),
+            "block": h(&r.block(bytes)),
+            "c": h(&r.cipher(bytes)),
+            "cut": r.decides(bytes, CUT_BITS),
+        })
+    };
+    let counting: Vec<u8> = (0..64).collect();
+    let mut oldest = counting.clone();
+    oldest[0] = 0xff;
+    let data = splitmix(0, 8 << 20);
+    // Each window's decision, computed once and shared by the inputs that
+    // are prefixes of `data`, whose windows are the same.
+    let mut memo: Vec<Option<bool>> = vec![None; data.len()];
+    let mut ends = |n: usize| {
+        Reference::cuts_by(n, MIN_CHUNK_LEN, MAX, |k| {
+            *memo[k].get_or_insert_with(|| r.decides(&data[k + 1 - WINDOW..=k], CUT_BITS))
+        })
+    };
+    let full = ends(data.len());
+    assert!(full.len() >= 3 && full[0] < MAX, "{full:?}");
+    let first_cut = &data[full[0] - WINDOW..full[0]];
+    let mut inputs = Vec::new();
+    for (name, n) in [
+        ("splitmix64 seed 0, 8 MiB", data.len()),
+        ("its first 0 bytes", 0),
+        ("its first byte", 1),
+        ("its first MIN - 1 bytes", MIN_CHUNK_LEN - 1),
+        ("its first MIN bytes", MIN_CHUNK_LEN),
+        ("its first MAX bytes", MAX),
+        ("its first MAX + 1 bytes", MAX + 1),
+    ] {
+        let want = ends(n);
+        assert_eq!(ends_of(&mut chunker, &data[..n]), want, "{name}");
+        inputs.push(json!({ "name": name, "len": n, "ends": want }));
+    }
+    let zeros = vec![0u8; 9 << 20];
+    let zero_cuts = r.decides(&zeros[..WINDOW], CUT_BITS);
+    let want = Reference::cuts_by(zeros.len(), MIN_CHUNK_LEN, MAX, |_| zero_cuts);
+    assert_eq!(ends_of(&mut chunker, &zeros), want, "zeros");
+    inputs.push(json!({ "name": "zeros, 9 MiB", "len": zeros.len(), "ends": want }));
+    // A cut at a chunk's first evaluated position, k = MIN - 1: the window
+    // that cuts, placed to end there.
+    let name = "MIN - 64 zero bytes, the window that ends the first chunk of splitmix64 seed 0, then MIN zero bytes";
+    let mut at_min = vec![0u8; MIN_CHUNK_LEN - WINDOW];
+    at_min.extend_from_slice(first_cut);
+    at_min.resize(2 * MIN_CHUNK_LEN, 0);
+    let want = r.cuts(&at_min, MIN_CHUNK_LEN, MAX, CUT_BITS);
+    assert_eq!(want.first(), Some(&MIN_CHUNK_LEN), "a cut at MIN - 1");
+    assert_eq!(ends_of(&mut chunker, &at_min), want, "{name}");
+    inputs.push(json!({ "name": name, "len": at_min.len(), "ends": want }));
+    let other = other_folder_key();
+    let r2 = Reference::new(other.data_key().expose());
+    let elsewhere = r2.cuts(&data, MIN_CHUNK_LEN, MAX, CUT_BITS);
+    assert_eq!(ends_of(&mut other.chunk_keys().chunker(), &data), elsewhere);
+    assert!(
+        full[..full.len() - 1]
+            .iter()
+            .all(|e| !elsewhere.contains(e)),
+        "another folder's keys cut elsewhere"
+    );
+    // The fuzz target's seeds: three bytes of length, a byte choosing the
+    // pieces and the length's scale (0: the full length), then the pattern
+    // (fuzz/fuzz_targets/chunker.rs).
+    seed("chunker", "zeros-8mib", &[0x80, 0x00, 0x01, 0]);
+    let mut patterned = vec![0x80, 0x00, 0x00, 5];
+    patterned.extend_from_slice(&data[..64]);
+    seed("chunker", "pattern-8mib", &patterned);
+    seed("chunker", "min-counter", &[0x08, 0x00, 0x00, 3, 0x5a]);
+    seed("chunker", "short", &[0x00, 0x10, 0x00, 1, b'a', b'b', b'c']);
+    check(
+        "chunker",
+        &json!({
+            "write_secret": h(w.secret().expose()),
+            "min": MIN_CHUNK_LEN,
+            "max": MAX,
+            "window": WINDOW,
+            "cut_bits": CUT_BITS,
+            "tables": tables,
+            "windows": [
+                window("64 zero bytes", &[0; 64]),
+                window("the bytes 0 to 63", &counting),
+                window("the bytes 0 to 63, the oldest changed to ff", &oldest),
+                window("the window that ends the first chunk of splitmix64 seed 0", first_cut),
+            ],
+            "inputs": inputs,
+            "under_another_folder": {
+                "write_secret": h(other.secret().expose()),
+                "input": "splitmix64 seed 0, 8 MiB",
+                "ends": elsewhere,
             },
         }),
     );
@@ -1284,7 +1392,8 @@ label_vectors! {
     vector_derive_key_data_chunk_key: DATA_CHUNK_KEY;
     vector_derive_key_data_chunk_nonce_key: DATA_CHUNK_NONCE_KEY;
     vector_derive_key_data_chunk_hash_key: DATA_CHUNK_HASH_KEY;
-    vector_derive_key_data_chunk_gear_key: DATA_CHUNK_GEAR_KEY;
+    vector_derive_key_data_chunk_table_key: DATA_CHUNK_TABLE_KEY;
+    vector_derive_key_data_chunk_cut_key: DATA_CHUNK_CUT_KEY;
     vector_derive_key_data_record_key: DATA_RECORD_KEY;
     vector_derive_key_data_path_tag_key: DATA_PATH_TAG_KEY;
     vector_derive_key_handshake_hint_key: HANDSHAKE_HINT_KEY;
@@ -1330,6 +1439,6 @@ fn vector_labels_file() {
         registered, covered,
         "every registered derive_key label has a vector, and only those"
     );
-    assert_eq!(entries.len(), 16);
+    assert_eq!(entries.len(), 17);
     check("labels", &Value::Object(file));
 }

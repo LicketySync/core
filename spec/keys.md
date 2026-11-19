@@ -174,7 +174,8 @@ ws: the write secret, 32 random bytes
       ├── chunk key       ck  = derive_key("licketysync/v1/data/chunk-key", dk)         chunk ciphertext, §3.2
       ├── chunk nonce key nk  = derive_key("licketysync/v1/data/chunk-nonce-key", dk)   convergent chunk nonces, §3.2
       ├── chunk hash key  hk  = derive_key("licketysync/v1/data/chunk-hash-key", dk)    plaintext chunk hashes, §3.2
-      ├── chunk gear key  gk  = derive_key("licketysync/v1/data/chunk-gear-key", dk)    chunk boundaries, §3.2
+      ├── chunk table key ctk = derive_key("licketysync/v1/data/chunk-table-key", dk)   chunk boundaries, §3.2
+      ├── chunk cut key   cck = derive_key("licketysync/v1/data/chunk-cut-key", dk)     chunk boundaries, §3.2
       ├── record key      rk  = derive_key("licketysync/v1/data/record-key", dk)        sealed metadata, §3.4
       └── path-tag key    tk  = derive_key("licketysync/v1/data/path-tag-key", dk)      path tags, §3.5
 ```
@@ -192,7 +193,7 @@ keys is a new folder (§7).
 | --- | --- | --- | --- | --- |
 | Write | 1 | `ws` | Derive every key in §1.2; sign index records and cleanups; verify, decrypt, change and delete anything; give out any tier | — |
 | Read | 2 | `folder_vk`, `dk` | Verify every record; decrypt contents, names and structure; derive `ak` and every key under `dk`; give out read or sealed | Sign: every peer rejects a change it makes, and its own edits are never sent (what the engine shows for them is phase 1's design) |
-| Sealed | 3 | `folder_vk`, `ak` | Verify every record and every chunk against the hashes the signed records name; store, serve and forward ciphertext; give out sealed | Decrypt anything; test by hashes whether the folder holds a known file (TM-14), though its chunk lengths can still show it once the chunker's key is recovered from files the holder knows or chose (§3.2, `threat-model.md` §5); sign |
+| Sealed | 3 | `folder_vk`, `ak` | Verify every record and every chunk against the hashes the signed records name; store, serve and forward ciphertext; give out sealed | Decrypt anything; test by hashes whether the folder holds a known file (TM-14), or by chunk lengths beyond what its size, its number of chunks and identical 64-byte windows show (§3.2: a window decides alike wherever it recurs, so a lightly edited copy of a known file can show; `threat-model.md` §5); sign |
 
 Read and sealed keys both carry `folder_vk`, so every holder verifies every update and computes the
 folder ID. The two halves of a read or sealed key are not bound to each other by the key itself: a
@@ -333,7 +334,8 @@ Encrypted connections: "Second layer"). The data key is the folder's for its who
 | Chunk nonce key | `nk = derive_key("licketysync/v1/data/chunk-nonce-key", dk)` | Keyed BLAKE3 for convergent chunk nonces (§3.2) |
 | Chunk hash key | `hk = derive_key("licketysync/v1/data/chunk-hash-key", dk)` | Keyed BLAKE3 over plaintext chunks (§3.2) |
 | Record key | `rk = derive_key("licketysync/v1/data/record-key", dk)` | XChaCha key for the sealed metadata of index records (§3.4) |
-| Chunk gear key | `gk = derive_key("licketysync/v1/data/chunk-gear-key", dk)` | Keyed BLAKE3 for the chunker's gear table, which places chunk boundaries (§3.2) |
+| Chunk table key | `ctk = derive_key("licketysync/v1/data/chunk-table-key", dk)` | Keyed BLAKE3 for the chunker's two secret tables (§3.2) |
+| Chunk cut key | `cck = derive_key("licketysync/v1/data/chunk-cut-key", dk)` | Its first 16 bytes: the AES-128 key of the chunker's cut decisions (§3.2) |
 | Path-tag key | `tk = derive_key("licketysync/v1/data/path-tag-key", dk)` | Keyed BLAKE3 for path tags, the file IDs (§3.5) |
 
 ### 3.2 Chunk encryption
@@ -342,30 +344,65 @@ The engine splits a file into chunks, and this section fixes where a chunk ends 
 The protocol constant `MAX_CHUNK_PLAINTEXT` is 4 MiB (4 194 304 bytes) of raw content; the engine's
 largest chunk must not exceed it.
 
-**Chunk boundaries.** From phase 1 the engine cuts files with FastCDC (Xia et al. 2016), whose gear
-table, the 256 64-bit values that decide where boundaries fall, is derived from the data key, so
-that only key holders can tell where a file's chunks begin and end:
+**Chunk boundaries.** From phase 1 the engine cuts files with the keyed chunker of Truong, Merz,
+Scarlata, Günther and Paterson (CCS 2025, IACR ePrint 2025/558, Theorem 4.5): whether a chunk ends
+after a byte depends only on the 64 bytes that end at it, through a keyed universal hash and then
+AES-128, so that the cuts are pseudorandom to anyone without the data key, even one that has seen
+the cuts of files it knows or chose (`suites.md`, chunk boundaries):
 
 ```
-gear[i] = be64(BLAKE3_keyed(gk, u8(i))[0..8])     # i = 0 ..= 255; the left-shifted table FastCDC also uses is gear[i] << 1
+P      = x^64 + x^4 + x^3 + x + 1          # irreducible over GF(2); a u64 holds a polynomial of degree < 64, bit k the coefficient of x^k
+e_i    = BLAKE3_keyed(ctk, u8(i))          # i = 0 ..= 255
+T0[i]  = le64(e_i[0..8]);  T1[i] = le64(e_i[8..16])
+W      = b_0 .. b_63                       # the 64 bytes that end at the byte considered, oldest first
+d_t    = XOR over j of x^(63-j) * T_t[b_j] mod P     # t = 0, 1; carry-less products over GF(2)
+c      = AES-128(cck[0..16], le64(d_0) || le64(d_1))       # little-endian, as processors hold the digests
+cut(W) = be32(c[0..4]) < 2^12              # the first 20 bits of c are zero: probability 2^-20
 ```
 
-Every key holder of the folder computes the same table, so identical files cut into identical chunks
-and deduplicate. With FastCDC's published table, a sealed peer could cut a file it already has, pad
-the chunk lengths and compare them with the `stored_len` list of a record, which for a file of
-several chunks confirms that the file is in the folder (TM-14); with the keyed table it cannot
-compute the boundaries. What still shows, keyed or not (`threat-model.md` §5): each version's total
-size, about as closely as Padmé shows its chunks' (about 3 % for chunks from 64 KiB, §3.3), and its
-number of chunks. And keying the gear table is no full defence: Alexeev,
-Percival and Zhang (2025, IACR ePrint 2025/532) and Truong, Merz, Scarlata, Günther and Paterson
-(2025, IACR ePrint 2025/558) recover the keys of such chunkers from the chunk lengths of files the
-attacker knows or chose, after which known files can again be confirmed by their chunk lengths, in
-this folder, whose data key is the folder's for its whole life. The second paper also gives a keyed
-chunker with a security proof; which chunker phase 1 adopts, this one or that, is phase 1's
-question; the keyed gear table is the least it takes (the coordinator's ruling of 2026-10-25, for
-the owner's review). Phase 0's engine cuts fixed-size chunks (1 MiB by default, a recorded
-deviation; FastCDC is phase 1), whose lengths depend only on a file's size, so there a sealed peer
-learns each version's size, to Padmé's precision, and nothing about where content lies.
+A file of `n` bytes is cut from `s = 0`: its next chunk is `data[s ..= k]` for the least `k` with
+`s + MIN - 1 <= k < min(s + MAX, n)` and `cut(data[k-63 ..= k])`, else `data[s .. min(s + MAX, n)]`,
+and the chunk after it starts where it ends. `MIN` is 524 288 (512 KiB) and `MAX` is
+`MAX_CHUNK_PLAINTEXT`, so every window lies inside its chunk and a chunk's first `MIN - 1` bytes are
+never evaluated, about one byte in three of a large file; an empty file has no chunks. Chunks
+average about 1.47 MiB: 512 KiB plus a geometric length of mean 1 MiB, about 3 % of them cut at
+`MAX`. Implementations roll the digests, `d' = d*x XOR (x^64 * T_t[b_out] mod P) XOR T_t[b_in]`, and
+encrypt them in batches; their cuts are the definition's (`keys`'s `chunker` module).
+
+Every key holder of the folder computes the same cuts, so identical files cut into identical chunks
+and deduplicate, and a device that reads a file again finds the chunks its record names. Every
+device therefore runs this one rule. AES-128 runs on the processor's AES instructions where it has
+them (AES-NI and VAES on x86, the ARMv8 cryptography extension) and on the AES crate's constant-time
+bitsliced code where it does not (a Raspberry Pi 4, older x86, the browser build), which gives the
+same cuts more slowly: on one laptop core (`keys`'s `chunker_speed` example) about 510 MB/s of
+file with AES instructions and 26 MB/s without; a Raspberry Pi 4 manages an estimated 4 to
+5 MB/s, so reading a changed 4 GB file there again takes about a quarter of an hour. A device that
+cut fixed-size chunks instead would show a sealed peer no more, but would share no chunk with other
+devices' copies of the same files: every copy and every edit it made or received would travel whole,
+and a file another device wrote, read again there, would not cut into the chunks its record names.
+
+Chunk lengths show a sealed peer, a relay or an observer nothing of where content lies but what
+identical windows show (`threat-model.md` TM-14, §5). By the paper's Theorem 4.5, a party that asks
+for the cuts of `q` windows of its choice tells them from coins of bias 2^-20 (one per window, a
+repeated window repeating its coin) with an advantage (its chance of guessing which it is shown,
+less 1/2) of at most `Adv_PRF(AES-128) + q^2 * ε / (2 * 2^20)`, where `ε` is the hash's collision
+probability. Any universal rolling hash may replace the paper's polynomial one (its §4.3); the two
+tables make two different windows collide with probability `ε = 2^-128`, so the term is
+`q^2 * 2^-149`. The tables and the AES key are BLAKE3 outputs, so BLAKE3's advantage as a PRF adds
+to the bound. By the paper's Theorem 4.3, the lengths of a file's chunks, all but the last, are then
+indistinguishable from `MIN` plus a geometric length of mean 2^20, capped at `MAX`, as long as no
+evaluated window repeats one evaluated before; a known file's chunk lengths then confirm only what
+its total size, about as closely as Padmé shows its chunks' (§3.3), and its number of chunks
+confirm. Identical 64-byte windows always decide alike, so where windows repeat, cuts are
+predictable: in repeated content, such as a long run of one byte value, which is cut at `MAX` (or,
+in one folder in 2^20 for each value, at `MIN`); and at any window whose cut a peer has seen, which
+cuts again wherever it recurs, so that a lightly edited copy of a known file, whose cut windows
+stay, is recognisable by its chunk lengths with no chunk identical. Identical chunks show by
+design. Keyed rolling hashes that cut on the hash itself, FastCDC's gear table among them, are not
+used: each cut is an algebraic equation in their key, and Alexeev, Percival and Zhang (IACR
+ePrint 2025/532) and the paper above recover such keys from the cuts of known files. Phase 0's
+engine cuts fixed-size chunks (1 MiB by default, a recorded deviation; the engine adopts the keyed
+chunker with the disk layer), whose lengths depend only on a file's size.
 
 ```
 raw            : the chunk's bytes (1 ..= MAX_CHUNK_PLAINTEXT)
@@ -436,8 +473,7 @@ Examples the crate's vectors must reproduce: `padme(5) = 5`, `padme(9) = 10`, `p
 
 **Chunk sizes, the size a sealed peer sees.** A chunk's padded size is its `stored_len`, `padme(L) +
 40` where `L` is the chunk's header and payload (§3.2), and it is the one size in a record that a
-sealed peer reads (`protocol.md` §4.4). What the scheme costs and leaves visible, for the sizes
-FastCDC produces:
+sealed peer reads (`protocol.md` §4.4). What the scheme costs and leaves visible:
 
 | Chunk of about | Padded to a multiple of | Distinct padded sizes per doubling | Most bytes added |
 | --- | --- | --- | --- |
@@ -447,7 +483,7 @@ FastCDC produces:
 | 4 MiB | 128 KiB | 32 | 3 % |
 
 So a sealed peer learns each chunk's size to within about 3 % from 64 KiB, about 6 % from 256 bytes
-to 64 KiB (FastCDC's smaller chunks, a small file, or a file's last chunk) and about 12 % below
+to 64 KiB (a small file, or a file's last chunk) and about 12 % below
 that, and the total size of a file version about as closely as its chunks'; the bytes added are at
 most as much, 3 % on average, plus 40 bytes per chunk for the nonce and tag. A coarser scheme
 (powers of two, at up to 100 % and 33 % on average) would hide more and cost more; suite 1 keeps
@@ -914,8 +950,8 @@ implementation exists (BLAKE3, Ed25519, XChaCha20-Poly1305 and BIP39 have offici
 the crate also checks, `suites.md` §4.4).
 
 1. **Folder derivations**: for a fixed 32-byte `ws`: the folder signing seed, `folder_vk`,
-   `folder_id`, `dk`, `ak`, the hint key, the payload key, `ck`, `nk`, `hk`, `gk`, `rk` and `tk`;
-   and, for that `ws`, the read and sealed keys' payloads.
+   `folder_id`, `dk`, `ak`, the hint key, the payload key, `ck`, `nk`, `hk`, `ctk`, `cck`, `rk` and
+   `tk`; and, for that `ws`, the read and sealed keys' payloads.
 2. **Key strings**: the three strings for the fixed `ws` in lower and upper case, and the payloads
    they decode to; rejected variants: mixed case, one flipped character, a prefix other than the
    three, a Bech32 (non-m) checksum, a write payload under `lsr` and a read payload under `lsw`
@@ -944,9 +980,16 @@ the crate also checks, `suites.md` §4.4).
    bytes and `cipher_hash`; one corrupt variant per failure path (bad tag, non-zero padding, payload
    length over L', empty payload, a compression code this release does not implement, a stored
    length that is not a Padmé length, a stored length over the bound, bad plain hash), and the same
-   chunk under another folder's keys (a different `stored`); the gear table for the fixed `ws` (its
-   entries 0, 127 and 255), and, from phase 1, the chunk boundaries the keyed FastCDC finds in a
-   fixed 1 MiB input and in the same input under another folder's keys (different boundaries).
+   chunk under another folder's keys (a different `stored`). The chunker for the fixed `ws`, every
+   value computed by an independent implementation in the test and every cut checked against the
+   chunker: entries 0, 127 and 255 of `T0` and `T1`; `d_0`, `d_1`, the block AES encrypts, `c` and
+   the decision for 64 zero bytes, for the bytes 0 to 63, for those with only the oldest byte
+   changed, and for the window that ends the first chunk below (a cut); and the chunks' end
+   offsets in 8 MiB of SplitMix64
+   output from seed 0 (little-endian words), in its first 0, 1, `MIN - 1`, `MIN`, `MAX` and
+   `MAX + 1` bytes, in 9 MiB of zeros, in `MIN - 64` zero bytes followed by that cutting window and
+   `MIN` zero bytes (a cut at a chunk's first evaluated position, `MIN - 1`), and in the 8 MiB
+   under another folder's keys (no cut in common).
 7. **Padmé**: the six values in §3.3 plus 1 000 random lengths against a reference.
 8. **Index record and cleanup signing and sealing**: a canonical body with two names and a
    `SealedMeta` holding a vector of two entries, its `record_hash` and signature; the `SealedMeta`
@@ -995,7 +1038,9 @@ the `sig/` labels `folder`, `folder-proof`, `grant`, `grant-pop`, `rotation`, `w
 `suspension`, `lift` and `root-rotation`. Removed on 2026-10-25 with the per-writer cursors
 (`protocol.md` §4.5): `hash/writer-digest`. Added then: `data/path-tag-key`, `data/chunk-gear-key`,
 `hash/set-leaf`, `hash/set-node` and `sig/cleanup` (the `hash/path-tag` label of an earlier draft of
-that day went with its chains).
+that day went with its chains). Removed with the gear table, before any release:
+`data/chunk-gear-key`; added with the chunker that replaced it: `data/chunk-table-key` and
+`data/chunk-cut-key`.
 
 | Label | Mode | Material / input | Output |
 | --- | --- | --- | --- |
@@ -1005,7 +1050,8 @@ that day went with its chains).
 | `licketysync/v1/data/chunk-key` | derive_key | data key | `ck` (§3.1) |
 | `licketysync/v1/data/chunk-nonce-key` | derive_key | data key | `nk` (§3.1) |
 | `licketysync/v1/data/chunk-hash-key` | derive_key | data key | `hk` (§3.1) |
-| `licketysync/v1/data/chunk-gear-key` | derive_key | data key | `gk` (§3.1), the keyed-BLAKE3 key of the chunker's gear table (§3.2) |
+| `licketysync/v1/data/chunk-table-key` | derive_key | data key | `ctk` (§3.1), the keyed-BLAKE3 key of the chunker's tables (§3.2) |
+| `licketysync/v1/data/chunk-cut-key` | derive_key | data key | `cck` (§3.1), whose first 16 bytes are the chunker's AES-128 key (§3.2) |
 | `licketysync/v1/data/record-key` | derive_key | data key | `rk` (§3.1) |
 | `licketysync/v1/data/path-tag-key` | derive_key | data key | `tk` (§3.1), the keyed-BLAKE3 key of path tags, the file IDs (§3.5) |
 | `licketysync/v1/handshake/hint-key` | derive_key | access key | keyed-BLAKE3 key of the folder hint (§4) |

@@ -117,7 +117,7 @@ deny = [
   # WebTransport listener (feature `webtransport`, proposed; for review): aes, ctr and
   # aes-gcm beneath snow's RustCrypto resolver, compiled on wasm32 only and
   # never selected by libp2p-noise (Noise_XX_25519_ChaChaPoly_SHA256 only).
-  { crate = "cipher", wrappers = ["chacha20", "chacha20poly1305", "aes", "aes-gcm", "ctr"], reason = "reached only through chacha20poly1305; snow's unused AES-GCM (webtransport feature)" },
+  { crate = "cipher", wrappers = ["chacha20", "chacha20poly1305", "aes", "aes-gcm", "ctr"], reason = "reached only through chacha20poly1305 and the chunker's aes; snow's unused AES-GCM (webtransport feature)" },
   { crate = "aead", wrappers = ["chacha20poly1305", "aes-gcm"], reason = "reached only through chacha20poly1305; snow's unused AES-GCM (webtransport feature)" },
   { crate = "bitcoin_hashes", wrappers = ["bip39"], reason = "the words' checksum SHA-256, inside bip39 only" },
   # proptest's random-input generators, a dev-dependency only. suites.md
@@ -184,7 +184,8 @@ deny = [
   { crate = "snow", wrappers = ["libp2p-noise"], reason = "the Noise framework beneath libp2p-noise only" },
   { crate = "x25519-dalek", wrappers = ["libp2p-noise"], reason = "Noise's Diffie-Hellman inside libp2p-noise only" },
   { crate = "aes-gcm", wrappers = ["snow"], reason = "snow's unselected AES-GCM, on wasm32 only" },
-  { crate = "aes", wrappers = ["aes-gcm"], reason = "beneath snow's unselected AES-GCM only" },
+  # AES-128 as the chunker's PRF, in licketysync-keys only (suites.md 2.7 and 3.1).
+  { crate = "aes", wrappers = ["licketysync-keys", "aes-gcm"], reason = "the chunker's AES-128 in licketysync-keys only; beneath snow's unselected AES-GCM (webtransport feature)" },
   { crate = "ctr", wrappers = ["aes-gcm"], reason = "beneath snow's unselected AES-GCM only" },
   { crate = "ghash", wrappers = ["aes-gcm"], reason = "beneath snow's unselected AES-GCM only" },
   { crate = "polyval", wrappers = ["ghash"], reason = "beneath snow's unselected AES-GCM only" },
