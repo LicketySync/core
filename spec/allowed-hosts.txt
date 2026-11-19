@@ -9,11 +9,13 @@
 # https://licketysync.app/join# and checks the rest of the string, so a URL that
 # begins with it passes, and the reviewers confirm that the binaries, which parse
 # and write join links, never request it. Any other host on those domains is
-# listed here like any other. Loopback, unspecified and the
-# documentation address ranges are exempt; anything else, including the multicast
-# and broadcast addresses LAN discovery will use, is listed here with a note on
-# when it is used. The check catches accidents, not
+# listed here like any other. Loopback, unspecified and the documentation address
+# ranges are exempt; any other address code names is listed here with a note on
+# when it is used (LAN discovery's mDNS group, 224.0.0.251, comes with the mDNS
+# carrier). An address computed at run time, such as an interface's directed
+# broadcast address, is in no string, and IPv6 addresses, ff02::fb among them, are
+# not checked: threat-model.md TM-31 notes them. The check catches accidents, not
 # adversaries: lowercase names under six top-level domains, in one-line string
 # literals in .rs files; the reviewers cover the rest.
 #
-# Phase 0: the binaries contact nothing, so this list is empty.
+# The binaries contact nothing yet, so this list is empty.

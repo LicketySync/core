@@ -90,7 +90,7 @@ design and are listed as leaks in section 5 rather than promised away.
 | Local key store | The device seed and one key per folder the device holds | That device | Confidentiality: its theft is the theft of every key in it (section 3.4) |
 | Catalogue (phase 5) | Which folders a person's linked devices hold, and at which tiers | Those linked devices | Confidentiality against everyone else |
 | Local API token | Authenticates the CLI and web UI to the service | The local user | Confidentiality against other local users and web pages |
-| Metadata that leaks | Padded sizes, chunk counts, record counts and rates, timing, the salted folder and announcer hashes on the LAN with each beacon's port, number of folders and minute, the daily discovery hash, the lookups for it and the stable identifiers a device publishes with it on the DHT, that two addresses talk, device IDs and names, and to whoever completes a connection the libp2p peer ID, the protocols it offers in multistream-select, the device key, the suite, compression, hash and feature lists and limits, and a coarse count of the folders it holds (proof-result timing) | Sealed peers, relays, network observers, as section 5 states | Not protected; documented |
+| Metadata that leaks | Padded sizes, chunk counts, record counts and rates, timing, the salted folder and announcer hashes on the LAN with each beacon's ports and the bucket of its number of folders, the daily discovery hash, the lookups for it and the stable identifiers a device publishes with it on the DHT, that two addresses talk, device IDs and names, and to whoever completes a connection the libp2p peer ID, the protocols it offers in multistream-select, the device key, the suite, compression, hash and feature lists and limits, and a coarse count of the folders it holds (proof-result timing) | Sealed peers, relays, network observers, as section 5 states | Not protected; documented |
 
 ## 2. Parties and trust boundaries
 
@@ -107,7 +107,7 @@ holder of one key is trusted alike.
 | Linked devices (phase 5) | A person's devices, passing folder keys to each other over an authenticated channel | As holders of the keys they receive | Same |
 | Relays (public only: the owner's decision of 2026-11-03) | Both endpoints' addresses and libp2p peer IDs, timing, volume and the sizes of the encrypted frames it forwards; no folder ID, since a reservation and a circuit name peers, never a folder | Nothing; forwards end-to-end ciphertext only, within the limits its person set (TM-25) | Any computer whose person turned relaying on, theirs or a stranger's, never a phone; no relay is used, and none is served, unless turned on: using per folder, serving per device (the guided setup's recommended set turns using on, never serving). There are no own-device, private or protected relays, since a device cannot tell its person's machines from a friend's when both share the same folders |
 | Hole-punch coordinators (the owner's decisions of 2026-11-08 and 2026-11-13) | That two devices are connecting, when, their public addresses and libp2p peer IDs, which devices keep reservations with it, and at most 64 KiB of their encrypted set-up a circuit; no folder, key or file | Nothing; forwards only a punch's set-up, never file data, since neither side runs the sync protocol through it, within its limits (TM-25) | Any computer whose person turned coordinating on, theirs or a stranger's, for anyone or only for the devices of its own folders (the guided setup's recommended set: the owner's decision of 2026-11-13, "Both (Recommended)"; and only for two devices that have the same one of its folders open with it: "Narrow (Recommended)"), and any public relay (the owner's decision of 2026-11-13, "Yes, relays help too (Recommended)"); never a phone (the owner's decision of 2026-11-10, "Computers only"); needing no key to any folder; used only as each folder's settings allow, and reaching a device only for a requester that device knows from a shared folder or that proves a key to one of its folders (TM-25) |
-| The LAN | Beacons (salted folder hashes, salted announcer hash, port, minute), multicast, every unencrypted byte | Nothing: a café network is the model | The network interface |
+| The LAN | Beacons (salted folder hashes padded to a bucket, salted announcer hash, ports), multicast, every unencrypted byte | Nothing: a café network is the model | The network interface |
 | The internet | Addresses, timing, volume, QUIC and TLS handshakes | Nothing | Same |
 | The Mainline DHT | Daily discovery hashes with the addresses announcing them; signed address records (BEP 44) under a stable per-device key | Nothing; off until its person turns it on (the guided setup's recommended set turns it on, in client mode), and seeing a peer grants no access | UDP to strangers; client mode unless its person turns server mode on, which the recommended set never does |
 | The browser client's static host (licketysync.app) | Serves the WebAssembly bundle; never sees invite fragments, keys or content | To serve the published bundle; a compromise serves a changed client, which a signed manifest lets the native app or a verifying extension detect | HTTPS; the service worker cache only delays what the host serves |
@@ -127,49 +127,62 @@ Someone who sees packets on the LAN, at an internet exchange, at a proxy on a lo
 or by crawling the DHT. They have no key.
 
 Can: see which addresses talk, when, and how much, and the sizes and number of encrypted frames,
-which approximate padded chunk sizes and counts; see that a device runs LicketySync and its port;
-see the LAN beacons, each carrying, under a salt fresh to that beacon, one hash per announced folder
-and one hash of the announcer's libp2p identity key, and confirm a folder is announced on this LAN
-if they already know its ID, or that a device they have met before is announcing if they already
-know its identity key; replay a captured beacon from their own address and learn, from the dial that
-follows, which devices on the LAN hold the folder it named, without knowing that folder's ID, and
-learn each such holder's libp2p identity, because the handshake authenticates it before the dialer
-checks the peer tag and abandons the connection (the dial is the signal; `keys.md`, discovery
-hashes); see the DHT's daily discovery hash and the addresses announcing it, and follow a device
-across days by its address when that address is stable, by a stable identifier it publishes with
-the announcement (the BEP 44 key its address record is signed with, a persisted DHT node ID), or by
-computing every day's hash when they already hold the folder ID; block UDP and raw TCP so that a
-dialer falls back to the WebSocket path, which is classical end to end as `libp2p-websocket` ships
-it (its outer TLS is rustls on `ring`, and the Noise inside is classical; `suites.md`, transport),
-so that a session forced there is open to a future quantum computer up to what a sealed peer sees
-(section 5, the quantum entry); record traffic for a future quantum computer; drop, delay, reorder
-or inject packets; reach the home router's port-mapping service from the LAN, which maps only this
-device's one port for a bounded lease (TM-26); **move a write holder's clock** through time sync
-that is not authenticated (NTP or SNTP, a time server a DHCP server names, or a fake cell tower's
-NITZ), so that the device signs a genuine watermark early, and, a year or more ahead, one at the
-greatest counter it holds, which makes every device forget every deletion in the folder at once and
-undoes the deletions still on their way, bringing deleted files back wherever a copy survives and
-losing none (the owner's decision of 2026-11-12, "Still accept, documented": no guard; TM-40,
-`protocol.md` §4.4, "A wrong clock, or a faked one"); and **delay forgetting** by cutting a write
-holder off and later letting through, together, the deletions it missed, so that it holds them
-young and signs nothing past them for a year, again each time, which costs storage and never a
-file, and matters only where no other write holder signs (the owner's decision of 2026-11-12 on a
-slow release, "Accept, documented"; `protocol.md` §4.4, "What holds forgetting back").
+which approximate padded chunk sizes and counts; see that a device runs LicketySync and its ports;
+see the LAN beacons, each carrying, under a salt fresh to that beacon and interface, one hash per
+announced folder, padded with random fillers to 4, 8, 16, 32 or 64, and one hash of the announcer's
+libp2p identity key, and tell that a device they have met before is announcing if they already know
+its identity key; **with a folder ID**, tell which address announces the folder, which device too
+with a known identity key, and the announcer's clock to the minute, and forge a beacon that names
+the folder, from any on-link source and with any ports, which makes every device that holds the
+folder with LAN discovery on dial that source and send its certificate and, past the tag check, its
+Hello and FolderProofs; replay a captured beacon to listeners that did not hear the original (on
+another network, at a listener that missed it, after a flood of their own kept it from being
+handled, or after forged beacons from the announcer's address kept its bucket empty), for up to 11
+minutes after its making (about 6 where the clocks agree), so that every listener on the segment
+that holds a folder it named dials a target the replayer picks, a forged on-link source or, without
+forging one, the addresses an mDNS response from a link-local source lists, at ports it picks too
+while `lan_id` does not cover them, each dial sending several KB on QUIC and, on TCP to a target
+that does not speak multistream-select, only its plaintext header and `/tls/1.0.0`, within the dial
+caps (`protocol.md` §3.7); learn from those dials that each dialer holds a folder the beacon named,
+without knowing which (the dial is the signal; `keys.md`, discovery hashes); connect to the port a
+device listens on, which its beacons advertise and a port scan finds, and learn its stable libp2p
+peer ID and device key (section 5); see the DHT's daily discovery hash and the addresses announcing
+it, and follow a device across days by its address when that address is stable, by a stable
+identifier it publishes with the announcement (the BEP 44 key its address record is signed with, a
+persisted DHT node ID), or by computing every day's hash when they already hold the folder ID; block
+UDP and raw TCP so that a dialer falls back to the WebSocket path, which is classical end to end as
+`libp2p-websocket` ships it (its outer TLS is rustls on `ring`, and the Noise inside is classical;
+`suites.md`, transport), so that a session forced there is open to a future quantum computer up to
+what a sealed peer sees (section 5, the quantum entry); record traffic for a future quantum
+computer; drop, delay, reorder or inject packets; reach the home router's port-mapping service from
+the LAN, which maps only this device's one port for a bounded lease (TM-26); **move a write holder's
+clock** through time sync that is not authenticated (NTP or SNTP, a time server a DHCP server names,
+or a fake cell tower's NITZ), so that the device signs a genuine watermark early, and, a year or
+more ahead, one at the greatest counter it holds, which makes every device forget every deletion in
+the folder at once and undoes the deletions still on their way, bringing deleted files back wherever
+a copy survives and losing none (the owner's decision of 2026-11-12, "Still accept, documented": no
+guard; TM-40, `protocol.md` §4.4, "A wrong clock, or a faked one"); and **delay forgetting** by
+cutting a write holder off and later letting through, together, the deletions it missed, so that it
+holds them young and signs nothing past them for a year, again each time, which costs storage and
+never a file, and matters only where no other write holder signs (the owner's decision of 2026-11-12
+on a slow release, "Accept, documented"; `protocol.md` §4.4, "What holds forgetting back").
 
 Cannot: read contents, names, index records, keys or key material; learn the folder ID, a device's
 identity key or any key from the hashes, or link two beacons to one folder or to one device by their
-hashes without the ID or the key (the port, the number of announced folders and the minute, which
-every beacon carries in the clear, and the source address can link them, section 5); join a folder,
-open a folder proof, or learn whether a device holds a folder, by knowing its ID (TM-32); downgrade
-the transport to plaintext (TM-1), or from TLS to Noise on one transport, because each transport
-offers exactly one security protocol (`suites.md`, transport): blocking can force the choice of
-transport, never of the protocol within one, and the WebSocket path it can force a dialer onto is
-still encrypted and authenticated (TM-1); downgrade the suite (TM-30); open recorded traffic later
-with a quantum computer beyond what a sealed peer sees, because content is encrypted under the
-folder's symmetric keys before it leaves the device and no folder key ever travels inside the
-protocol (TM-33, section 5); link one day's DHT announcements to the next without the folder ID, a
-stable address or a stable published identifier (TM-24); impersonate a peer, because peers
-authenticate by key, not address (TM-32).
+hashes without the ID or the key (the source address links the beacons of one interface, and ports
+other than the default link a device's, section 5); read a device's clock from its beacons without a
+folder ID they name; make a listener dial a host off its link or more often than its caps allow, or
+sync with any device but the one whose identity the beacon's peer tag names (`protocol.md` §3.7;
+TM-22, TM-31); join a folder, open a folder proof, or learn by connecting whether a device holds a
+folder, by knowing its ID (TM-32); downgrade the transport to plaintext (TM-1), or from TLS to Noise
+on one transport, because each transport offers exactly one security protocol (`suites.md`,
+transport): blocking can force the choice of transport, never of the protocol within one, and the
+WebSocket path it can force a dialer onto is still encrypted and authenticated (TM-1); downgrade the
+suite (TM-30); open recorded traffic later with a quantum computer beyond what a sealed peer sees,
+because content is encrypted under the folder's symmetric keys before it leaves the device and no
+folder key ever travels inside the protocol (TM-33, section 5); link one day's DHT announcements to
+the next without the folder ID, a stable address or a stable published identifier (TM-24);
+impersonate a peer, because peers authenticate by key, not address (TM-32).
 
 What a network observer who answers at an address can also learn (recorded 2026-11-03): **a
 dialer's libp2p identity**. `net` dials with the peer ID it expects, but `libp2p-tls` builds its
@@ -177,9 +190,13 @@ client configuration without one, so the dialer's TLS client certificate, which 
 identity, goes to whichever server answers at the address, and only after the handshake does the
 dialer compare the identity the server proved with the one it expected and close (`WrongPeerId`).
 Whoever can answer at an address a device dials (a spoofed LAN beacon's address, a poisoned DHT
-record) therefore learns the dialing device's stable identity, though not that it holds any folder.
-A phase 1 item: a dial path that gives the expected peer ID to `libp2p-tls`'s certificate verifier,
-so that the handshake fails before the dialer's certificate is sent.
+record) therefore learns the dialing device's stable identity, and, for a LAN discovery dial, that
+it holds a folder the beacon named.
+A phase 1 item: a dial path whose certificate verifier checks the server's identity, against the
+peer ID the dialer expects or, for a LAN discovery dial, which names none, against the beacon's peer
+tag (`protocol.md` §3.7), and fails the handshake before the dialer's certificate is sent, which
+TLS 1.3 sends only once it has verified the server's; `libp2p-tls` takes only an expected peer ID
+and keeps its verifier private, so `net` writes its own.
 
 ### 3.2 A peer holding a valid key
 
@@ -534,8 +551,11 @@ without bound, because every table is bounded, none grows with the number of wri
 and each dies with its connection or, if it outlives one, holds a fixed number of entries (TM-22,
 go-libp2p and rust-libp2p 2022); make the device verify anything for a folder proof without holding
 a key to the folder (TM-22); make it verify a record's signature except to store a record it lacked,
-drop records it replaces, note a stale copy it will name, or close the connection (TM-22); hold
-unlimited relay circuits or reservations, reserve a relay or a coordinator, or ask a coordinator for
+drop records it replaces, note a stale copy it will name, or close the connection (TM-22); make its
+LAN discovery listener hash more than its budget, hold more than its fixed tables or dial more than
+its caps (TM-22), though a flood of beacons from many forged sources drops honest ones while it
+lasts; hold unlimited relay circuits or reservations, reserve a relay or a coordinator, or ask a
+coordinator for
 a punch, through a relayed connection, make a hole-punch coordinator carry more than a punch's
 set-up or more punches than its limits allow, aim a punch at more than a few public addresses or at
 any private one, or have a device take a punch without being a peer of one of its folders whose
@@ -1001,11 +1021,25 @@ one prefix, and the tables that outlive a connection are of a fixed size: per-pe
 peer ID, one entry per state, by which hole punching tells a peer of a shared folder (TM-25); at a
 public relay or a hole-punch coordinator, its per-requester counters, in tables of a fixed number of
 peer IDs and source addresses, sized above its caps in all, whose entries with a live circuit or
-reservation are never evicted (TM-25); and a device's own punch counters, per coordinator in a table
-of a fixed size and in all (TM-25); libp2p's connection, stream and transient connection limits are
-set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is residual (a) below); QUIC's
-three-to-one anti-amplification limit stays at its default; and the advisory feed in CI
-(cargo-audit, daily) catches the next such advisory in a dependency. Eight residuals of the
+reservation are never evicted (TM-25); a device's own punch counters, per coordinator in a table
+of a fixed size and in all (TM-25); and LAN discovery's listener (`protocol.md` §3.7), whose tables
+hold token buckets for 512 source addresses, at most 21 184 beacons it has handled, each kept 11
+minutes with its salt and at most four addresses, 16 dial candidates of at most 4 beacons each and
+backoffs for 256 addresses, about 2 MiB of entries in all. Before its buckets it spends on each
+datagram, at whatever rate datagrams arrive, as the kernel's own receive path does, a decode linear
+in its at most 9 000 bytes, with at most 64 records and 256 compression pointers, and a lookup per
+beacon. After them it handles at most 32 beacons a second, after a burst of 64, each costing at most
+`C + 1` peer tags and `11 × F` folder hashes for `C` peers connected and `F` folders with LAN
+discovery on, about 0.2 µs a hash on a desktop (an estimate the flood test checks; more on slow
+hardware), so under 1 % of one core at 100 folders and about 7 % at 1 000 however fast
+beacons come; and it starts at most 4 discovery dials at once and 16 a minute, only to on-link
+addresses. Stated residuals: a flood of beacons from many forged sources spends that budget, so
+honest beacons are dropped while it lasts, a denial of LAN discovery, which an attacker on the LAN
+has by other means; and the same budget drops honest beacons on a LAN of more than about 900
+announcing devices. libp2p's connection, stream and transient connection
+limits are set, and tested under a flood on TCP (`net`'s TCP flood test; QUIC's is residual (a)
+below); QUIC's three-to-one anti-amplification limit stays at its default; and the advisory feed in
+CI (cargo-audit, daily) catches the next such advisory in a dependency. Eight residuals of the
 transport as phase 0 builds it (`net` on
 `libp2p-quic` 0.14, `libp2p-yamux` 0.48 and `libp2p-memory-connection-limits` 0.6), each required
 before 1.0: (a) to (c), from the security review of 2026-11-03, each a phase 1 item ("I want safety
@@ -1832,22 +1866,29 @@ of a folder, off until its person turns it on: in the guided setup, whose recomm
 on (the owner's decision of 2026-11-13, "Yes, this feature should default to on (see the previous
 question) and advanced users can turn it off before the folder even starts to sync."; TM-25), or in
 the settings. UPnP, NAT-PMP and PCP requests name only this device's single listening port and a
-lease of bounded length, and the mapping is deleted on shutdown and when the setting is turned off.
-The client talks only to the default gateway that the system reports for the network it is on, by
-NAT-PMP or PCP at that address's port 5351, taking replies only from that address, and to SSDP's
-multicast address (239.255.255.250 port 1900, or ff02::c on IPv6) to find the gateway's UPnP
-service; it accepts a LOCATION or control URL only when the URL gives the gateway's own address
-itself, refusing, and never looking up, one that names a host (TM-31), bounds every reply
-before it allocates for it (TM-2, TM-22), and parses the UPnP descriptions' XML with no DTD and no
-external entities; each of these parsers is fuzzed (TM-3). With the setting on, the device asks the
-router of every network it joins, a café's or an office's among them, and that router, and anyone
-on that network who watches SSDP, sees it ask. While the port is mapped, anyone on the internet can
-reach it and learn what any connection to the device shows before a folder opens (section 5, "To a
-network observer"): that it runs LicketySync, its libp2p peer ID, its device ID, the protocols it
-offers, its Hello and, from how long a refused folder proof takes, a coarse count of its folders;
-never a folder or a file without a key. Stops mappings injected or abused on home routers
-(UPnProxy 2022; CallStranger 2020), a router's answers steering the device to another host or
-exhausting it, and a port opened without its person's consent. Enforced by `net`, from phase 2.
+lease of bounded length, and ask for an external port drawn at random for each network and kept
+through the lease's renewals, never `SYNC_PORT`, as the three protocols let the client ask; a
+gateway that maps only the same port number gets IGDv2's AddAnyPortMapping, which lets it choose, or
+no mapping, phase 2's choice; and a mapping whose external port a gateway sets to `SYNC_PORT` anyway
+is deleted and not used. So a mapping never shows the internet the fixed default port (`keys.md`
+§2.2); but a device with a public IPv4 address of its own, or reachable over IPv6 through an open
+firewall or a pinhole, listens on `SYNC_PORT` in plain view, where a scan of that one port finds it
+and a connection its stable peer ID (section 5). The mapping is deleted on shutdown and when the
+setting is turned off. The client talks only to the default gateway that the system reports for the
+network it is on, by NAT-PMP or PCP at that address's port 5351, taking replies only from that
+address, and to SSDP's multicast address (239.255.255.250 port 1900, or ff02::c on IPv6) to find the
+gateway's UPnP service; it accepts a LOCATION or control URL only when the URL gives the gateway's
+own address itself, refusing, and never looking up, one that names a host (TM-31), bounds every
+reply before it allocates for it (TM-2, TM-22), and parses the UPnP descriptions' XML with no DTD
+and no external entities; each of these parsers is fuzzed (TM-3). With the setting on, the device
+asks the router of every network it joins, a café's or an office's among them, and that router, and
+anyone on that network who watches SSDP, sees it ask. While the port is mapped, anyone on the
+internet can reach it and learn what any connection to the device shows before a folder opens
+(section 5, "To a network observer"): that it runs LicketySync, its libp2p peer ID, its device ID,
+the protocols it offers, its Hello and, from how long a refused folder proof takes, a coarse count
+of its folders; never a folder or a file without a key. Stops mappings injected or abused on home
+routers (UPnProxy 2022; CallStranger 2020), a router's answers steering the device to another host
+or exhausting it, and a port opened without its person's consent. Enforced by `net`, from phase 2.
 
 **TM-27. The Tauri shell uses the isolation pattern, a content security policy and per-window
 capabilities with the smallest command set.** Frontend code reaches the native core only through
@@ -1891,30 +1932,39 @@ turns it on. Every connectivity setting starts unconfirmed, which acts as off, a
 one on by answering yes to the guided setup's recommended set, by confirming the settings screen
 with it at default or on, or by setting it on, and a setting a later release adds by answering the
 app's question about it (the owner's decisions of 2026-11-13, TM-25): so LAN discovery's multicast
-and broadcast addresses, which count as hosts and which the list will carry once phase 1 adds LAN
-discovery, are contacted only while it is on, and before that answer the device contacts nothing.
-Port mapping (TM-26) contacts the default gateway, whose address the system reports and no string
-holds, and SSDP's multicast address, 239.255.255.250, which the list will carry once phase 2 adds
-port mapping, and on IPv6 ff02::c, noted here rather than listed, since the list holds only
-hostnames and IPv4 addresses; the DHT's first nodes to ask join the list with the DHT, in phase 2.
-`ci/no-hostnames.sh` checks hostnames and IPv4 addresses in one-line string literals in the `.rs`
-files under `crates/` against the list; it catches accidents, not adversaries, and states its limits
-(names under six top-level domains only; not IPv6, not hosts assembled from pieces, not `Cargo.toml`
-or included data files), which the reviewers cover. Of the project's own domains it exempts only the
-join-link prefix: it removes the exact text `https://licketysync.app/join#` and checks the rest of
-the string, so a URL that begins with it passes, and the reviewers confirm that the binary, which
-parses and writes join links, never requests it. Any other URL on those domains needs its line in
-the list like any other host. Stops telemetry, update checks and any contact the user did not
-choose. Enforced by `gate.sh` and CI, and the settings' starting values by `daemon` and `cli` from
-phase 1, and by `app`. Residuals on Android, where the app shows its page in the Android System
-WebView: each time the WebView starts it asks Google Play services' font provider for its fonts
-("Google Sans" at weights 400, 500 and 700, "Google Sans Flex", "Noto Color Emoji Compat"); Google
-Play services downloads any it lacks from fonts.gstatic.com (about 3 MB on a fresh device) and
-counts the bytes against the app; the page's own fonts are not the trigger. Also the WebView's
-variations seed, which the WebView's own package fetches and the app reads; Google Play services'
-binds that the system and the WebView make for the app; and the WebView's remote debugging in debug
-builds, which `adb` reaches over USB or the emulator's bridge. The app turns off what it can (the
-WebView's Safe Browsing lookups and metrics, emoji2's font request) and adds no host itself.
+and broadcast addresses, which count as hosts, are contacted only while it is on, and before that
+answer the device contacts nothing. LAN discovery (`protocol.md` §3.7) contacts the mDNS group
+224.0.0.251 on port 5353, which the list carries from the change that adds the mDNS carrier, and
+ff02::fb on IPv6, noted here rather than listed; each interface's directed IPv4 broadcast address on
+`BEACON_PORT` (23831), computed from the interface's address and prefix so that no string holds it,
+never the limited broadcast 255.255.255.255; and, by its dials, only on-link addresses: a beacon's
+source or, where that is link-local, on-link addresses its mDNS response named, each only when the
+system's route to it, looked up at the moment of the dial with the dial socket's own selectors
+(source address and, where the platform has them, mark or user) so that policy routing counts, is
+the beacon interface's own prefix with no gateway; phase 1's transports cannot bind one dial to one
+interface, which comes with `net`'s own QUIC transport and TCP dial. Port mapping (TM-26) contacts
+the default gateway, whose address the system reports and no string holds, and SSDP's multicast
+address, 239.255.255.250, which the list will carry once phase 2 adds port mapping, and on IPv6
+ff02::c, noted here rather than listed, since the list holds only hostnames and IPv4 addresses; the
+DHT's first nodes to ask join the list with the DHT, in phase 2. `ci/no-hostnames.sh` checks
+hostnames and IPv4 addresses in one-line string literals in the `.rs` files under `crates/` against
+the list; it catches accidents, not adversaries, and states its limits (names under six top-level
+domains only; not IPv6, not hosts assembled from pieces, not `Cargo.toml` or included data files),
+which the reviewers cover. Of the project's own domains it exempts only the join-link prefix: it
+removes the exact text `https://licketysync.app/join#` and checks the rest of the string, so a URL
+that begins with it passes, and the reviewers confirm that the binary, which parses and writes join
+links, never requests it. Any other URL on those domains needs its line in the list like any other
+host. Stops telemetry, update checks and any contact the user did not choose. Enforced by `gate.sh`
+and CI, and the settings' starting values by `daemon` and `cli` from phase 1, and by `app`.
+Residuals on Android, where the app shows its page in the Android System WebView: each time the
+WebView starts it asks Google Play services' font provider for its fonts ("Google Sans" at weights
+400, 500 and 700, "Google Sans Flex", "Noto Color Emoji Compat"); Google Play services downloads any
+it lacks from fonts.gstatic.com (about 3 MB on a fresh device) and counts the bytes against the app;
+the page's own fonts are not the trigger. Also the WebView's variations seed, which the WebView's
+own package fetches and the app reads; Google Play services' binds that the system and the WebView
+make for the app; and the WebView's remote debugging in debug builds, which `adb` reaches over USB
+or the emulator's bridge. The app turns off what it can (the WebView's Safe Browsing lookups and
+metrics, emoji2's font request) and adds no host itself.
 
 **TM-32. Each side proves it holds a key to the folder without sending it.** The handshake's folder
 proof is one proof for every tier (ruling S-1): a payload sealed under a key derived from the
@@ -1927,10 +1977,11 @@ most once per `WATERMARK_INTERVAL` (a day) toward one that reports the sealed ti
 coordinator's rulings of 2026-11-12, for the owner's review; `protocol.md` §3.5, §4.5 "Round
 owed"), since records and chunks are verified by signature and hash whoever sends them: a false
 report gains a peer nothing it could not have by withholding records or by opening the folder
-again on a new connection. Knowing a folder ID from a LAN beacon or the DHT is not enough to
-connect, to open a proof or to learn whether a device holds the folder; and a device ID is the hash
-of the device's public key, canonically encoded, which it proves in the same handshake. Stops
-impersonation, uninvited connection and probing for folders. Enforced by `protocol` and `keys`,
+again on a new connection. Knowing a folder ID is not enough to open a proof or to learn, by
+connecting, whether a device holds the folder, though its LAN beacons and DHT announcements show
+that to whoever knows the ID (section 5); and a device ID is the hash of the device's public key,
+canonically encoded, which it proves in the same handshake. Stops impersonation, uninvited
+connection and probing for folders by connecting. Enforced by `protocol` and `keys`,
 and `engine` for the rounds the reported tier decides.
 
 **TM-33. Content is encrypted under symmetric keys before it leaves a device, and the public-key part
@@ -2092,11 +2143,12 @@ write holder checks alike and with no clock (the owner's decision of 2026-11-12,
 it cannot stop a write holder that signs a counter just below it from exhausting the folder's
 counters, a dishonest writer's stated residual (section 3.6). Sealed peers read no counter and no
 watermark, and forget deletions only by a write holder's cleanup. The one door-keeping decision that
-reads the clock is the LAN beacon window, which drops beacons whose minute is far from the
-listener's; no key expires. Everything else the local clock serves is advisory: lease lengths, the
-daily discovery hash (looked up for the neighbouring days too), protocol timeouts, per-peer state's
-age, the window that bounds the names a write holder issues for one peer, and the informational
-`written_at` field, which is what a key holder's views show as a version's write time, never its
+reads the clock is the LAN beacon window: a listener matches a beacon's folder hashes only for the
+minutes within 5 of its own; no key expires. Everything else the local clock serves is advisory:
+lease lengths, the daily discovery hash (looked up for the neighbouring days too), protocol
+timeouts, per-peer state's age, the window that bounds the names a write holder issues for one peer,
+and the informational `written_at` field, which is what a key holder's views show as a version's
+write time, never its
 counter. Stops a clock from ordering versions, from deciding whether two conflict and from having a
 peer or a record refused, and stops the clock of a device without the write key from moving what
 any device forgets; a write holder's clock wrong by the same amount all year counts the year right.
@@ -2245,22 +2297,35 @@ that a device that cannot read a folder can still hold and serve it, which means
 data are visible to it. The list is honest because the plan's hardening review found that the systems
 it studied failed more often by promising too much than by leaking too much.
 
-**To anyone on the LAN** (while LAN discovery is on, TM-25). That a device runs LicketySync and
-which port it listens on; the device's address; in each beacon, under a salt fresh to that beacon,
-one hash per announced folder and one hash of the announcer's libp2p identity key (its peer tag), so
-that an observer who already knows the folder ID can confirm it is announced here, an observer who
-already knows the device's identity key (anyone it has connected to) can confirm that device is
-announcing, and an observer who knows neither cannot link two beacons to one folder or to one device
-by their hashes; but each beacon also carries in the clear the port and the number of folders it
-announces (one hash each), which change only when the device's port or its announced folders do, and
-its Unix minute, which shows how far the device's clock is off, to the minute and more closely from
-when the minute changes, an offset that stays about the same; these link a device's beacons from
-their contents, across a change of its source address too (a temporary IPv6 address that rotates, or
-a new address after its hardware address is randomised for the network, say), as the source address
-links the beacons from one interface, which no hashing hides; and, by replaying a captured beacon
-from its own address within the ±5-minute window listeners accept, which devices dial it and so hold
-the folder the beacon named, without knowing that folder's ID: the dial is the signal, and `keys.md`
-(discovery hashes) records it as the residual leak the design accepts.
+**To anyone on the LAN** (while LAN discovery is on, TM-25). That a device runs LicketySync and the
+ports it listens on, by default `SYNC_PORT`, the same on every device, so that only a port the
+system assigned because the default was taken links its beacons (a port mapping shows the internet a
+port drawn at random instead, TM-26); the device's address, which links the beacons from one
+interface, as no hashing can hide; its hardware address, and its IPv6 interface identifiers, the
+link-local one its mDNS packets come from among them, which link the device across networks unless
+the system makes them random or temporary for each network (its AAAA records carry only temporary
+addresses); in each beacon, under a salt fresh to that beacon and interface, one hash per announced
+folder, padded with random fillers to 4, 8, 16, 32 or 64 so that only that bucket of the number of
+folders shows (beyond 64, the number of beacons in a round shows it to within 64), and one hash of
+the announcer's libp2p identity key (its peer tag), so that one who knows neither a folder ID it
+names nor that key cannot link two beacons to one folder or to one device by their hashes, nor read
+the device's clock, and one who knows the device's identity key (anyone who has connected to it or
+that it dialed) can tell its beacons; over mDNS, an instance name and a host name drawn at random
+for each interface and drawn again on each network; and, by replaying a captured beacon to listeners
+that did not hear it, for up to 11 minutes after its making (about 6 where the clocks agree,
+`protocol.md` §3.7), which devices dial it and so hold a folder the beacon named, without knowing
+which: the dial is the signal, a residual leak (`keys.md`, discovery hashes). **To anyone who knows
+a folder ID**, besides: which address announces the folder, which device too with a known identity
+key, and the announcer's clock to the minute; and, by forging a beacon that names the folder, every
+device that holds it with LAN discovery on dials them and sends its certificate, Hello and
+FolderProofs, which only a key holder opens (section 3.1). The beacons hide a device from those who
+only listen, not from those who connect: anyone on the LAN can connect to the port a device listens
+on, which a port scan finds with or without LAN discovery, and learn what the network-observer entry
+below lists, its libp2p peer ID and device key among it, which never change and so let them
+recognise the device on another network later. This residual is accepted. It holds whenever the
+device accepts connections, LAN discovery only making the port easier to find; its mitigation,
+planned before 1.0, is a setting, quiet on unknown networks, by which a device discovers and listens
+only on networks its person marks as trusted.
 
 **To a network observer.** That two addresses talk, when, for how long and how much; the sizes and
 number of encrypted frames, which approximate padded chunk sizes and counts; QUIC and TLS handshake
@@ -2273,13 +2338,16 @@ across networks, days and folders (the hashed form in LAN beacons confirms it to
 holds the key; DHT address records carry no peer ID); its device ID and public key, proven by the
 DeviceProof before any folder is named; the protocols it offers in multistream-select; its suite,
 compression, hash and feature lists and limits from the Hello (which carries no clock since
-2026-11-12, `protocol.md` §3.2); and, from the time its first REJECTED folder
-proof takes, a coarse count of the folders the device holds (about 6 µs at 1 folder and 1.4 ms at
-2000; a constant-cost lookup table is a phase 7 follow-up). Not whether it holds a given folder: the
-hint and the proof key need a key to that folder (TM-32), and a party that holds one would learn the
-same from a successful proof. Not its name: the self-reported device name is sent only after a
-folder has opened on the connection, in the first Status after the first folder opens, so only a
-peer that has opened a folder with the device learns its name.
+2026-11-12, `protocol.md` §3.2); and, from the time its first REJECTED folder proof takes, a coarse
+count of the folders the device holds (about 6 µs at 1 folder and 1.4 ms at 2000; a constant-cost
+lookup table is a phase 7 follow-up). Not whether it holds a given folder: the hint and the proof
+key need a key to that folder (TM-32), and a party that holds one would learn the same from a
+successful proof. Not its name: the self-reported device name is sent only after a folder has opened
+on the connection, in the first Status after the first folder opens, so only a peer that has opened
+a folder with the device learns its name. Where the device can be reached from the internet without
+a port mapping, by a public IPv4 address of its own or over IPv6 through an open firewall or a
+pinhole, it listens on `SYNC_PORT` in plain view: a scan of that one port finds it, and a connection
+its stable peer ID (TM-26).
 
 **To the DHT and anyone crawling it.** Which addresses announce a given day's discovery hash; a
 signed address record under the device's DHT key; and, to each node a device asks, the device's
@@ -2336,25 +2404,26 @@ the DHT: a crawler learns none of these from it. A requester that is no peer of 
 and proves no key learns from a punch at most that the device is online, and what any connection to
 it shows before a folder opens (TM-25).
 
-**What the recommended set shows** (the guided setup's, TM-25; the owner's decisions of
-2026-11-13). Before the person answers, and while its settings are unconfirmed, the device
-contacts no one and listens only for the local API (TM-25, TM-31), and once on, however turned on,
-each service starts with the first folder that uses it and stops with the last. Turning the
-recommended set on adds: with LAN discovery, its beacons, to anyone on the same network, with
-their port, folder count and clock offset (above); with port mapping, its port, to anyone on the
-internet, who can then complete a connection and learn what the network-observer entry lists, its
-peer ID, device ID, protocols, Hello and a coarse count of its folders, never a folder or a file
-without a key, and its asking, to the router and anyone watching on every network it joins
-(TM-26); with the DHT in client mode, what the DHT entry lists; with public relays, what a relay
-sees, to whoever runs each relay used, a stranger among them; at the fourth hole-punch level, to
-every coordinator a punch uses, a stranger's public relay among them, that two devices are
-connecting, when, and their addresses and peer IDs, and, to the up to three coordinators the device
-keeps standing reservations with, strangers' public relays among them, its peer ID, its public
-address as it changes, and when it is online; and, as a coordinator for the devices of its own
-folders, only that two peers of one of its folders connect to each other, and when, with the one
-residual above. It never shows contents, names or keys, and sends no folder ID to anyone who has not
-proven a key to the folder; and it never makes the device a relay, a DHT server or a coordinator for
-strangers, so the device carries no one else's file data.
+**What the recommended set shows** (the guided setup's, TM-25; the owner's decisions of 2026-11-13).
+Before the person answers, and while its settings are unconfirmed, the device contacts no one and
+listens only for the local API (TM-25, TM-31), and once on, however turned on, each service starts
+with the first folder that uses it and stops with the last. Turning the recommended set on adds:
+with LAN discovery, its beacons, to anyone on the same network, with their ports and the bucket of
+its number of folders, which point to its port, and so, to anyone there who connects, its stable
+peer ID (above); with port mapping, a port the router maps at random, to anyone on the internet, who
+can then complete a connection and learn what the network-observer entry lists, its peer ID, device
+ID, protocols, Hello and a coarse count of its folders, never a folder or a file without a key, and
+its asking, to the router and anyone watching on every network it joins (TM-26); with the DHT in
+client mode, what the DHT entry lists; with public relays, what a relay sees, to whoever runs each
+relay used, a stranger among them; at the fourth hole-punch level, to every coordinator a punch
+uses, a stranger's public relay among them, that two devices are connecting, when, and their
+addresses and peer IDs, and, to the up to three coordinators the device keeps standing reservations
+with, strangers' public relays among them, its peer ID, its public address as it changes, and when
+it is online; and, as a coordinator for the devices of its own folders, only that two peers of one
+of its folders connect to each other, and when, with the one residual above. It never shows
+contents, names or keys, and sends no folder ID to anyone who has not proven a key to the folder;
+and it never makes the device a relay, a DHT server or a coordinator for strangers, so the device
+carries no one else's file data.
 
 **To a sealed peer** (stated in full; the owner's decision of 2026-10-25, "sealed peers see almost
 nothing"). Everything a relay sees, and: the folder ID and verification key (its key carries both);

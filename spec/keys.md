@@ -240,33 +240,67 @@ release implements (§3.2), and features are negotiated per connection in the He
 ### 2.2 Discovery hashes
 
 Two different constructions, because the LAN can carry a fresh salt in every beacon and the DHT
-cannot. Unchanged from the drafts but for the section that defines the device keys (now §8.1).
+cannot.
 
-**LAN beacon (phase 1).** Every beacon carries a fresh random 16-byte `salt`, the announcer's **peer
-tag** `peer_tag = H("licketysync/v1/hash/discovery-peer", salt || peer)[0..16]` where `peer` is its
-32-byte libp2p identity key (§8.1), the current Unix minute `minute = floor(unix_seconds / 60)`, a
-port, and per announced folder
-`lan_id = H("licketysync/v1/hash/discovery-lan", salt || folder_id || peer_tag || be64(minute))[0..16]`.
-A listener drops a beacon whose `minute` is more than 5 off its own clock (devices without a
-real-time clock drift; ±5 minutes is the window), and raises the issue "clock differs from LAN
-peers" when every beacon it has heard from one source address over the last window is outside it.
-For a beacon in the window it computes `lan_id` for the salt and each folder it holds and on a match
-dials the beacon's source address; once the transport has authenticated the peer's identity `p`
-(`protocol.md` §3.1) the dialer checks `H("licketysync/v1/hash/discovery-peer", salt || p)[0..16] = peer_tag`
-and drops the connection before sending Hello otherwise, so a beacon replayed from another address
-cannot steer the dial to a different device. The beacon carries no identity in the clear: an
-observer without the folder ID or the announcer's identity key cannot link two beacons, even seconds
-apart, to one folder or one device by their hashes (libp2p's own mDNS would put the peer ID in every
-announcement, which is why LicketySync uses its own beacon). What a beacon does carry in the clear
-links a device's beacons all the same, as their source address does (`threat-model.md` §5): its
-port and its number of folder hashes, which change only when the device's port or its announced
-folders do, and its minute, which shows how far the device's clock is off, to the minute and more
-closely from the moment the minute changes, an offset that stays about the same from beacon to
-beacon. An observer who knows the folder ID can confirm it is present
-on this LAN; and anyone can replay a fresh beacon from another address and learn, from the dial that
-follows, that the dialer holds the folder: the dial is the signal, and that residual leak is the
-one the plan accepts ("What stays visible"). Listeners rate-limit beacons per source address.
-Beacons never carry the folder ID or key material.
+**LAN beacon (phase 1).** A beacon tells the devices on the local network that this device can sync
+some folders, in a form that only a device holding one of them recognises and that names neither
+the folders nor the device. `protocol.md` §3.7 says how beacons travel and how a listener handles
+them.
+
+```
+peer_tag = H("licketysync/v1/hash/discovery-peer", salt || peer)[0..16]
+lan_id   = H("licketysync/v1/hash/discovery-lan", salt || folder_id || peer_tag || be64(minute))[0..16]
+beacon   = "lsb" || u8(1) || salt || peer_tag || be16(quic_port) || be16(tcp_port)
+           || u8(n) || id_1 || … || id_n                  # 41 + 16n bytes
+```
+
+- `peer` is the announcer's 32-byte libp2p identity key (§8.1).
+- `salt` is 16 bytes drawn through the runtime's randomness trait for each beacon, so fresh for each
+  interface and each round (`protocol.md` §3.7): no beacon goes out on two interfaces, whose
+  networks one salt would tie together. The two carriers of one interface send the same beacon.
+- `quic_port` and `tcp_port` are the ports the device listens on for sync over QUIC (UDP) and TCP,
+  `0` for a transport it does not listen on, never both. Every device listens on one fixed default
+  port, `SYNC_PORT` = 23830, for both, so that the ports say nothing about a device; only when that
+  port is taken does it listen on one the system assigns, which its beacons then carry. `lan_id`
+  does not cover the ports, so a replayer picks the port its replay's dials go to; a phase 1 item is
+  that it covers both, which stops a replayer choosing the ports, though not the replay, nor a
+  forger who holds a folder ID.
+- `minute = floor(unix_seconds / 60)` by the announcer's clock as it makes the beacon. The beacon
+  does not carry it: a listener tries every minute within 5 of its own (`protocol.md` §3.7), so a
+  beacon shows nothing of the device's clock to anyone who knows no folder ID it names, and two
+  devices whose clocks differ by more than 5 minutes do not find each other this way (devices
+  without a real-time clock drift).
+- `id_1 … id_n` are one `lan_id` per folder the device announces (`threat-model.md` TM-25) and
+  random 16-byte fillers, drawn through the runtime's randomness trait, up to `n`, the least of 4,
+  8, 16, 32 and 64 that holds them, sorted strictly ascending bytewise (a filler equal to another ID
+  is drawn again), so that a beacon shows the number of folders only to within that bucket and has
+  one encoding. A device that announces more than 64 folders sends a beacon of 64 for each 64 or
+  part of 64, each under its own salt.
+- `"lsb"` is the three ASCII bytes `6c 73 62`, and `1` the format's version. A beacon is `41 + 16n`
+  bytes: 105, 169, 297, 553 or 1 065. A decoder requires that prefix and version, `n` one of the
+  five, exactly the length for that `n`, a port other than `0` and the IDs strictly ascending; any
+  other beacon is malformed. A beacon carries no folder ID, key material, peer ID, device or host
+  name, clock or address: a listener dials the address it came from.
+
+**What a beacon shows.** To anyone who knows neither a folder ID it names nor the announcer's
+identity key, its hashes link no two beacons to one folder or one device, even seconds apart:
+libp2p's own mDNS would put the peer ID in every announcement, which is why LicketySync uses its own
+beacon. Its clear fields show that a device runs LicketySync, the ports it listens on, which are
+every device's unless its default was taken, and the bucket of its number of folders; its source
+address links the beacons from one interface, which no hashing hides (`threat-model.md` §5). Someone
+who knows a device's identity key (anyone who has connected to it or that it dialed) can tell its
+beacons. Someone who knows a folder ID can tell which address announces the folder, which device too
+with a known identity key, and the announcer's clock to the minute, by trying minutes; and can forge
+a beacon that names the folder, from any on-link source and with any ports, which makes every device
+that holds the folder with LAN discovery on dial that source and send its certificate and, past the
+tag check, its Hello and FolderProofs, which only a key holder opens (`threat-model.md` §3.1).
+Anyone can capture a beacon and send it again. A listener checks the peer's authenticated identity
+against the peer tag before anything else on the connection, so a replay cannot steer its sync to
+another device, and drops a salt it has heard from another address, so a replay works only where the
+original went unheard, on another network or at a listener that missed it, while the hashes match:
+up to 11 minutes after the beacon was made, about 6 where the clocks agree (`protocol.md` §3.7).
+There the dials that follow tell the replayer that each dialer holds a folder the beacon named,
+though not which: the dial is the signal, a residual leak (`threat-model.md` §5).
 
 **Mainline DHT (phase 2).** `day = floor(unix_seconds / 86400)` and
 `dht_id(day) = H("licketysync/v1/hash/discovery-dht", folder_id || be64(day))[0..20]`. A device
@@ -844,7 +878,8 @@ A person's devices pass folder keys to each other; there is no master secret and
 shows a **link code**, `Bech32m(hrp = "lsl", data = device_id (32) || link_secret (32))`, 113
 characters, where `link_secret` is 32 bytes drawn through the runtime's randomness trait. An
 existing device scans it and connects over the LAN, announcing
-`derive_key("licketysync/v1/link/discovery", link_secret)[0..16]` as the beacon ID. The ordinary
+`derive_key("licketysync/v1/link/discovery", link_secret)[0..16]` as an ID in its beacons (§2.2;
+phase 5 salts it as a `lan_id` is salted, so that its beacons cannot be linked). The ordinary
 handshake runs (`protocol.md` §3, Hello and DeviceProof), and the dialled device ID must be the one
 in the code; then each side sends a link proof
 `BLAKE3_keyed(derive_key("licketysync/v1/link/confirm", link_secret), th || u8(role))` over the
@@ -899,9 +934,12 @@ the crate also checks, `suites.md` §4.4).
    `be16(suite) || device_pk`, its device ID, its libp2p identity public key and the libp2p peer ID
    of that key, its DHT key, and the DeviceProof signature for a fixed transcript hash `th` (32
    bytes) in both roles.
-5. **Discovery**: `peer_tag` and `lan_id` for a fixed salt, folder, announcer key and minute; a
-   beacon one minute outside the ±5 minute window, refused; a peer tag that does not match the
-   authenticated identity, refused; `dht_id` for a fixed day and the two neighbours.
+5. **Discovery**: `peer_tag` and `lan_id` for a fixed salt, folder, announcer key and minute; for a
+   listener whose own minute is that minute `m`, the 11 `lan_id`s it tries (minutes `m - 5` to
+   `m + 5`), among which the `lan_id` of a beacon made at `m - 5` or at `m + 5` is found and that of
+   one made at `m - 6` or at `m + 6` is not (refused); a peer tag that does not match the
+   authenticated identity, refused; `dht_id` for a fixed day and the two neighbours. The beacon's
+   encoding is `protocol.md` §8 item 16's.
 6. **Chunk**: a fixed raw chunk with compression 0: `plain_hash`, padded length, nonce, `stored`
    bytes and `cipher_hash`; one corrupt variant per failure path (bad tag, non-zero padding, payload
    length over L', empty payload, a compression code this release does not implement, a stored

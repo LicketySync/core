@@ -243,12 +243,12 @@ exactly one security protocol per transport so that nothing is chosen before eit
 authenticated (TLS 1.3 on QUIC and on TCP, and inside a relay's circuit between native ends; Noise
 inside WebSocket, WebRTC and WebTransport, where TLS is not offered, and inside a circuit with a
 browser client at one end; `suites.md` §2.6), then protocol negotiation; phase 0 simulates them.
-Steps 3 to 7 are this protocol. The folder proof in step 4 is the heart of it: each side shows it
-holds a key to the folder (any of the three, since each holds the folder's access key) without
-sending the key, in a way that only a holder of a key to that folder can even open, and that cannot
-be replayed into another connection. Nothing about a folder leaves a device until the peer has
-proven it holds a key to that folder, and a failed proof is answered with the same result whether
-the folder is unknown here or the proof was bad.
+Steps 3 to 7 are this protocol; on the local network, beacons say whom to dial (3.7). The folder
+proof in step 4 is the heart of it: each side shows it holds a key to the folder (any of the three,
+since each holds the folder's access key) without sending the key, in a way that only a holder of a
+key to that folder can even open, and that cannot be replayed into another connection. Nothing about
+a folder leaves a device until the peer has proven it holds a key to that folder, and a failed proof
+is answered with the same result whether the folder is unknown here or the proof was bad.
 
 ```
 A (role 0x01)                                            B (role 0x02)
@@ -417,7 +417,9 @@ both, so the DeviceProof binds the device key to the channel. From phase 1 the r
 transport-authenticated key and a side checks that it equals the peer's `libp2p_identity`, closing
 with `PROTOCOL_ERROR` otherwise; in phase 0 the simulator has no authenticated transport identity,
 the check is a no-op, and the Hello field alone is what the transcript binds. The protocol
-identifier chosen in step 2 is bound into the transcript as well.
+identifier chosen in step 2 is bound into the transcript as well. On a connection that a LAN
+discovery dial made, the dialer first checks the authenticated identity against the peer tags of
+the beacons it dialed for, before any stream opens (3.7).
 
 ### 3.2 Step 3: Hello, roles and DeviceProof
 
@@ -480,7 +482,10 @@ violation: `Close(PROTOCOL_ERROR)`.
 
 A prover sends one FolderProof per folder it wants to sync on this connection: the folder it
 discovered the peer by, or every folder it shares with a device it already knows; at most one per
-folder per connection, since a device holds one key per folder (`keys.md` §1.3). There is one proof
+folder per connection, since a device holds one key per folder (`keys.md` §1.3). It may send one at
+any time after the DeviceProofs, also once other folders are open there (LAN discovery proves a
+folder on an open connection, 3.7); `PROOF_TIMEOUT` bounds only the wait for the first folder to
+open. There is one proof
 for every tier (ruling S-1): the payload is sealed under a key that only a holder of the folder's
 access key can derive, and every tier holds that key, and its hint is computed under the same access
 key (`keys.md` §4). What that hides, and from whom: a peer that holds no key to the folder, a relay,
@@ -519,9 +524,14 @@ Verification by the receiver, for each FolderProof, in order:
    (3.1: on a relayed connection through a public relay, each folder whose public-relays switch is
    off; on a punch-only circuit, at the device to be reached each folder whose own settings do not
    allow a punch through the coordinator in the middle, and at the requester every folder; on a
-   direct connection a punch brought, each folder whose own settings do not allow that punch),
-   compute `hint` with the peer's role; no match → `ProofResult { hint, REJECTED }` and stop. (A
-   device with many folders caches the per-folder hints once per connection.)
+   direct connection a punch brought, each folder whose own settings do not allow that punch; on any
+   other direct connection whose peer's address is on-link (3.7), as on every connection LAN
+   discovery makes, each folder whose LAN discovery switch and direct-connections switch are both
+   off; on any other direct connection (an off-link peer, or one over an interface that carries no
+   beacons), each folder whose direct-connections switch is off; each switch the folder's own
+   setting or the device default, `threat-model.md` TM-25), compute `hint` with the peer's role; no
+   match → `ProofResult { hint, REJECTED }` and stop. (A device with many folders caches the
+   per-folder hints once per connection.)
 3. Derive `proof_key`, open `sealed` with the message's `nonce` and `aad = hint`; failure →
    REJECTED.
 4. Parse `ProofPayload`: `tier` is 1, 2 or 3; failure → REJECTED. Nothing checks the tier: it is the
@@ -569,6 +579,233 @@ exchanges whatever still differs; from then on it pushes every index record it c
 peer answers each request with `IndexRecords` in pages, or with a `ReconcileReply`. Chunks are
 requested by ciphertext hash and returned whole. Status messages report progress periodically.
 Section 4 defines each message; section 4.5 the exchange.
+
+### 3.7 LAN discovery
+
+On the local network a device learns whom to dial from **beacons** (`keys.md` §2.2 fixes their
+bytes), sent by two carriers, IPv4 broadcast and DNS-SD over multicast DNS, and checked by a
+listener that runs its cheapest checks first and whose memory is fixed. A folder is announced and
+matched only while it syncs with its LAN discovery switch on (its own setting or the device default,
+`threat-model.md` TM-25); the service, with its sockets and group memberships, starts with the first
+such folder and stops with the last. The announcer and the listener are the `protocol` crate's, with
+no I/O; the carriers' sockets are `net`'s; both decoders, of beacons and of DNS messages, are fuzzed
+(`threat-model.md` TM-3). `SYNC_PORT`, `BEACON_PORT` and `BEACON_INTERVAL` are in section 5.
+
+**Interfaces.** A **beacon interface** is up, not loopback and not point-to-point, and can broadcast
+(for the broadcast carrier) or multicast (for mDNS). Only beacon interfaces send or take beacons, so
+no tunnel does (WireGuard, Tailscale and most VPNs are point-to-point); a virtual network that
+presents an Ethernet segment, a ZeroTier network or a container bridge, counts as a LAN
+(`threat-model.md` §2). An address is **on-link** for a beacon interface when it lies inside the
+prefix of an address that interface holds, a prefix shorter than /16 (IPv4) or /64 (IPv6) counting
+only as that /16 or /64 (a very short prefix, behind a proxy-ARP gateway say, is not trusted
+further), or is an IPv6 link-local address that arrived on that interface; and is none of the
+device's own addresses, nor loopback, multicast, unspecified, the limited broadcast, or a prefix's
+network or broadcast address. Nothing else is on-link, on any other interface.
+
+**Rounds.** A device sends a round on each beacon interface when the service starts, when the
+interface's link comes up (its carrier, so that joining another Wi-Fi network counts even with no
+change of address), when its addresses change, when the folders it announces change, and otherwise
+every `BEACON_INTERVAL` ± 20 %. Each interface draws its own randomness, through the runtime's
+randomness trait: that interval, and a delay of 0 to 2 s before a round an event triggers, so that
+the rounds of two interfaces do not line up in time. A round is one beacon for each 64 announced
+folders or part of 64, each under a fresh salt, each sent by both carriers of the interface. Every
+beacon on an interface goes at least 6 s after the one before, triggered rounds included, so that
+the mDNS carrier updates its TXT record at most ten times in any minute (RFC 6762 §8.4) and a
+listener's per-source bucket (below) passes them all; from 257 announced folders (5 beacons a round)
+a round can outlast the interval, which then stretches.
+
+**Broadcast carrier** (IPv4; desktops). The beacon's bytes in one UDP datagram to the interface's
+directed broadcast address, computed from its IPv4 address and prefix (none on a /31 or /32, and
+never 255.255.255.255), port `BEACON_PORT`, IP TTL 255, from a socket that sends nothing else and is
+the only one with SO_BROADCAST (no socket a punch uses has it, `threat-model.md` TM-25). The
+listener's socket on `BEACON_PORT` uses address reuse, so that every process on the machine hears
+the beacons.
+
+**mDNS carrier** (DNS-SD over multicast DNS, RFC 6762 and RFC 6763; IPv4 and IPv6). On each beacon
+interface the device joins 224.0.0.251 and ff02::fb on port 5353, which it shares by address reuse
+with the system's own responder (Avahi, mDNSResponder, Windows'; Avahi then logs a warning about
+another mDNS stack, which `licketysync doctor` explains), and publishes one service instance, every
+record of class IN with a TTL of 120 s and the cache-flush bit set on all but the PTR, all of them
+in every unsolicited response, in its Answer section (RFC 6762 §8.3), and in every answer to a
+query, the answer in the Answer section and the rest as Additional records:
+
+- PTR `_licketysync._udp.local` naming `<instance>._licketysync._udp.local`;
+- the instance's SRV: priority 0, weight 0, the QUIC port, or 0 when the device does not listen on
+  QUIC (the `_udp` type names no TCP port), target `<host>.local`; a listener takes the ports from
+  the beacon;
+- the instance's TXT: the beacon's bytes in pieces of 250 bytes, the last shorter, piece `i` as the
+  string `b<i>=` followed by the piece (`b0` to at most `b4`; RFC 6763 §6.5 allows binary values),
+  and no other string: at most 1 085 bytes, under the 1 300 of RFC 6763 §6.2;
+- the A and AAAA records of `<host>.local`: at most one IPv4 address of the interface and four of
+  its temporary IPv6 addresses (RFC 8981), never a stable one, so that a response fits one
+  1 500-byte frame.
+
+`<instance>` and `<host>` are 16 characters each, drawn for each interface through the runtime's
+randomness trait from `a` to `z` and `0` to `9`, so never a device's or a person's name; they are
+drawn again, probed and announced (RFC 6762 §8) when the service starts, when the interface's link
+comes up, when its addresses change and after a probe conflict. A goodbye (TTL 0) for the old names
+goes only on the link where they were announced: after an address change within the same prefix, and
+when the service stops; after the link went down or moved to another network, none, so that no
+record ties the two networks. Each beacon is an update of the TXT record (RFC 6762 §8.4), announced
+twice, 1 s apart: its data changes, so it is not the periodic announcement of unchanged records that
+§8.3 forbids. Every packet goes with IP TTL or hop limit 255 (§11), and no record goes out on an
+interface within 1 s of its last sending there, announcements and answers together (§6). The device
+answers a query for `_licketysync._udp.local` or for its own records by multicast only, with its
+latest beacon only, after a random 20 to 120 ms when the query asks for the shared PTR (§6), and
+only a query that passes the listener's steps 1 and 2 as a query would (on a beacon interface, to
+the group, from port 5353, at most 9 000 bytes, from an on-link source with hop limit 255), so that
+no off-link or unicast query makes it multicast. Known-answer suppression (§7.1) leaves out an
+answer only when the query lists it with at least half its true TTL, and never the records that go
+with an answer sent. It sends a query (never with the unicast-response bit) for
+`_licketysync._udp.local` on each beacon interface when the service starts, when the interface's
+link comes up and when its addresses change, and again 1 s and 3 s later (§5.2), so that it hears
+the devices already there before their next round. Departures from the RFCs, on purpose: a query
+from a port other than 5353 (a legacy unicast query, §6.7) and a query's unicast-response bit get no
+unicast answer, since an answer to a forged source would be aimed at a third party; a response to
+the group is taken, and a query answered, only from an on-link source with hop limit 255, where §11
+deems every such packet local; and TXT keys are exact in case, and a repeated key makes the record
+malformed (RFC 6763 §6.4 ignores case and keeps the first), so that a beacon has one encoding.
+
+Phones (phase 4) use this carrier alone, through the platform's service API, which reports the
+addresses it resolves for an instance rather than a response's source: there the resolved address
+stands for the source and passes every check below. Phase 4 must set the SRV host name, which such
+an API may otherwise take from the device's name; check that the platform responders send TTL 255
+and that Android's `NsdServiceInfo` takes binary TXT values on the versions phase 4 supports, before
+this TXT format is final for phones; and say what replaces the hop-limit and destination checks
+there, which such an API does not report. Phase 3 confirms that Windows reports the received IPv4
+TTL.
+
+**The listener.** Steps 1 to 4 run on every datagram, each a bounded decode, linear in its at most
+9 000 bytes, and a lookup per beacon; the buckets of steps 5 and 6 bound all that follows. Dropping
+a beacon raises no issue, since anyone on the network can send one: the listener counts its drops by
+step, copies apart from replays, which `licketysync doctor` shows, naming a clock more than 5
+minutes off among the causes when no LAN peer is found.
+
+1. **Datagram.** It arrived on a beacon interface, addressed to that interface's directed broadcast
+   address (broadcast) or to the mDNS group (mDNS): a unicast datagram is dropped. The socket
+   reports both, through IP_PKTINFO or its equivalent, or by one socket per interface, and on Linux
+   with IP_MULTICAST_ALL off, so that it hears only the groups it joined. A broadcast datagram is
+   one of the five beacon lengths. An mDNS datagram comes from port 5353, is at most 9 000 bytes
+   with its IP and UDP headers (RFC 6762 §17), and is a response (QR 1, opcode 0, rcode 0) whose
+   four counts add up to at most 64; a query, a probe among them, is dropped whatever its sections
+   hold.
+2. **Source.** The source address is on-link for that interface, and the IP TTL or hop limit is 255
+   (RFC 6762 §11), which every desktop system reports and the listener requires: a beacon from
+   beyond the link has passed a router. So no beacon makes the device contact a host off its link.
+3. **Form.** A broadcast datagram decodes as a beacon (`keys.md` §2.2). Of an mDNS response the
+   listener reads only the Answer and Additional sections, names of at most 255 bytes whose
+   compression pointers point backwards, at most 16 for a name and 256 for the message; each TXT
+   record under `_licketysync._udp.local` with a TTL above 0 (one of 0 is a goodbye) holds exactly
+   the strings `b0` to `bk`, each once, each piece 250 bytes but the last, together a beacon; the
+   instance's SRV names its host, whose A and AAAA records the same response carries. From an IPv6
+   link-local source a beacon needs at least one **dial address** in its response: its A record if
+   on-link, and the first two of its AAAA records that are on-link and not link-local; without one
+   it is dropped here, unremembered. The listener sends no query to complete a response and keeps no
+   cache.
+4. **Salt.** A beacon's hashes match until the listener's minute passes the beacon's minute plus 5:
+   up to 11 minutes after it is made, about 6 where the clocks agree. So a beacon that passes steps
+   5 and 6 is remembered for 11 minutes, by its salt, its source and its dial addresses (step 3), at
+   most four addresses; at most 21 184 beacons (what step 6 lets through in 11 minutes), the oldest
+   forgotten first. A remembered salt is dropped: as a copy when the beacon came from, or names as a
+   dial address, an address remembered with it (the same beacon by another carrier, over IPv4 and
+   IPv6, or a query's answer); otherwise as a replay.
+5. **Per source.** A token bucket for each source address: 1 beacon per 5 s, a burst of 3; a table
+   of 512 addresses, the least recently seen evicted.
+6. **In all.** One token bucket: 32 beacons a second, a burst of 64.
+7. **Known peers.** The beacon's peer tag is compared with the listener's own under the salt (its
+   own beacon, replayed: dropped) and with that of each peer it has a connection open with,
+   `H("licketysync/v1/hash/discovery-peer", salt || p)[0..16]` for the peer's authenticated identity
+   `p`. Of the folders step 8 finds for such a peer, one open on an on-link direct connection with
+   it needs nothing; one for which no FolderProof has crossed such a connection, in either
+   direction, and that 3.5 step 2 allows there, is proven there while that connection is below its
+   proof and folder caps; any other makes the peer a candidate like any other.
+8. **Folders.** For each folder with LAN discovery on and each minute `m` within 5 of the listener's
+   own (11 minutes), `lan_id(salt, folder_id, peer_tag, m)` is looked up among the beacon's IDs. The
+   folders found, with the beacon's salt, peer tag and ports, make its source a **candidate**.
+
+So each beacon past step 6 costs at most `C + 1 + 11 × F` hashes, for `C` peers connected and `F`
+folders with LAN discovery on (`threat-model.md` TM-22).
+
+**Dials.** A candidate is dialed only at addresses on-link for the interface the beacon came on: its
+source; or, where that is an IPv6 link-local address, which phase 1 cannot dial (`libp2p-quic`
+refuses an address with a zone and `libp2p-tcp` drops the zone), its dial addresses (step 3). An
+address is dialed only when the system's route to it is that interface's own prefix, with no
+gateway, looked up at the moment of the dial with the dial socket's own selectors (its source
+address and, where the platform has them, its mark or user), so that policy routing, a VPN's rules
+say, counts. Phase 1's transports cannot bind one dial to one interface (`libp2p-tcp` makes its dial
+socket itself, and `libp2p-quic` dials from the listener's shared endpoint), so phase 1 relies on
+that check; binding each dial to its interface (`SO_BINDTODEVICE` or `IP_UNICAST_IF` on Linux,
+`IP_BOUND_IF` on macOS, `IP_UNICAST_IF` on Windows) comes with `net`'s own QUIC transport and TCP
+dial. Since AAAA records carry only temporary addresses, an IPv6-only link whose devices have
+link-local addresses alone, or have temporary addresses turned off, finds no one in phase 1, until
+`net` dials with a zone. Candidates, dials and backoffs are keyed by IP address. A candidate keeps
+the salt, peer tag, ports and folders of at most 4 beacons, the oldest dropped; at most 16
+candidates wait, the oldest dropped for a new one; at most 4 discovery dials run at once, one per
+address, and at most 16 start in any minute, each after a random 0 to 1 s, which spreads the dials
+of many listeners and hides how many folders the listener checked. A dial goes to the ports of the
+candidate's newest beacon, QUIC first, then TCP, skipping a port of 0, each for at most 10 s, and
+names no peer ID. As soon as the transport has authenticated the peer's identity `p`, before any
+stream opens on the connection (identify's and this protocol's alike), the dialer computes
+`H("licketysync/v1/hash/discovery-peer", salt || p)[0..16]` for each beacon the candidate keeps; it
+proves the folders of every beacon whose tag matches (3.5), and if none does it closes the
+connection, sending nothing of its own but the transport's close: a replayed beacon cannot steer the
+dial to another device. To a peer it is already connected with, it proves only the folders not open
+on an on-link direct connection with it; `net` allows at most two established connections per peer
+(`max_established_per_peer`), which bounds such second connections. The folder proof, not the
+beacon, decides whether a folder opens (`threat-model.md` TM-32). An address whose discovery dial
+fails to connect, matches no tag or opens no folder is not dialed by discovery again for 30 s,
+doubled after each such dial up to 10 min, in a table of 256 addresses, the least recently used
+evicted; a dial that opens a folder clears its address, and a change of the device's own addresses
+clears them all. A device keeps a peer's address for later dials only once a folder has opened on a
+connection to it, so a beacon alone never adds one. Until the dial checks the tag inside the TLS
+handshake, before its own certificate goes (`threat-model.md` §3.1, a phase 1 item), that
+certificate, and with it the dialer's libp2p identity, reaches whoever answers.
+
+**Which folders open.** A side cannot tell a connection that a LAN discovery dial made from another
+direct connection whose peer address is on-link, by the test above for the interface the connection
+runs over, so each side applies one rule to every such connection (3.5, step 2): a folder may open
+there only if its LAN discovery switch or its direct-connections switch is on, and is treated as
+paused otherwise. On any other direct connection (an off-link peer, or one over an interface that
+carries no beacons) a folder may open only if its direct-connections switch is on.
+
+**What remains** (`threat-model.md` §3.1, §5):
+
+- A flood of beacons from many forged on-link sources spends the budget in all, so honest beacons
+  are dropped while it lasts: a denial of LAN discovery, which an attacker on the LAN has by other
+  means. The same budget, 32 beacons a second, drops honest beacons on a LAN of more than about 900
+  announcing devices, and a hash costs more on slow hardware than TM-22's estimate.
+- A replay of a genuine beacon, to listeners that did not hear the original, makes every one of them
+  on the segment that holds a folder it names dial a target the replayer picks: a forged on-link
+  source, or, without forging one, the dial addresses of an mDNS response from a link-local source;
+  and, while `lan_id` does not cover the ports, at ports it picks too. Each dial sends several KB on
+  QUIC, a TLS client hello carrying an X25519MLKEM768 share, which takes two Initials padded to at
+  least 1 200 bytes each, sent again until the handshake ends or 10 s pass; on TCP, to a target that
+  does not speak multistream-select, only its plaintext header and `/tls/1.0.0` (`net` uses its
+  version 1, which waits for the answer). It tells the replayer that the dialer holds a folder the
+  beacon named, though not which (`keys.md` §2.2).
+- One forged beacon every 5 s from a device's address keeps that address's bucket empty, so
+  listeners drop the device's genuine beacons unremembered, and anyone elsewhere on the LAN can then
+  replay them.
+- A beacon that matches, replayed or forged with an honest device's address as its source, fails the
+  tag check at that device and keeps listeners from dialing it for 30 s, and, repeated, for up to 10
+  minutes at a time: a targeted denial of LAN discovery of that device.
+- Whoever holds a folder ID can forge beacons that name it, from its own address with its own peer
+  tag and any ports, and every device that holds the folder with LAN discovery on dials it and sends
+  its certificate, Hello and FolderProofs, which only a key holder opens (`keys.md` §2.2).
+- A router that forwards a port and masquerades the connection as its own LAN address (a port
+  forward with source NAT, or hairpin NAT) makes a peer from elsewhere look on-link to the device it
+  forwards to: the hop limit stops such beacons, but not such connections, so a folder with LAN
+  discovery on and direct connections off can open with that peer, which still has to prove a key.
+- An mDNS reflector or repeater (Avahi's reflector, a router's mDNS gateway) that carries a beacon
+  to another network makes listeners there dial the reflector, which fails the tag check and is
+  backed off, after the dialer's certificate has reached it.
+- Two devices that hear each other's beacons at once may both dial, and both connections open: a
+  harmless duplicate, since a peer may have several connections (4.6), bounded by the dial caps and
+  by `net`'s two connections per peer, and not repeated, since a folder open on an on-link direct
+  connection with a peer needs no dial (step 7).
+- A VPN that routes the LAN's own prefix through its tunnel (a full tunnel with no exception for the
+  LAN) stops LAN discovery's dials, since the route check refuses them; `licketysync doctor` names
+  it.
 
 ## 4. Messages
 
@@ -3165,6 +3402,9 @@ not the only way to build it.
 | Default `max_requests_in_flight` | 64 |
 | `MAX_REQUESTS_IN_FLIGHT` (the largest `max_requests_in_flight` a Hello may advertise; larger is treated as this, 2, 4.6) | 1 024 |
 | `MAX_CHUNK_PLAINTEXT` | 4 MiB |
+| `SYNC_PORT` (the port a device listens on for sync over QUIC and TCP unless it is taken, `keys.md` §2.2) | 23830 |
+| `BEACON_PORT` (the UDP port of LAN discovery's broadcast carrier, 3.7) | 23831 |
+| `BEACON_INTERVAL` (between rounds of beacons on an interface, ± 20 %, 3.7) | 30 s |
 
 The drafts' `KEY_RESYNC_INTERVAL`, `MAX_HELD_GRANTS_PER_CONNECTION`, `MAX_WRITERS_PER_FOLDER`,
 `MAX_DEVICES_PER_KEY`, `MAX_KEY_RECORDS_PER_FOLDER`, `MAX_KEY_RECORD_BYTES_PER_FOLDER`,
@@ -3253,9 +3493,9 @@ cryptography:
   both attribution paths, `CHUNK_NOT_FOUND` and `CHUNK_BUSY`.
 - Status and Unsupported; every row of section 5's table that phase 0 can reach.
 
-Not in phase 0: QUIC, TLS, Noise, mDNS, the DHT and everything else libp2p provides (phase 1 and 2);
-links and files (phase 1); unlinking and sharing an existing directory (phase 1, `keys.md` §7);
-linked devices (phase 5); compressions other than `none` (`keys.md` §3.2).
+Not in phase 0: QUIC, TLS, Noise, the DHT and everything else libp2p provides (phase 1 and 2); LAN
+discovery (3.7, phase 1); links and files (phase 1); unlinking and sharing an existing directory
+(phase 1, `keys.md` §7); linked devices (phase 5); compressions other than `none` (`keys.md` §3.2).
 
 ## 8. Test vectors
 
@@ -3265,19 +3505,20 @@ outcome it reaches.
 
 **Who checks what.** Each item says which crate's tests check it. The **protocol** crate checks
 frames, message bodies and its handshake state machine: items 1 to 5 and 10, and the decoder vectors
-of items 6, 8, 9, 11 and 12. The **index** crate checks what a record does to a store: in item 6
-each record's outcome (duplicate, expired, obsolete, held, replacing, opaque, a record under the
-device's own ID); item 7 (latest only, coverage, tree deletes, expiry by the watermark, heads and
-the property tests), but for its cases marked for the engine; in item 13 the candidate, the
-arrivals and the index by counter; in item 8 the set digests, their cache and serving; and in item
-12 the sealed-peer rule and every cleanup outcome. The **engine** crate checks what a connection
-then does: the connection vectors of items 6 (closes, issues), 8 (rounds, epochs and resets, the
-descent, cursors and counting, the round owed, pushes, pages, per-peer state, intervals and
-timeouts), 9 (busy answers, the backoff, passes, serving and attribution), 11 (`chunks_stored` and
-how often it is sent), 12 (when a cleanup is written and sent) and 13 (when a write holder checks,
-and when a watermark is signed and sent); the cases of item 7 marked for it (the archive's copies
-and the warning, phase 1); and, with `net` from phase 2, item 15 (relayed connections); item 14
-runs in the integration suite's compatibility matrix. The **keys**
+of items 6, 8, 9, 11 and 12; and LAN discovery's codec, announcer and listener, in item 16. The
+**index** crate checks what a record does to a store: in item 6 each record's outcome (duplicate,
+expired, obsolete, held, replacing, opaque, a record under the device's own ID); item 7 (latest
+only, coverage, tree deletes, expiry by the watermark, heads and the property tests), but for its
+cases marked for the engine; in item 13 the candidate, the arrivals and the index by counter; in
+item 8 the set digests, their cache and serving; and in item 12 the sealed-peer rule and every
+cleanup outcome. The **engine** crate checks what a connection then does: the connection vectors of
+items 6 (closes, issues), 8 (rounds, epochs and resets, the descent, cursors and counting, the round
+owed, pushes, pages, per-peer state, intervals and timeouts), 9 (busy answers, the backoff, passes,
+serving and attribution), 11 (`chunks_stored` and how often it is sent), 12 (when a cleanup is
+written and sent) and 13 (when a write holder checks, and when a watermark is signed and sent); the
+cases of item 7 marked for it (the archive's copies and the warning, phase 1); and, with `net` from
+phase 2, item 15 (relayed connections); item 14 runs in the integration suite's compatibility
+matrix. `net` checks item 16's carriers and dials, and the engine its folder rule. The **keys**
 crate checks what `keys.md` §9 lists, the shared inputs included.
 
 **Two shapes.** A **decoder vector** is a frame or body and its expected outcome (accepted, with the
@@ -3925,6 +4166,77 @@ interval in section 5's constants is a vector.
     protocol before that folder opens between them (listed nowhere until it opens, then only there)
     and after (listed there at once); and a requester refused there trying the next coordinator it
     read.
+16. **LAN discovery** (3.7, `keys.md` §2.2; protocol for the codec, the announcer and the listener,
+    as decoder vectors and as scenarios on a fake clock and a seeded randomness; `net` for the
+    carriers and the dials, on a fake LAN and on two network namespaces; the engine for which
+    folders open). **Codec**: for the inputs of `keys.md` §9 item 5, both ports `SYNC_PORT`, a
+    beacon of one folder (its `lan_id` and three fillers, sorted: 105 bytes), of 5 (8 entries), of
+    64 (1 065 bytes) and of 65 (two beacons of 64, under two salts), and each one's TXT strings;
+    refused: each length one byte short and one byte long, an `n` of 0, 3, 5 and 128 with a length
+    to match, another prefix, version 2, both ports 0, two equal IDs and two out of order, and TXT
+    records with a piece missing, a piece of 249 bytes before the last, a key repeated, a key in
+    upper case and another string. **mDNS decoder**: a forward compression pointer, a pointer loop,
+    a name that takes 17 pointers and a message that takes 257, 65 records, a 256-byte name, a
+    datagram of 9 001 bytes with its headers, a source port other than 5353, a query with a beacon
+    in its Answer section and a probe with one in its Authority section (both dropped), a goodbye
+    (TTL 0: no beacon), and an SRV of port 0. **Announcer**: a round at start, when an interface's
+    link comes up (another Wi-Fi network with the same address included), at an address change and
+    at a change of the announced folders, then every 24 to 36 s; two interfaces' rounds drawn apart;
+    a fresh salt per beacon and interface, one beacon by both carriers; every beacon on an interface
+    at least 6 s after the one before, triggered rounds included, so that no minute holds more than
+    ten TXT updates, and rounds that outlast the interval from 257 folders; nothing on a loopback or
+    point-to-point interface, and nothing while no folder with LAN discovery on syncs; mDNS names
+    drawn per interface and again after an address change within the prefix (a goodbye for the old
+    ones), after the link went down and up or moved to another network (no goodbye) and after a
+    probe conflict; each TXT update announced twice, 1 s apart, and no record sent twice within 1 s,
+    announcements and answers together; the cache-flush bit on all but the PTR; only temporary IPv6
+    addresses in AAAA records; every response and answer carrying PTR, SRV, TXT, A and AAAA, an
+    announcement all in its Answer section and an answer the rest as Additional records; a query
+    answered by multicast with the latest beacon, a PTR query 20 to 120 ms later, a known answer
+    with at least half its TTL left out and one with less not, a known-answer query whose answer
+    still carries the A and AAAA records, one with the unicast-response bit by multicast, and a
+    legacy unicast query, an off-link one and one sent unicast not at all. **Listener**, each step
+    in its order: a unicast beacon; a beacon on a /24 point-to-point interface; a beacon from the
+    device's own address, from an off-link one, from one inside a /8 prefix but outside its /16, and
+    from a loopback, multicast, broadcast and unspecified one; a TTL of 254, and none reported; a
+    salt heard before, from its first address (a copy) and from another (a replay), both dropped; a
+    replay at 5 min 30 s with equal clocks and at 10 min with the listener 5 minutes behind (both
+    dropped as replays); the same beacon by mDNS over IPv6 first, then by broadcast (a copy; dialed
+    at the IPv4 address the response listed); a response with a TXT record alone from a link-local
+    source (dropped unremembered), then the broadcast copy (dialed); the fourth beacon from one
+    source within 5 s dropped, and the 513th source evicting the least recently seen; the 65th
+    beacon of a burst dropped; the listener's own beacon replayed (dropped); a beacon from a peer
+    connected on-link (no dial for a folder open there, nor for one open on a second on-link
+    connection to the same peer, but a dial for one open only over a relay; a folder no FolderProof
+    has crossed there proven on that connection; more than `MAX_OPEN_FOLDERS_PER_CONNECTION` shared
+    folders, the one past it REJECTED there and then dialed on a second connection, as is a folder
+    when the connection is at its proof cap; a folder paused, so REJECTED, then resumed: dialed on a
+    second connection, where it opens); a peer first reached over a punched or off-link connection
+    that then joins the LAN (dialed); a peer with a folder open over a public relay that joins the
+    LAN (dialed, the folder opens on the direct connection, and the relayed connection is closed,
+    3.1); a beacon made at the listener's minute ± 5 (found) and ± 6 (not). **Dials**: a match,
+    dialed after 0 to 1 s by QUIC, then by TCP when QUIC fails within 10 s, and by TCP alone when
+    the QUIC port is 0; the caps (a fifth dial at once, a 17th in a minute and a second to one IP
+    address at another port wait; a 17th candidate drops the oldest, and a fifth beacon for one
+    candidate its oldest); two beacons kept for one address under different tags (the folders of the
+    one that matches proven; when none matches, closed before any stream opens, then backed off);
+    the backoff (30 s, 60 s and so on to 10 min, cleared by a folder opening and by an address
+    change); an mDNS response from an IPv6 link-local source with on-link, off-link and link-local
+    AAAA records (its on-link A record and the first two of its on-link AAAA records that are not
+    link-local dialed); an address whose route runs through another interface or a gateway, by a
+    more specific route, by a VPN that routes the LAN's prefix, or by a policy rule that matches the
+    dial socket's mark (not dialed; `doctor` names the VPN); and a second discovery connection to a
+    peer already connected, proving only the folders not open on an on-link direct connection with
+    it, with a third refused by `net`'s two connections per peer. **Flood** (`threat-model.md`
+    TM-22): 100 000 beacons from 10 000 forged sources with 1 000 folders on: the hashes within the
+    budget, every table at its cap, and an honest beacon afterwards found within one round. **Which
+    folders open** (3.5, step 2): on a direct connection with an on-link peer, at both sides, a
+    folder with LAN discovery on and direct connections off opens, one with LAN discovery off and
+    direct connections on opens, and one with both off is not proven and its proof is answered
+    REJECTED; and on an inbound connection over a tunnel (a point-to-point interface), and on an
+    off-link direct connection, from a routed subnet or from an IPv6 address no firewall stops, a
+    folder with direct connections off is not proven and its proof is answered REJECTED, whatever
+    its LAN discovery switch, and one with direct connections on opens.
 
 ## 9. The index in plain words
 

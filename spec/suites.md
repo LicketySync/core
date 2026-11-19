@@ -528,9 +528,9 @@ for anyone the device connects to and anyone who reads its DHT records (threat m
 **Considered alternative, not adopted (for the plan to record).** A libp2p identity per folder, or one
 rotated on a schedule, would remove that handle. Its cost: one connection per shared folder instead
 of one per peer, with the matching multiplication of handshakes, NAT traversal and relay
-reservations; a rotating identity would also defeat the LAN beacon's "dial expects exactly this
-identity" check and any peer that pins an identity. Suite 1 keeps one identity per device and
-documents the handle instead.
+reservations; a rotating identity would also defeat a LAN discovery dial's check of the peer it
+reaches against the beacon's peer tag, and any peer that pins an identity. Suite 1 keeps one
+identity per device and documents the handle instead.
 
 ## 3. Approved crates
 

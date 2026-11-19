@@ -5,6 +5,65 @@ changed and why.
 
 ## Unreleased
 
+- Spec: LAN discovery's beacon, carriers and listener are specified. Spec text only: `protocol`,
+  `net`, `daemon` and `cli` implement it in phase 1. Until now the beacon was only its hashes, and
+  what it carried in the clear linked a device's beacons: its port, its exact number of folders and
+  its Unix minute, which showed how far its clock was off. `keys.md` §2.2, §8.3 and §9 item 5;
+  `protocol.md` §3, §3.1, §3.5, §5, §7, §8 item 16 and a new §3.7; `threat-model.md` §1, §2, §3.1,
+  §3.10, TM-22, TM-26, TM-31, TM-32, TM-40 and §5; `suites.md` §2.6; `spec/allowed-hosts.txt`'s
+  header.
+  - The beacon (`keys.md` §2.2): `lsb`, version 1, a salt, the peer tag, the QUIC and TCP ports and
+    one `lan_id` per announced folder, padded with random fillers to 4, 8, 16, 32 or 64 and strictly
+    ascending; 105 to 1 065 bytes. It carries no minute: a listener tries the 11 minutes within 5 of
+    its own, so the issue "clock differs from LAN peers" is gone and `licketysync doctor` names the
+    clock when no LAN peer is found. Every device listens on one default port, `SYNC_PORT` (23830),
+    unless it is taken, and a port mapping asks the router for an external port drawn per network
+    (TM-26), though a device reachable without a mapping shows `SYNC_PORT` in plain view. A salt is
+    drawn for each beacon, so for each interface and each round. The hashes are unchanged; covering
+    the ports in `lan_id` is a phase 1 item.
+  - The carriers (`protocol.md` §3.7): IPv4 directed broadcast to `BEACON_PORT` (23831), and DNS-SD
+    over mDNS as `_licketysync._udp`, the beacon in the TXT strings `b0` to `b4`, on beacon
+    interfaces only (up, not loopback, not point-to-point, so no tunnel); rounds at start, at a
+    change and every 30 s ± 20 %, each interface with its own jitter, every beacon at least 6 s
+    after the one before, so at most ten TXT updates in any minute (RFC 6762 §8.4); every response
+    carries PTR, SRV, TXT, A and AAAA; names drawn at random per interface and again on each
+    network, with a goodbye only on the link that saw them; AAAA records carry only temporary
+    addresses; answers by multicast only, so that none goes to a forged source. Deliberate
+    departures from RFC 6762 and 6763 are listed. The carriers are in `protocol.md` because the
+    `protocol` crate (announcer and listener, without I/O) and `net` (sockets) implement them, and a
+    discovery dial is the handshake's step 1; `keys.md` keeps the bytes and the hashes.
+  - The listener takes only datagrams that a beacon interface received at its directed broadcast
+    address or the mDNS group, from an on-link source with a hop limit of 255, and decodes mDNS
+    responses with bounded compression before any budget. A beacon is remembered for 11 minutes, as
+    long as its hashes can match, by its salt and the addresses that sent or listed it, so a replay
+    from another address is dropped and a copy by the other carrier or IP version is not counted as
+    one. Then a bucket per source and one in all, its own and its peers' tags, and 11 hashes per
+    folder. Dials go only to on-link addresses whose route, looked up at the moment of the dial with
+    the socket's own selectors, is the beacon interface's own prefix (binding each dial to its
+    interface comes with `net`'s own transports), keyed by IP, after 0 to 1 s, at most 4 at once and
+    16 a minute, with a backoff per address; the dialer checks the peer tag of each beacon it kept
+    for that address before any stream opens. A folder open on an on-link direct connection with the
+    peer needs nothing; one no FolderProof has crossed such a connection is proven there (a
+    FolderProof may come at any time after the DeviceProofs); otherwise the peer is dialed, at most
+    two connections per peer, so a peer reached over a relay is dialed on the LAN.
+  - Which folders open (`protocol.md` §3.5, step 2): on a direct connection with an on-link peer, a
+    folder whose LAN discovery and direct-connections switches are both off is treated as paused,
+    since the side dialed cannot tell a connection that LAN discovery made; on any other direct
+    connection, one whose direct-connections switch is off.
+  - Threat model: TM-22 bounds the listener (about 2 MiB of entries; about 7 % of a core at 1 000
+    folders under a flood) and states its residuals, among them that it drops honest beacons on a
+    LAN of more than about 900 announcing devices. TM-31 names 224.0.0.251, ff02::fb, the broadcast
+    port and where dials go. §3.1 and §5 state what replays and forged beacons can do, what someone
+    who knows a folder ID learns (which address announces it, and the announcer's clock), and what a
+    dial sends; §3.1 widens the phase 1 verifier item to check the peer tag. §5 states the accepted
+    residual that anyone on the LAN can connect and read the device's permanent peer ID, and names
+    its mitigation, a setting planned before 1.0 by which a device discovers and listens only on
+    networks its person marks as trusted.
+  - `spec/allowed-hosts.txt` lists nothing new: no code names 224.0.0.251 yet, which the change
+    adding the mDNS carrier lists, and broadcast addresses are computed, not written.
+  - Vectors: `keys.md` §9 item 5 has the listener's 11 candidate IDs in place of the minute pair;
+    `protocol.md` §8 item 16 is new. `keys::discovery` and its vectors follow with the code.
+
 - Simulator: `engine-partition` failed the nightly long runs, in 8 of seeds 0 to 299 (29, 34, 42,
   99, 178, 184, 195 and 289): peer 0's delete of Q, made during the cut at 50 s, found nothing on
   its disk and was refused, and the oracle counted the refusal. The scenario took every peer to
