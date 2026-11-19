@@ -5,6 +5,36 @@ changed and why.
 
 ## Unreleased
 
+- Protocol: a chunk could wait about 30 s while a connected peer that held it sat idle. A hash a
+  refusal frees is kept for the next connection in line whose pass waits (`protocol.md` §4.6,
+  "Several connections"), and that connection's freed-hash trigger shared the one `STATUS_INTERVAL`
+  window of its Status and round triggers, which its peer's own Statuses keep spent while chunks are
+  being stored; so the hand-off waited out the window, up to the 31 s hold, even when the next
+  connection in line held the chunk and could have asked at once. In `engine-partition`, P and Q
+  reached the last disk at up to 62.25 s, in 697 of seeds 0 to 1 999 past 45 s. The freed-hash
+  trigger now has a window of its own: it is acted on at most once per `STATUS_INTERVAL` there, or,
+  while that is spent, in the first, the only one Status and round triggers use; a trigger
+  that comes while every window it may use is spent waits for the first of them to end. A kept hash
+  is asked within about a second unless both windows were spent, which the hold still covers. P and
+  Q now reach every disk by 33.5 s in every seed of 0 to 11 999 (mean 31.7 s, was 42.6 s). The
+  cost, stated in TM-22: a third party can restart a waiting peer's pass twice per
+  `STATUS_INTERVAL` instead of once; a key holder that lets one held request go every 1, 2 or 5 s
+  makes an honest peer that lacks 200 chunks receive 1 592 requests in 120 s, against 796 before
+  (and, at one a second, 23 937 with a freed hash acted on outside any window, the option not
+  taken). TM-22's delay bound is unchanged: a third party that spends both windows still meets the
+  hold, which `one_peer_that_spends_both_of_the_holders_trigger_windows_with_decoys_never_keeps_a_chunk`
+  shows (two decoys 5 to 25 s apart before the chunk; never fetched without the hold). No wire change;
+  one more time per folder per connection. Regression tests
+  `a_chunk_kept_for_a_peer_whose_status_spent_the_window_starts_its_pass_1_s_after_the_refusal`
+  (protocol), `a_chunk_kept_for_a_waiting_peer_whose_status_spent_its_window_is_asked_within_a_second`
+  (engine) and `a_chunk_kept_for_a_waiting_connection_reaches_every_disk_by_35_s` (simulator, seeds
+  12, 29, 60, 77 and 91, at 61.5 to 62.25 s before); the bound is kept by a property test,
+  `a_waiting_pass_restarts_at_most_twice_per_status_interval`, over any sequence of Statuses,
+  rounds, freed hashes and refusals, and by
+  `a_peer_that_lets_requests_go_restarts_a_waiting_peers_pass_at_most_twice_per_status_interval`.
+  `a_chunk_kept_for_a_waiting_peer_that_asks_late_counts_its_patience_from_when_it_was_kept` now
+  spends both of the waiting peer's windows to make its ask late: the Status spends the first
+  window, then x's own trigger the freed one.
 - Index, engine: three mutants of the index that tests missed or hung on, and a store rule no test held.
   A tree delete is covered only by a later tree delete: one that arrives after a file at its own path
   whose vector covers its dot (a write-key holder can sign one) is held and drops what it covers

@@ -96,10 +96,24 @@ pub(super) struct FolderChunks {
     /// ([`Connection::pass_skipped`]); cleared when a pass makes its first
     /// request.
     skipped: bool,
-    /// When a trigger was last acted on (at most once per
-    /// `STATUS_INTERVAL`), and whether one waits for that window to end.
+    /// When a trigger was last acted on in [`Window::Any`].
     last_eval: Option<Duration>,
+    /// When a freed hash was last acted on in [`Window::Freed`].
+    last_freed: Option<Duration>,
+    /// A trigger waits for the first window it may use to end.
     pending: bool,
+}
+
+/// The two windows the triggers are acted on in, each at most once per
+/// `STATUS_INTERVAL` (4.6, "Passes"), so that a waiting pass restarts at
+/// most twice in that time, whatever triggers it.
+#[derive(Clone, Copy, Debug)]
+enum Window {
+    /// Any trigger: a Status, a completed round, or a freed hash while its
+    /// own window is spent.
+    Any,
+    /// A freed hash's own.
+    Freed,
 }
 
 /// The triggers other than a Status that fired since the latest
@@ -128,6 +142,7 @@ impl FolderChunks {
             },
             skipped: false,
             last_eval: None,
+            last_freed: None,
             pending: false,
         }
     }
@@ -138,6 +153,32 @@ impl FolderChunks {
     fn triggered(&self) -> bool {
         let baseline = self.latest_not_found.map_or(0, |(_, b)| b);
         self.fired.round || self.fired.freed || self.peer_stored.is_some_and(|s| s > baseline)
+    }
+
+    /// The window the triggers that fired are acted on in at `now`: a freed
+    /// hash's own while it is open, else the one any trigger may use while
+    /// that is open; none while every window they may use is spent.
+    fn window(&self, now: Duration, interval: Duration) -> Option<Window> {
+        let open = |last: Option<Duration>| last.is_none_or(|l| now >= l.saturating_add(interval));
+        if self.fired.freed && open(self.last_freed) {
+            Some(Window::Freed)
+        } else if open(self.last_eval) {
+            Some(Window::Any)
+        } else {
+            None
+        }
+    }
+
+    /// When a deferred trigger is acted on: when the first window it may use
+    /// ends ([`Self::window`]).
+    fn pending_until(&self, interval: Duration) -> Option<Duration> {
+        let end = |last: Option<Duration>| last.map(|l| l.saturating_add(interval));
+        let freed = end(self.last_freed).filter(|_| self.fired.freed);
+        [end(self.last_eval), freed]
+            .into_iter()
+            .flatten()
+            .min()
+            .filter(|_| self.pending)
     }
 }
 
@@ -511,9 +552,10 @@ impl Connection {
     /// "Several connections") made this peer the next to ask for a hash of
     /// `folder` this side lacks, last asked of another connection: a
     /// trigger when the pass skipped such a hash ([`Self::pass_skipped`]),
-    /// remembered whatever the pass is doing, and acted on within the same
-    /// limits as the others (at most once per `STATUS_INTERVAL`, and no
-    /// sooner than 1 s after the latest `CHUNK_NOT_FOUND`).
+    /// remembered whatever the pass is doing, and acted on at most once per
+    /// `STATUS_INTERVAL` in a window of its own or, while that is spent, in
+    /// the one every trigger may use, and no sooner than 1 s after the
+    /// latest `CHUNK_NOT_FOUND`.
     pub fn hash_freed(&mut self, tick: Tick, folder: FolderId) -> Output {
         let mut out = Output::default();
         self.observe(tick, &mut out);
@@ -528,33 +570,19 @@ impl Connection {
     }
 
     /// A trigger may have fired for the folder: acted on now when the pass
-    /// waits for one and one has fired, or, when a trigger was acted on less
-    /// than `STATUS_INTERVAL` ago, kept in one pending bit and acted on when
-    /// the interval has passed: deferred, never dropped. A trigger that fires
-    /// while a pass is still asking is remembered and judged when the pass
-    /// ends ([`Self::pass_done`]).
+    /// waits for one, one has fired, and a window it may use is open
+    /// ([`FolderChunks::window`]); while every such window is spent, kept in
+    /// one pending bit and acted on when the first of them ends: deferred,
+    /// never dropped. Acted on, the next pass starts no sooner than
+    /// `CHUNK_BUSY_BACKOFF`'s minimum after the latest `CHUNK_NOT_FOUND`. A
+    /// trigger that fires while a pass is still asking is remembered and
+    /// judged when the pass ends ([`Self::pass_done`]).
     fn trigger(&mut self, folder: FolderId, out: &mut Output) {
-        let (now, interval) = (self.now, self.config.timing.status);
-        let Some(x) = open_mut(&mut self.folders, &folder) else {
-            return;
-        };
-        let c = &mut x.chunks;
-        if c.pass != (Pass::Waiting { ready_at: None }) || !c.triggered() {
-            return;
-        }
-        if c.last_eval
-            .is_some_and(|l| now < l.saturating_add(interval))
-        {
-            c.pending = true;
-            return;
-        }
-        self.evaluate(folder, out);
-    }
-
-    /// Acts on a trigger that fired: the next pass starts no sooner than
-    /// `CHUNK_BUSY_BACKOFF`'s minimum after the latest `CHUNK_NOT_FOUND`.
-    fn evaluate(&mut self, folder: FolderId, out: &mut Output) {
-        let (now, ready) = (self.now, self.config.timing.busy_backoff);
+        let (now, interval, ready) = (
+            self.now,
+            self.config.timing.status,
+            self.config.timing.busy_backoff,
+        );
         let Some(x) = open_mut(&mut self.folders, &folder) else {
             return;
         };
@@ -563,7 +591,14 @@ impl Connection {
         if c.pass != (Pass::Waiting { ready_at: None }) || !c.triggered() {
             return;
         }
-        c.last_eval = Some(now);
+        match c.window(now, interval) {
+            Some(Window::Any) => c.last_eval = Some(now),
+            Some(Window::Freed) => c.last_freed = Some(now),
+            None => {
+                c.pending = true;
+                return;
+            }
+        }
         let allowed = c
             .latest_not_found
             .map_or(now, |(at, _)| at.saturating_add(ready));
@@ -589,11 +624,7 @@ impl Connection {
                     Pass::Waiting { ready_at } => ready_at,
                     Pass::Free | Pass::Asking { .. } => None,
                 };
-                let pending = c
-                    .last_eval
-                    .filter(|_| c.pending)
-                    .map(|l| l.saturating_add(interval));
-                [ready, pending]
+                [ready, c.pending_until(interval)]
             });
         folders.chain([self.chunks.announce_at]).flatten().min()
     }
@@ -618,11 +649,8 @@ impl Connection {
                 }
                 continue;
             }
-            if c.pending
-                && c.last_eval
-                    .is_none_or(|l| now >= l.saturating_add(interval))
-            {
-                self.evaluate(folder, out);
+            if c.pending_until(interval).is_some_and(|t| now >= t) {
+                self.trigger(folder, out);
             }
         }
     }

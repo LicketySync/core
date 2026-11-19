@@ -26,17 +26,17 @@
 //! quiescent.
 //!
 //! Content takes its time: a chunk pass that met a `CHUNK_NOT_FOUND` waits
-//! for a trigger evaluated at most once per `STATUS_INTERVAL` (`protocol.md`
-//! 4.6), so in a mesh writing at once every chunk is on every disk some 35 s
-//! in; and a hash a refusal frees is kept for the next connection in line
-//! whose pass waits, up to the hold (`STATUS_INTERVAL` and 1 s), while its
-//! trigger waits for that window, even when a connection after it in line
-//! could ask now (4.6, "Several connections"), so one such hand-off makes it
-//! some 65 s (in a third of `engine-partition`'s seeds). A scenario whose
-//! edits must be made over versions already on the editor's disk (an edit
-//! made before is concurrent with the version, 4.4 "Bases"; a delete or a
-//! rename of a path with nothing on the disk is refused) makes them after
-//! that; `engine-partition` checks with a probe that they are there.
+//! for a trigger, acted on at most once per `STATUS_INTERVAL` in each of two
+//! windows (`protocol.md` 4.6), so in a mesh writing at once every chunk is on
+//! every disk some 35 s in. A hash a refusal frees is kept for the next
+//! connection in line whose pass waits, which asks within about a second
+//! unless both its windows are spent, and up to the hold (`STATUS_INTERVAL`
+//! and 1 s) then (4.6, "Several connections"), so such a hand-off can make it
+//! some 65 s. A scenario whose edits must be made over versions already on
+//! the editor's disk (an edit made before is concurrent with the version, 4.4
+//! "Bases"; a delete or a rename of a path with nothing on the disk is
+//! refused) makes them after that; `engine-partition` checks with a probe
+//! that they are there.
 //!
 //! The `engine-identical-*` runs (the `identical` module) are two or three
 //! members that write one path with the same bytes apart, meet, and then
@@ -389,12 +389,13 @@ pub const Q_PATH: &str = "shared/q.txt";
 /// When the cut of `engine-partition` and `engine-tree-delete` begins. In
 /// `engine-partition`, once every peer has P and Q on its disk (the probe
 /// [`p_and_q_on_every_disk`]): a five-peer mesh writing at once has every
-/// chunk some 35 s in, or some 65 s in when a hash was kept for a connection
-/// whose pass waits (the module documentation; at most 62.25 s over seeds 0
-/// to 11 999, first in seed 12); this leaves one more such hand-off. An edit
-/// made before the version it edits is on the editor's disk is concurrent
-/// with it (4.4, "Bases"), which is not what these scenarios test, and a
-/// delete of a path with nothing on the disk is refused.
+/// chunk some 35 s in (at most 33.5 s over seeds 0 to 11 999, first in seed
+/// 7296), or some 65 s in when a hash was kept for a connection whose trigger
+/// windows were both spent (the module documentation); this leaves room for
+/// one such hand-off.
+/// An edit made before the version it edits is on the editor's disk is
+/// concurrent with it (4.4, "Bases"), which is not what these scenarios test,
+/// and a delete of a path with nothing on the disk is refused.
 const CUT_FROM: Instant = Instant::from_secs(95);
 /// When the cut heals.
 const CUT_UNTIL: Instant = Instant::from_secs(115);
@@ -1343,25 +1344,25 @@ mod tests {
         assert_eq!(failure(1), None);
     }
 
-    /// The bug: `engine-partition` began its cut at 45 s and made its edits at
-    /// 50 s, taking every peer to have P and Q on its disk by then. Since a
-    /// hash a refusal frees is kept for the next connection in line whose
-    /// pass waits (4.6, "Several connections"), Q's one chunk, refused to
-    /// peer 0 by peer 4 at 32 s, was kept for its connection to peer 1, whose
-    /// trigger could act only at 62 s, while its connection to peer 2, Q's
-    /// writer, could have asked at once: peer 0's delete of Q at 50 s found
-    /// nothing on its disk and was refused, and the oracle counted it (the
-    /// nightly long runs, seeds 20 and 29). The cut now begins at 95 s, and a
-    /// probe checks that P and Q are on every disk then.
+    /// The bug: a hash a refusal frees is kept for the next connection in
+    /// line whose pass waits (4.6, "Several connections"), and that
+    /// connection's freed-hash trigger shared the one `STATUS_INTERVAL` window
+    /// its own peer's Statuses kept spent. In seed 29, Q's one chunk, refused
+    /// to peer 0 by peer 4 at 32 s, was kept for its connection to peer 1,
+    /// whose trigger could act only at 62 s, while its connection to peer 2,
+    /// Q's writer, could have asked at once; in these seeds P and Q reached
+    /// the last disk at 61.5 to 62.25 s. A freed hash is now acted on in a
+    /// window of its own. The probe the cut relies on ([`CUT_FROM`]) does see
+    /// a peer without them, early on.
     #[test]
-    fn the_partition_cut_waits_for_a_chunk_kept_for_a_waiting_connection() {
+    fn a_chunk_kept_for_a_waiting_connection_reaches_every_disk_by_35_s() {
+        for seed in [12, 29, 60, 77, 91] {
+            let mut run = partition(seed);
+            run.sim.run_until(Instant::from_secs(35));
+            assert_eq!(p_and_q_on_every_disk(&run), Ok(()), "seed {seed}");
+        }
         let mut run = partition(29);
-        run.sim.run_until(Instant::from_secs(50));
-        assert_eq!(
-            p_and_q_on_every_disk(&run),
-            Err("p0 does not have Q on its disk".to_owned())
-        );
-        run.sim.run_until(CUT_FROM);
-        assert_eq!(p_and_q_on_every_disk(&run), Ok(()));
+        run.sim.run_until(Instant::from_secs(5));
+        assert!(p_and_q_on_every_disk(&run).is_err(), "the probe sees one");
     }
 }

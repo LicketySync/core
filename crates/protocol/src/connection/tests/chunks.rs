@@ -1136,13 +1136,14 @@ fn skipped_then_freed(p: &mut Pair) {
 }
 
 #[test]
-fn a_freed_hash_is_a_trigger_within_the_other_triggers_limits() {
+fn a_freed_hash_is_a_trigger_in_its_own_window_or_the_first() {
     // The waiting-pass residual (TM-22): a pass that got a CHUNK_NOT_FOUND
     // waited for a Status with more chunks stored or a completed round, which
     // a quiet folder may never bring, while another connection held a
     // request for a hash A has. A freed hash is a trigger, no sooner than
-    // 1 s after the latest CHUNK_NOT_FOUND and at most once per
-    // STATUS_INTERVAL, the later one deferred, never dropped.
+    // 1 s after the latest CHUNK_NOT_FOUND, acted on at most once per
+    // STATUS_INTERVAL in its own window or, while that is spent, in the
+    // first; a third within that time is deferred, never dropped.
     let mut p = Pair::open();
     let f = p.a.folder_id();
     p.a.auto = false;
@@ -1158,11 +1159,20 @@ fn a_freed_hash_is_a_trigger_within_the_other_triggers_limits() {
     wake_b_until(&mut p, nf_at + s(1));
     assert!(allowed(&p));
     assert_eq!(p.b.conn.chunk_position(Tick::at(p.now), &f), Ok(None));
-    // Again within STATUS_INTERVAL of the one acted on: deferred.
+    // Again within STATUS_INTERVAL of the one acted on: in the first
+    // window, 1 s after its CHUNK_NOT_FOUND.
     let eval = nf_at + Duration::from_millis(300);
     p.b.events.clear();
     p.now += s(2);
-    waiting_on(&mut p, CipherHash([2; 32]));
+    let nf2 = waiting_on(&mut p, CipherHash([2; 32]));
+    skipped_then_freed(&mut p);
+    assert!(!allowed(&p), "not before 1 s");
+    wake_b_until(&mut p, nf2 + s(1));
+    assert!(allowed(&p), "acted on in the first window");
+    // A third: both windows spent, deferred to the end of the freed one.
+    p.b.events.clear();
+    p.now += s(2);
+    waiting_on(&mut p, CipherHash([3; 32]));
     skipped_then_freed(&mut p);
     assert!(!allowed(&p), "deferred");
     wake_b_until(&mut p, eval + s(30) - Duration::from_millis(1));
@@ -1242,8 +1252,8 @@ fn a_freed_hash_is_a_trigger_only_for_a_pass_that_skipped_one() {
 
 #[test]
 fn a_trigger_is_deferred_only_when_the_pass_waits_and_one_has_fired() {
-    // Inside the window after a trigger was acted on, a freed hash for a
-    // pass that skipped none is no trigger: nothing is kept for the
+    // Inside both windows after triggers were acted on in them, a freed hash
+    // for a pass that skipped none is no trigger: nothing is kept for a
     // window's end, and no wake is armed for it.
     let mut p = Pair::open();
     let f = p.a.folder_id();
@@ -1253,12 +1263,411 @@ fn a_trigger_is_deferred_only_when_the_pass_waits_and_one_has_fired() {
     skipped_then_freed(&mut p);
     wake_b_until(&mut p, nf_at + s(1));
     assert_eq!(p.b.conn.chunk_position(Tick::at(p.now), &f), Ok(None));
+    // The first window spent too, by a Status.
+    let nf2 = waiting_on(&mut p, CipherHash([2; 32]));
+    p.b.receive(p.now, &status_frame(&f, 1));
+    wake_b_until(&mut p, nf2 + s(1));
+    assert_eq!(p.b.conn.chunk_position(Tick::at(p.now), &f), Ok(None));
     p.now += s(2);
-    waiting_on(&mut p, CipherHash([2; 32]));
+    waiting_on(&mut p, CipherHash([3; 32]));
     assert!(!p.b.conn.skipped(&f));
     hash_freed(&mut p);
     assert_eq!(p.b.conn.chunks_wake(), None, "nothing deferred");
-    // A trigger that fired is deferred to the window's end.
+    // A trigger that fired is deferred to the end of the first window it
+    // may use.
     skipped_then_freed(&mut p);
     assert_eq!(p.b.conn.chunks_wake(), Some(nf_at + s(30)));
+}
+
+/// A round of B's with A completes, as when its last frame arrives (the
+/// connection's clock moved on first, and its wake-up worked out after).
+fn round_completed(p: &mut Pair) -> Vec<Event> {
+    let f = p.a.folder_id();
+    let mut out = crate::connection::Output::default();
+    p.b.conn.observe(Tick::at(p.now), &mut out);
+    p.b.conn.round_completed_for_chunks(f, &mut out);
+    p.b.conn.finish(&mut out);
+    p.b.apply(p.now, out)
+}
+
+/// B's engine runs the pass it was allowed: one request, refused.
+fn refused_pass(p: &mut Pair, h: u8) -> Duration {
+    assert_eq!(
+        p.b.conn.chunk_position(Tick::at(p.now), &p.a.folder_id()),
+        Ok(None)
+    );
+    waiting_on(p, CipherHash([h; 32]))
+}
+
+#[test]
+fn a_chunk_kept_for_a_peer_whose_status_spent_the_window_starts_its_pass_1_s_after_the_refusal() {
+    // The bug: a hash kept for a waiting connection (4.6, "Several
+    // connections") waited for the one window every trigger shared, which
+    // the peer's own Status had spent: up to 30 s, while another connection
+    // that held the chunk could have asked at once. A freed hash is acted on
+    // in a window of its own.
+    let mut p = Pair::open();
+    let f = p.a.folder_id();
+    p.a.auto = false;
+    p.b.auto = false;
+    let allowed = |p: &Pair| p.b.saw(|e| matches!(e, Event::PassAllowed { .. }));
+    let nf = waiting_on(&mut p, CipherHash([1; 32]));
+    p.now += s(1);
+    p.b.receive(p.now, &status_frame(&f, 1));
+    assert!(allowed(&p), "the Status spends the first window");
+    p.b.events.clear();
+    p.now += s(4);
+    let nf2 = refused_pass(&mut p, 2);
+    p.now += Duration::from_millis(300);
+    skipped_then_freed(&mut p);
+    assert!(!allowed(&p), "not before 1 s");
+    wake_b_until(&mut p, nf2 + s(1) - Duration::from_millis(1));
+    assert!(!allowed(&p));
+    wake_b_until(&mut p, nf2 + s(1));
+    assert!(
+        allowed(&p),
+        "1 s after the refusal, not at {:?}",
+        nf + s(31)
+    );
+}
+
+#[test]
+fn a_status_or_a_round_after_a_freed_restart_is_not_held_back_by_it() {
+    // A freed hash acted on in its own window leaves the first open: a
+    // Status or a completed round after it starts the pass 1 s after the
+    // latest CHUNK_NOT_FOUND.
+    for round in [false, true] {
+        let mut p = Pair::open();
+        let f = p.a.folder_id();
+        p.a.auto = false;
+        p.b.auto = false;
+        let allowed = |p: &Pair| p.b.saw(|e| matches!(e, Event::PassAllowed { .. }));
+        let nf = waiting_on(&mut p, CipherHash([1; 32]));
+        skipped_then_freed(&mut p);
+        wake_b_until(&mut p, nf + s(1));
+        assert!(allowed(&p));
+        p.b.events.clear();
+        p.now += s(2);
+        let nf2 = refused_pass(&mut p, 2);
+        p.now += s(2);
+        if round {
+            round_completed(&mut p);
+        } else {
+            p.b.receive(p.now, &status_frame(&f, 1));
+        }
+        assert!(
+            allowed(&p),
+            "round {round}: at once, {:?} after",
+            p.now - nf2
+        );
+    }
+}
+
+#[test]
+fn a_status_or_a_round_is_never_acted_on_in_the_freed_hash_window() {
+    // A freed hash, then a Status, spend both windows; a Status or a
+    // completed round then waits for the end of the first, not of the freed
+    // hash's, which ends sooner.
+    for round in [false, true] {
+        let mut p = Pair::open();
+        let f = p.a.folder_id();
+        p.a.auto = false;
+        p.b.auto = false;
+        let allowed = |p: &Pair| p.b.saw(|e| matches!(e, Event::PassAllowed { .. }));
+        let freed_at = waiting_on(&mut p, CipherHash([1; 32]));
+        skipped_then_freed(&mut p);
+        wake_b_until(&mut p, freed_at + s(1));
+        p.now += s(2);
+        refused_pass(&mut p, 2);
+        p.now += s(1);
+        let first = p.now;
+        p.b.receive(p.now, &status_frame(&f, 1));
+        wake_b_until(&mut p, first + s(1));
+        p.b.events.clear();
+        refused_pass(&mut p, 3);
+        p.now += s(2);
+        if round {
+            round_completed(&mut p);
+        } else {
+            p.b.receive(p.now, &status_frame(&f, 2));
+        }
+        assert!(!allowed(&p), "round {round}: deferred");
+        assert_eq!(p.b.conn.chunks_wake(), Some(first + s(30)));
+        wake_b_until(&mut p, first + s(30) - Duration::from_millis(1));
+        assert!(!allowed(&p), "round {round}: not at the freed window's end");
+        wake_b_until(&mut p, first + s(30));
+        assert!(allowed(&p), "round {round}: at the first window's end");
+    }
+}
+
+#[test]
+fn a_freed_hash_while_both_windows_are_spent_waits_for_the_first_to_end() {
+    // Whichever window ends first, a freed hash deferred while both are
+    // spent is acted on then, never dropped.
+    for freed_first in [false, true] {
+        let mut p = Pair::open();
+        let f = p.a.folder_id();
+        p.a.auto = false;
+        p.b.auto = false;
+        let allowed = |p: &Pair| p.b.saw(|e| matches!(e, Event::PassAllowed { .. }));
+        let nf = waiting_on(&mut p, CipherHash([1; 32]));
+        p.now += s(1);
+        let first = p.now;
+        if freed_first {
+            skipped_then_freed(&mut p);
+        } else {
+            p.b.receive(p.now, &status_frame(&f, 1));
+        }
+        assert!(allowed(&p));
+        p.b.events.clear();
+        p.now += s(4);
+        let nf2 = refused_pass(&mut p, 2);
+        p.now += s(1);
+        if freed_first {
+            p.b.receive(p.now, &status_frame(&f, 1));
+        } else {
+            skipped_then_freed(&mut p);
+        }
+        assert!(allowed(&p), "freed first {freed_first}: the other window");
+        p.b.events.clear();
+        p.now += s(4);
+        refused_pass(&mut p, 3);
+        p.now += s(1);
+        skipped_then_freed(&mut p);
+        assert!(!allowed(&p), "freed first {freed_first}: deferred");
+        assert_eq!(p.b.conn.chunks_wake(), Some(first + s(30)));
+        wake_b_until(&mut p, first + s(30) - Duration::from_millis(1));
+        assert!(!allowed(&p));
+        wake_b_until(&mut p, first + s(30));
+        assert!(allowed(&p), "freed first {freed_first}: {nf:?} {nf2:?}");
+    }
+}
+
+/// What [`Script`] tells B's connection.
+#[derive(Clone, Copy, Debug)]
+enum Fire {
+    /// A Status whose `chunks_stored` grows by one when `.0`, or stays
+    /// (never falling, 4.5, so that what has fired stays fired until the next
+    /// `CHUNK_NOT_FOUND`).
+    Status(bool),
+    Round,
+    /// A freed hash, after a pass that skipped one when `.0`.
+    Freed(bool),
+    /// The answer, `CHUNK_NOT_FOUND`, to the request a pass left
+    /// outstanding.
+    LateRefusal,
+}
+
+/// What the triggers mean, kept apart from the connection's own state.
+#[derive(Default)]
+struct Model {
+    round: bool,
+    freed: bool,
+    skipped: bool,
+    stored: u64,
+    baseline: u64,
+}
+
+impl Model {
+    fn triggered(&self) -> bool {
+        self.round || self.freed || self.stored > self.baseline
+    }
+
+    fn refused(&mut self) {
+        (self.round, self.freed, self.baseline) = (false, false, self.stored);
+    }
+}
+
+/// B's engine, scripted: whenever a pass may start it asks for one hash,
+/// refused at once, and, when none is outstanding, for one more it leaves
+/// unanswered.
+struct Script {
+    p: Pair,
+    model: Model,
+    next: u16,
+    outstanding: Option<CipherHash>,
+    /// When each pass the triggers allowed started.
+    starts: Vec<Duration>,
+}
+
+impl Script {
+    fn new() -> Self {
+        let mut p = Pair::open();
+        p.a.auto = false;
+        p.b.auto = false;
+        let mut script = Self {
+            p,
+            model: Model::default(),
+            next: 0,
+            outstanding: None,
+            starts: Vec::new(),
+        };
+        script.run();
+        script
+    }
+
+    fn hash(&mut self) -> CipherHash {
+        self.next += 1;
+        let mut h = [0_u8; 32];
+        h[..2].copy_from_slice(&self.next.to_be_bytes());
+        CipherHash(h)
+    }
+
+    fn run(&mut self) {
+        let f = self.p.a.folder_id();
+        let asked = self.hash();
+        self.p.b.request_chunk(self.p.now, asked).unwrap();
+        self.model.skipped = false;
+        if self.outstanding.is_none() {
+            let left = self.hash();
+            self.p.b.request_chunk(self.p.now, left).unwrap();
+            self.outstanding = Some(left);
+        }
+        self.p
+            .b
+            .receive(self.p.now, &frame(&reply(&f, asked, 2, vec![])));
+        self.model.refused();
+        self.p.b.pass_done(self.p.now);
+        assert_eq!(
+            self.p.b.conn.chunk_position(Tick::at(self.p.now), &f),
+            Err(SendError::PassWaiting)
+        );
+    }
+
+    /// Runs a pass when `events` allowed one.
+    fn react(&mut self, events: &[Event]) {
+        if events
+            .iter()
+            .any(|e| matches!(e, Event::PassAllowed { .. }))
+        {
+            assert!(self.model.triggered(), "a pass started with no trigger");
+            self.starts.push(self.p.now);
+            self.run();
+        }
+    }
+
+    /// Fires B's wake-ups up to `to`. B's own Status, when due, keeps the
+    /// connection from going idle.
+    fn until(&mut self, to: Duration) {
+        let mut stuck = 0_u32;
+        while let Some(at) = self.p.b.wake.filter(|at| *at <= to) {
+            stuck = if at > self.p.now { 0 } else { stuck + 1 };
+            assert!(stuck < 10_000, "a wake-up at {at:?} that never clears");
+            self.p.now = self.p.now.max(at);
+            let out = self.p.b.conn.wake(Tick::at(self.p.now));
+            let events = self.p.b.apply(self.p.now, out);
+            if events.iter().any(|e| matches!(e, Event::StatusDue)) {
+                self.p.b.status(self.p.now).unwrap();
+            }
+            self.react(&events);
+        }
+        self.p.now = to;
+    }
+
+    fn fire(&mut self, fire: Fire) {
+        let (f, now) = (self.p.a.folder_id(), self.p.now);
+        let events = match fire {
+            Fire::Status(grows) => {
+                self.model.stored += u64::from(grows);
+                self.p.b.receive(now, &status_frame(&f, self.model.stored))
+            }
+            Fire::Round => {
+                self.model.round = true;
+                round_completed(&mut self.p)
+            }
+            Fire::Freed(skip) => {
+                if skip {
+                    self.p.b.conn.pass_skipped(f);
+                    self.model.skipped = true;
+                }
+                self.model.freed |= self.model.skipped;
+                let out = self.p.b.conn.hash_freed(Tick::at(now), f);
+                self.p.b.apply(now, out)
+            }
+            Fire::LateRefusal => match self.outstanding.take() {
+                Some(left) => {
+                    self.model.refused();
+                    self.p.b.receive(now, &frame(&reply(&f, left, 2, vec![])))
+                }
+                None => Vec::new(),
+            },
+        };
+        self.react(&events);
+    }
+}
+
+/// [`Script`] with `fires` coming `.0` ms apart. A trigger outstanding when
+/// they end must start one pass within `wait_after`, and none must start
+/// without one. Returns when each pass the triggers allowed started, and
+/// when the fires ended.
+fn restarts(fires: &[(u64, Fire)], wait_after: Duration) -> (Vec<Duration>, Duration) {
+    let mut b = Script::new();
+    for &(gap, fire) in fires {
+        b.until(b.p.now + Duration::from_millis(gap));
+        b.fire(fire);
+    }
+    let (end, fired, before) = (b.p.now, b.model.triggered(), b.starts.len());
+    b.until(end + wait_after);
+    let after = &b.starts[before..];
+    assert_eq!(
+        after.len(),
+        usize::from(fired),
+        "a trigger outstanding at the end ({fired}) starts one pass within {wait_after:?}: {after:?}"
+    );
+    (b.starts, end)
+}
+
+fn fire() -> impl proptest::strategy::Strategy<Value = Fire> {
+    use proptest::prelude::*;
+    prop_oneof![
+        any::<bool>().prop_map(Fire::Status),
+        Just(Fire::Round),
+        any::<bool>().prop_map(Fire::Freed),
+        Just(Fire::LateRefusal),
+    ]
+}
+
+proptest::proptest! {
+    #![proptest_config(crate::testkit::proptest_config(256))]
+
+    /// TM-22: whatever sequence of Statuses, rounds, freed hashes and
+    /// refusals, a waiting pass restarts at most twice per STATUS_INTERVAL
+    /// (one window each for any trigger and for a freed hash): no three
+    /// passes start within it, less the 1 s a pass may wait after the
+    /// trigger was acted on. A trigger is deferred, never dropped: one
+    /// outstanding when the sequence ends starts a pass within
+    /// STATUS_INTERVAL, and none starts without one.
+    #[test]
+    fn a_waiting_pass_restarts_at_most_twice_per_status_interval(
+        fires in proptest::collection::vec((0_u64..=12_000, fire()), 1..80),
+    ) {
+        let (starts, _) = restarts(&fires, s(31));
+        for three in starts.windows(3) {
+            proptest::prop_assert!(
+                three[2] - three[0] >= s(29),
+                "three passes within {:?}: {starts:?}",
+                three[2] - three[0]
+            );
+        }
+    }
+}
+
+#[test]
+fn freed_hashes_every_second_restart_a_waiting_pass_twice_per_status_interval() {
+    // The cost TM-22 states for the freed hash's own window: a third party
+    // that lets a held request go every second (a freed hash each time) and
+    // the refusals that follow restart the pass twice per STATUS_INTERVAL,
+    // no more.
+    let fires: Vec<(u64, Fire)> = (0..300)
+        .flat_map(|_| [(500, Fire::Freed(true)), (500, Fire::LateRefusal)])
+        .collect();
+    let (starts, end) = restarts(&fires, s(31));
+    assert_eq!(end, s(300));
+    for three in starts.windows(3) {
+        assert!(three[2] - three[0] >= s(29), "{starts:?}");
+    }
+    // At 1 and 2 s, then 0.5 and 2 s into each STATUS_INTERVAL after the
+    // first freed hash (its own window, then the first), the last at 300.5 s.
+    assert_eq!(starts.len(), 21, "{starts:?}");
+    assert_eq!(starts[2..4], [s(30) + Duration::from_millis(500), s(32)]);
 }

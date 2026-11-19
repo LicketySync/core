@@ -2836,15 +2836,18 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
   has fired, a Status from the peer showing a `chunks_stored` greater than in its last Status before
   the latest `CHUNK_NOT_FOUND`, a completed round with that peer, or a freed hash, after a pass that
   skipped a hash for another connection's request or turn (below, "Several connections"), and no
-  sooner than 1 s (`CHUNK_BUSY_BACKOFF`'s minimum) after the latest `CHUNK_NOT_FOUND`; the requester
-  evaluates the trigger at most once per `STATUS_INTERVAL`, and a trigger that comes inside that
-  window is deferred, by one pending bit, and evaluated, on the peer's latest `chunks_stored`, when
-  the window ends, never dropped. Per
-  folder per connection the state is fixed, whatever the number of hashes: the pass's position and
-  whether it got a `CHUNK_NOT_FOUND`, or, while it waits, when it may start once a trigger has
-  fired; the peer's latest `chunks_stored`, and its value at the latest `CHUNK_NOT_FOUND`, with that
-  answer's time; when a trigger was last evaluated, and the pending bit; one bit each for a
-  completed round and a freed hash since that answer; and one for a hash the latest pass skipped.
+  sooner than 1 s (`CHUNK_BUSY_BACKOFF`'s minimum) after the latest `CHUNK_NOT_FOUND`. The requester
+  acts on the triggers that fired in two windows, each at most once per `STATUS_INTERVAL`: when a
+  freed hash has fired, in a window of its own while that is open, whatever else fired; otherwise in
+  the first, the only one a Status or a completed round uses; so a waiting pass restarts at most
+  twice per `STATUS_INTERVAL`. A trigger that comes while every window it may use is spent is
+  deferred, by one pending bit, and acted on, on the peer's latest `chunks_stored`, when the first
+  of them ends, never dropped. Per folder per connection the state is fixed, whatever the number of
+  hashes: the pass's position and whether it got a `CHUNK_NOT_FOUND`, or, while it waits, when it
+  may start once a trigger has fired; the peer's latest `chunks_stored`, and its value at the latest
+  `CHUNK_NOT_FOUND`, with that answer's time; when a trigger was last acted on in each window, and
+  the pending bit; one bit each for a completed round and a freed hash since that answer; and one
+  for a hash the latest pass skipped.
   Status comes at least every `STATUS_INTERVAL` (4.5), so a peer that fetches a chunk it lacked is
   asked again within about twice that.
 - **Several connections** (the requester's own rule; nothing on the wire). A hash asked of one
@@ -2870,13 +2873,15 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
   freed-hash trigger (above), again whenever it runs the passes while the hash is kept (a
   `CHUNK_NOT_FOUND` spends every trigger fired before it), and asks no other connection for the hash
   until this one asks for it, its connection ends, or `STATUS_INTERVAL` and 1 s (31 s, the hold)
-  have passed, when its turn ends. The requester looks for such hashes before, between and after its
-  runs of the passes, which run again until the connections that may ask and those that wait stay
-  the same. A request for a hash kept for the connection counts its patience from when the hash was
-  kept, so that a turn lasts at most the patience. So a peer that holds a request and never answers,
-  refuses it or disconnects delays the hash by its turn, and cannot keep it from a peer that holds
-  it, whether that peer's pass waits or has filled its room, short of the residuals threat model
-  TM-22 states.
+  have passed, when its turn ends. The trigger acts at once, and the pass starts then or 1 s after
+  the connection's latest `CHUNK_NOT_FOUND`, unless both windows it may use are spent (above); the
+  hold covers that case and a peer that keeps its own trigger from acting. The requester looks for
+  such hashes before, between and after its runs of the passes, which run again until the
+  connections that may ask and those that wait stay the same. A request for a hash kept for the
+  connection counts its patience from when the hash was kept, so that a turn lasts at most the
+  patience. So a peer that holds a request and never answers, refuses it or disconnects delays the
+  hash by its turn, and cannot keep it from a peer that holds it, whether that peer's pass waits or
+  has filled its room, short of the residuals threat model TM-22 states.
 - On receipt the requester first checks that `data` is at most 4 325 416 bytes (longer is
   **malformed**, before any hash is computed), then `H("licketysync/v1/hash/chunk", data) = cipher_hash`.
   A mismatch is **forged** (section 5): the sender delivered bytes that are not the chunk it named.
@@ -3757,9 +3762,11 @@ interval in section 5's constants is a vector.
    lacks 1 of 100 chunks the requester needs serves the other 99 at once in one pass in ascending
    `cipher_hash` order (one `CHUNK_NOT_FOUND`, 99 `CHUNK_OK`), the missing hash asked of another
    open peer at once, and no next pass to that peer until its Status shows a greater `chunks_stored`
-   or a round with it completes, and not before 1 s; a trigger that comes inside the
-   `STATUS_INTERVAL` window (deferred, then acted on when the window ends) and two that come inside
-   one window (one pass); a peer that answered `CHUNK_NOT_FOUND`, then fetches the chunk from a
+   or a round with it completes, and not before 1 s; a Status that comes inside the first window
+   (deferred, then acted on when the window ends) and two that come inside it (one pass); a freed
+   hash after a Status spent the first window (acted on in its own, 1 s after the latest
+   `CHUNK_NOT_FOUND`) and one while both windows are spent (deferred to the end of the first of
+   them); a peer that answered `CHUNK_NOT_FOUND`, then fetches the chunk from a
    third peer and sends a Status with a greater `chunks_stored`, asked again in the next pass and
    serving the chunk on the same connection (`CHUNK_OK`); a request with no `cipher_hash`
    (malformed); an unsolicited reply (`Close(PROTOCOL_ERROR)`); a request from a peer that reports

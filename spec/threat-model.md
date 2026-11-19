@@ -1292,13 +1292,20 @@ section 3.3), and the chunk state already holds at least about 120 bytes for eac
 hash in the lacking set and its position in each record that names it, besides the record), so the
 table grows in proportion to it: 65 536 lacking chunks cost at most about 20 MB more. The freed-hash
 trigger lets a third party restart a waiting peer's pass, within the bound every trigger shares: at
-most once per `STATUS_INTERVAL` (30 s) per folder per connection, and no sooner than 1 s after that
-peer's latest `CHUNK_NOT_FOUND`. One restart costs that peer at worst one chunk request (74 bytes)
-and one `CHUNK_NOT_FOUND` (76 bytes, before the channel's own overhead) for each chunk the requester
-lacks and may ask it for, at most `max_requests_in_flight` of them outstanding at once: what an
-active folder already costs, since each chunk the peer stores restarts its pass the same way through
-its Status. Two residuals: while some hash stays held elsewhere, a waiting peer whose pass skipped
-it can be triggered for another free hash it lacks, and asked for what it lacks again, at most once
+most twice per `STATUS_INTERVAL` (30 s) per folder per connection, once in each of its two windows
+(a Status or a completed round acts only in the first, a freed hash in either), and no sooner than
+1 s after that peer's latest `CHUNK_NOT_FOUND`. One restart costs that peer at worst one chunk
+request (74 bytes) and one `CHUNK_NOT_FOUND` (76 bytes, before the channel's own overhead) for each
+chunk the requester lacks and may ask it for, at most `max_requests_in_flight` of them outstanding
+at once: what an active folder already costs, since each chunk the peer stores restarts its pass the
+same way through its Status. The freed hash's own window doubles what a third party can cost that
+peer, from one restart to two per `STATUS_INTERVAL`, however often it lets requests go (a refusal a
+second makes exactly twice the requests one window allowed), so that a hash kept for a waiting peer
+whose Status spent the first window is asked within about a second rather than up to 31 s; it
+changes no delay bound above: a third party that spends both windows (two decoy freed hashes, or one
+after the peer's own Status) still meets the hold. Two residuals: while some hash stays held
+elsewhere, a waiting peer whose pass skipped it can be triggered for another free hash it lacks, and
+asked for what it lacks again, at most twice
 per `STATUS_INTERVAL` per folder per connection, as above; and a peer whose latest pass never met a
 hash held elsewhere, because the pass ended before the device came to lack the hash or went on above
 it, is not counted in line for it, so a hash that peer stored before its latest `CHUNK_NOT_FOUND`

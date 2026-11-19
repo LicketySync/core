@@ -153,12 +153,14 @@ fn a_pending_free_chunk_named_again_is_no_change_of_state_at_the_recheck() {
 /// had Q on its disk (Q's chunk kept for a connection whose pass waited,
 /// until 62 s), so peer 0's delete of Q was refused and the oracle counted
 /// it. The nightly long runs failed so in seed 20 before the signed
-/// watermark changed the engine's behaviour, and in seed 29 since. Seed 12
-/// is the first of seeds 0 to 11 999 whose P and Q reach every disk as late
-/// as any (62.25 s), which guards the cut's margin.
+/// watermark changed the engine's behaviour, and in seed 29 since. Seeds 12,
+/// 29, 60, 77 and 91 had P and Q on every disk only at 61.5 to 62.25 s
+/// before a freed hash's trigger got a window of its own, and by 32.5 s
+/// since; seed 7296 is the first of seeds 0 to 11 999 whose P and Q reach
+/// every disk as late as any since (33.5 s). They guard the cut's margin.
 #[test]
 fn the_partition_cut_waits_for_a_chunk_kept_for_a_waiting_connection() {
-    for seed in [12, 20, 29] {
+    for seed in [12, 20, 29, 60, 77, 91, 7296] {
         check("engine-partition", seed).unwrap_or_else(|e| panic!("{e}"));
     }
 }

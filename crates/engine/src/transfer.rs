@@ -415,10 +415,10 @@ impl Engine {
         // the passes run, again, over those still able, until the connections
         // that may ask and those whose passes wait stay the same. Within one
         // handler a connection goes from asking to waiting, back to asking
-        // once its trigger acts (at most once: the trigger acts at most once
-        // per `STATUS_INTERVAL`, and a pass it starts cannot come to wait
-        // before a `CHUNK_NOT_FOUND` arrives), and out (its room full), so
-        // this ends after at most three changes per connection.
+        // once its trigger acts (at most once: a pass the trigger starts
+        // cannot come to wait before a `CHUNK_NOT_FOUND` arrives), and out
+        // (its room full), so this ends after at most three changes per
+        // connection.
         let runs = self
             .open_on(&folder)
             .len()

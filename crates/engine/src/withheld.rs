@@ -104,8 +104,8 @@ fn errors(net: &Net) -> u64 {
 }
 
 /// What [`aimed_at_the_window`] set up: node 2 asks; node 3 holds h.bin;
-/// node 0 holds node 2's request for h; node 1 wrote y.bin and z.bin, which
-/// nobody can fetch.
+/// node 0 holds node 2's request for h; node 1 wrote y.bin and z.bin, and
+/// w.bin if [`aimed_with_two_decoys`] set it up, which nobody can fetch.
 struct Aimed {
     net: Net,
     record: RecordHash,
@@ -113,6 +113,7 @@ struct Aimed {
     h: CipherHash,
     y: CipherHash,
     z: CipherHash,
+    w: Option<CipherHash>,
 }
 
 impl Aimed {
@@ -127,6 +128,16 @@ impl Aimed {
 /// Node 0 is asked for y, z and h and lets z go, so that node 3 is asked
 /// for z, refuses it and waits, its pass having skipped h and y.
 fn aimed_at_the_window(holder_first: bool) -> Aimed {
+    aimed(holder_first, false)
+}
+
+/// As [`aimed_at_the_window`], with a second decoy: node 1 writes w.bin
+/// too, which node 0 is asked for and node 3's pass skips.
+fn aimed_with_two_decoys(holder_first: bool) -> Aimed {
+    aimed(holder_first, true)
+}
+
+fn aimed(holder_first: bool, two: bool) -> Aimed {
     let mut net = Net::new((0..4).map(key_config).collect());
     net.gate.rules.extend([
         (0, 2, MessageType::ChunkReply, None),
@@ -144,6 +155,7 @@ fn aimed_at_the_window(holder_first: bool) -> Aimed {
     net.advance(Duration::from_secs(2));
     let y_record = write(&mut net, 1, "y.bin", &[4u8; 500]).unwrap();
     let z_record = write(&mut net, 1, "z.bin", &[5u8; 500]).unwrap();
+    let w_record = two.then(|| write(&mut net, 1, "w.bin", &[6u8; 500]).unwrap());
     net.advance(Duration::from_secs(2));
     let content = vec![9u8; 500];
     let record = write(&mut net, 3, "h.bin", &content).unwrap();
@@ -152,11 +164,13 @@ fn aimed_at_the_window(holder_first: bool) -> Aimed {
         first_chunk(&net, 2, y_record),
         first_chunk(&net, 2, z_record),
     );
+    let w = w_record.map(|r| first_chunk(&net, 2, r));
     assert_eq!(
         [y, z, h].map(|c| asked(&net, 2, 0, c)),
         [1, 1, 1],
         "node 0 holds them"
     );
+    assert!(w.is_none_or(|w| asked(&net, 2, 0, w) == 1));
     net.deliver(0, 2, |f| chunk_hash(f) == Some(z));
     assert_eq!(asked(&net, 2, 3, h), 0);
     Aimed {
@@ -166,20 +180,24 @@ fn aimed_at_the_window(holder_first: bool) -> Aimed {
         h,
         y,
         z,
+        w,
     }
 }
 
 /// How node 0 of [`aimed_at_the_window`] lets go of y, if it does: `at`
-/// seconds after it was last asked for h, or at once whenever asked.
+/// seconds after it was last asked for h, or at once whenever asked; or,
+/// set up by [`aimed_with_two_decoys`], y `.0` s after it was last asked
+/// for h and w `.1` s after y.
 #[derive(Clone, Copy, Debug)]
 enum LetY {
     At(u64),
     AtOnce,
+    Two(u64, u64),
 }
 
-/// Node 0 refuses z whenever asked, y as `let_y` says (a freed hash node 3
-/// is owed, which makes node 3's trigger act and spends its window), and h
-/// 59 s after each ask, inside the patience, reporting one more chunk
+/// Node 0 refuses z whenever asked, y (and w) as `let_y` says (a freed hash
+/// node 3 is owed, which makes node 3's trigger act and spends a window of
+/// its), and h 59 s after each ask, inside the patience, reporting one more chunk
 /// stored so that its own pass asks for h again a second later. Node 3,
 /// when `every` is given, stores a chunk every `every.0` s at `every.1`, so
 /// that its own Status restarts its pass too. Returns the second at which
@@ -200,13 +218,20 @@ fn let_go_into_the_window(
             (seen, asked_at) = (now_seen, second);
         }
         a.net.deliver(0, 2, |f| chunk_hash(f) == Some(z));
-        let y_now = match let_y {
-            Some(LetY::At(after)) => second == asked_at + after,
-            Some(LetY::AtOnce) => true,
-            None => false,
+        let (y_now, w_now) = match let_y {
+            Some(LetY::At(after)) => (second == asked_at + after, false),
+            Some(LetY::AtOnce) => (true, false),
+            Some(LetY::Two(after, apart)) => (
+                second == asked_at + after,
+                second == asked_at + after + apart,
+            ),
+            None => (false, false),
         };
         if y_now {
             a.net.deliver(0, 2, |f| chunk_hash(f) == Some(y));
+        }
+        if let Some(w) = a.w.filter(|_| w_now) {
+            a.net.deliver(0, 2, |f| chunk_hash(f) == Some(w));
         }
         if every.is_some_and(|(every, phase)| second % every == phase) {
             more_stored(&mut a.net, 3);
@@ -244,6 +269,24 @@ fn one_peer_that_lets_go_of_a_chunk_while_the_holders_trigger_cannot_act_never_k
             let a = aimed_at_the_window(holder_first);
             let at = let_go_into_the_window(a, let_y, None, bound(1));
             assert!(at.is_some(), "{holder_first} {let_y:?}");
+        }
+    }
+}
+
+#[test]
+fn one_peer_that_spends_both_of_the_holders_trigger_windows_with_decoys_never_keeps_a_chunk() {
+    // Attack 2 against both windows: a decoy freed hash node 3 is owed
+    // spends one of its windows, and a freed hash may use either, so node 0
+    // lets two go, y and then w 5 to 25 s later, both before h. When h is
+    // kept for node 3 both windows are spent; the hold keeps h for it until
+    // the first of them ends, within TM-22's bound. With a waiting
+    // connection in line only while a window it may use is open, h went
+    // back to node 0 each time and node 3 was never asked for it.
+    for holder_first in [false, true] {
+        for apart in [5, 10, 15, 20, 25] {
+            let a = aimed_with_two_decoys(holder_first);
+            let at = let_go_into_the_window(a, Some(LetY::Two(33, apart)), None, bound(1));
+            assert!(at.is_some(), "{holder_first} {apart}");
         }
     }
 }
@@ -813,16 +856,10 @@ fn a_peer_that_keeps_its_trigger_from_acting_holds_a_chunk_kept_for_it_only_the_
     assert_eq!(errors(&k.net), 0);
 }
 
-#[test]
-fn a_chunk_kept_for_a_waiting_peer_that_asks_late_counts_its_patience_from_when_it_was_kept() {
-    // Node 4's trigger window is spent 10 s before x is kept for it (a
-    // Status of its with one more chunk stored restarts its pass), so it
-    // asks for x 20 s into its turn and never answers. Its turn ends 60 s
-    // after x was kept for it, not 60 s after it asked. Node 3 holds what
-    // it is asked for but x, so that its own trigger plays no part.
-    let mut k = kept_for_a_waiting_peer(false);
-    k.net.gate.rules.push((3, 2, MessageType::ChunkReply, None));
-    let (x, free) = (k.x, k.asked_at + 60 * S);
+/// Spends node 4's first trigger window some 10 s before x is kept for it,
+/// as a Status of its with one more chunk stored restarts its pass between
+/// two refusals of its, each of which makes the pass wait.
+fn status_spends_the_window(k: &mut KeptFor, free: u64) {
     to_at(&mut k.net, free - 12 * S);
     k.refusal();
     to_at(&mut k.net, free - 11 * S);
@@ -831,6 +868,46 @@ fn a_chunk_kept_for_a_waiting_peer_that_asks_late_counts_its_patience_from_when_
     k.refusal();
     k.net.advance(Duration::from_secs(1));
     assert_eq!(state(&k.net, 2, 4), Err(SendError::PassWaiting));
+}
+
+#[test]
+fn a_chunk_kept_for_a_waiting_peer_whose_status_spent_its_window_is_asked_within_a_second() {
+    // The bug: x was kept for node 4, which holds it, some 10 s after a
+    // Status of node 4's had restarted its pass and spent the one window its
+    // triggers shared, so node 4 asked for x only 20 s into its turn (and a
+    // ready holder behind it waited as long). The freed-hash trigger acts in
+    // a window of its own. Node 3 holds what it is asked for, so that no
+    // chunk node 4 refuses comes back to it.
+    let mut k = kept_for_a_waiting_peer(true);
+    k.net.gate.rules.push((3, 2, MessageType::ChunkReply, None));
+    let (x, free) = (k.x, k.asked_at + 60 * S);
+    status_spends_the_window(&mut k, free);
+    for tenth in 1..=20 {
+        to_at(&mut k.net, free + tenth * S / 10);
+        k.net.deliver(4, 2, |f| chunk_hash(f) == Some(x));
+    }
+    assert!(k.fetched(), "within 2 s of its turn");
+    assert_eq!(asked(&k.net, 2, 4, x), 1);
+    assert_eq!(errors(&k.net), 0);
+}
+
+#[test]
+fn a_chunk_kept_for_a_waiting_peer_that_asks_late_counts_its_patience_from_when_it_was_kept() {
+    // Both of node 4's trigger windows are spent as x is kept for it: the
+    // first by a Status of its 10 s before, and the freed hash's by x's own
+    // trigger, whose pass a refusal of node 4's then stops before it starts
+    // (a CHUNK_NOT_FOUND restarts its 1 s). So it asks for x 20 s into its
+    // turn and never answers. Its turn ends 60 s after x was kept for it,
+    // not 60 s after it asked. Node 3 holds what it is asked for but x, so
+    // that its own trigger plays no part.
+    let mut k = kept_for_a_waiting_peer(false);
+    k.net.gate.rules.push((3, 2, MessageType::ChunkReply, None));
+    let (x, free) = (k.x, k.asked_at + 60 * S);
+    status_spends_the_window(&mut k, free);
+    to_at(&mut k.net, free - S / 2);
+    k.refusal();
+    to_at(&mut k.net, free + 2 * S / 5);
+    k.refusal();
     to_at(&mut k.net, free + 19 * S);
     assert_eq!(asked(&k.net, 2, 4, x), 0);
     to_at(&mut k.net, free + 21 * S);
@@ -1048,4 +1125,62 @@ fn waiting_peers_that_keep_their_triggers_from_acting_hold_no_more_of_a_batch_th
     // Controls: one waiting peer; and two that let their triggers act.
     assert!(batch_held_by_waiting_peers(40, false, true, 4, 1024, bound(1)).is_some());
     assert!(batch_held_by_waiting_peers(40, true, false, 4, 1024, bound(2)).is_some());
+}
+
+/// Node 0 writes l.bin, of `lacking` chunks, which nobody can fetch, and
+/// goes. Node 1, a read holder with room for one request, holds node 2's
+/// request for one of them; node 3, honest, lacks them too, so its pass
+/// waits, having skipped the one node 1 holds. Node 1 lets the request it
+/// holds go every `every` s, reporting one more chunk stored to be asked
+/// again: each time a freed hash node 3 is owed. Returns the requests node 2
+/// sent node 3 over `secs` from then.
+fn restarted_by_refusals(lacking: usize, every: u64, secs: u64) -> usize {
+    let tier = |n: u8, t: u8| config(n, vec![folder_key(1, t)]);
+    let mut configs = vec![tier(0, 1), tier(1, 2), tier(2, 1), tier(3, 1)];
+    configs[1].max_requests_in_flight = 1;
+    let mut net = Net::new(configs);
+    net.gate.rules.extend([
+        (0, 2, MessageType::ChunkReply, None),
+        (1, 2, MessageType::ChunkReply, None),
+    ]);
+    for i in [1, 3, 0] {
+        net.connect(i, 2);
+    }
+    net.advance(Duration::from_secs(2));
+    let lost: Vec<u8> = (0..lacking * 1024)
+        .map(|b| (b * 7 + b / 1024 * 3 + 1) as u8)
+        .collect();
+    write(&mut net, 0, "l.bin", &lost).unwrap();
+    net.advance(Duration::from_secs(1));
+    net.disconnect(0, 2);
+    net.advance(Duration::from_secs(2));
+    assert_eq!(requested(&net, 2, 1).len(), 1, "node 1 holds one");
+    assert_eq!(state(&net, 2, 3), Err(SendError::PassWaiting));
+    let before = requested(&net, 2, 3).len();
+    let start = net.now;
+    for second in 1..=secs {
+        to_at(&mut net, start + second * S);
+        if second % every == 0 && net.deliver(1, 2, |_| true) > 0 {
+            more_stored(&mut net, 1);
+        }
+    }
+    assert_eq!(errors(&net), 0);
+    requested(&net, 2, 3).len() - before
+}
+
+#[test]
+fn a_peer_that_lets_requests_go_restarts_a_waiting_peers_pass_at_most_twice_per_status_interval() {
+    // TM-22: each request node 1 lets go is a freed hash for node 3, whose
+    // pass then asks again for every chunk node 2 lacks. A waiting pass
+    // restarts at most twice per STATUS_INTERVAL (one window for any
+    // trigger, one for a freed hash), so node 3 receives at most two full
+    // passes of requests per 30 s, however often node 1 lets one go.
+    for (lacking, every) in [(200, 1), (200, 5), (48, 1)] {
+        let asked = restarted_by_refusals(lacking, every, 120);
+        let passes = 2 * (120 / 30 + 1);
+        assert!(
+            asked <= passes * lacking,
+            "{lacking} lacking, one every {every} s: {asked} requests"
+        );
+    }
 }
