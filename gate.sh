@@ -17,10 +17,10 @@
 # What the gate leaves to CI, besides the other operating systems:
 # - nextest here skips the tests of the crates in `covered` below (keys,
 #   protocol, index, engine and fs). The coverage loop at the end runs them,
-#   once: each crate with -p, so with only the features it and its
-#   dependencies ask for (with --workspace, cargo unifies features across
-#   every crate), and under cfg(coverage), which cargo-llvm-cov sets. CI runs
-#   them both ways.
+#   once (and engine's scenarios again, over more seeds: ci/engine-seeds.sh):
+#   each crate with -p, so with only the features it and its dependencies ask
+#   for (with --workspace, cargo unifies features across every crate), and
+#   under cfg(coverage), which cargo-llvm-cov sets. CI runs them both ways.
 # - ci/geiger.sh skips the cargo-geiger scan when its inputs are those of a
 #   scan that passed (its header lists them). LICKETYSYNC_GEIGER_FULL=1 scans
 #   anyway; CI always scans.
@@ -226,6 +226,22 @@ for c in "${covered[@]}"; do
   excluded+=(--exclude "licketysync-$c")
 done
 step cargo nextest run --workspace --all-features "${excluded[@]}"
+# The engine scenarios over seeds 0 to 39 (ci/engine-seeds.sh says why), where
+# the coverage loop runs 0 to 4; CI's Linux test job runs them too. Measured on
+# an 8-core machine: 140 s warm, and 56 s more to build cold. Under the
+# coverage loop the 40 seeds took 382 s instead of 76, and in release 112 s
+# with debug assertions off. Tested first on a stand-in cargo.
+step ci/test-engine-seeds.sh
+step ci/engine-seeds.sh
+# The tests that race, 50 times in a row with no retries, each run on threads
+# of one process as cargo test runs them (ci/repeat-races.sh names them and says
+# why): one passing run proves little, and three races reached main past one
+# (f427bca). The Windows and macOS CI step follows after a trial run there.
+# Measured on an 8-core machine: 0.9 s a run for the store's tests and 0.1 s
+# for the fs race, and 11 s to build both cold. Tested first on a stand-in
+# cargo.
+step ci/test-repeat-races.sh
+step ci/repeat-races.sh 50
 step cargo test --workspace --doc
 step env RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items
 step cargo deny check
@@ -314,7 +330,8 @@ step ci/test-check-dep-info.sh
 # crate, which TM-17, TM-40 and TM-41 name as their enforcer (review ruling of
 # 2026-10-22), and on fs, TM-4's, measured per crate: only that crate's own
 # files count, so a well-tested neighbour cannot mask it. These are the gate's
-# only runs of those crates' tests (nextest above leaves them out).
+# only runs of those crates' tests (nextest above leaves them out), but for the
+# engine scenarios that ci/engine-seeds.sh runs over more seeds.
 # The clean comes first. cargo-llvm-cov reports on every test binary of a
 # workspace crate in target/llvm-cov-target, but before a run it removes only
 # the crate it measures, so a binary of another crate from an earlier gate run

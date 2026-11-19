@@ -68,6 +68,36 @@ changed and why.
     missing); `protocol.md` §4.4 (what a sealed peer sees, and files of about 47 GiB in practice,
     16 GiB at worst) and §9.
 
+- Gate and CI: the tests that race run many times in a row. Three races reached main past a gate
+  that ran each test once (f427bca fixed them): the store's open race on Windows, which passed CI at
+  aaa2d90 and failed it in run 43753618314; a child that one test spawned holding another test's
+  open lock (6 of 150 runs of the nightly's `cargo careful test`); and the large crash test's kill
+  (2 of 150). `ci/repeat-races.sh <runs>` runs the daemon store's tests and the fs resolver's
+  symlink swap race (TM-4) that many times with no retries, stopping at the first failing run. Each
+  run is `cargo test` of the crate's library tests, on threads of one process as `cargo test` and
+  `cargo careful test` run them: only there does a child that one test spawns hold copies of
+  another test's descriptors. A filter that selects no test where it must fails the script, so
+  that a renamed test cannot drop out of the loop. `gate.sh` runs 50, after nextest, and is the only
+  place that runs it; the script runs on Windows and macOS too, and CI's step there (10 runs) follows after a
+  trial run on those systems, since the store's tests have never run threaded in one process
+  there. On an 8-core machine a run takes 0.9 s for the store and 0.1 s for the fs race, and the
+  two builds 11 s cold. On the store before f427bca's fix of the open lock
+  (2f5fe15, and again with only that race left), 7 of 8 loops of 50 failed, each at
+  `openers_at_once_are_not_all_refused_since_each_open_holds_the_open_lock` ("and let it go"),
+  between runs 5 and 32; on today's store 4 of 4 passed. nextest's own `--stress-count 50`, one
+  process per test, passed every iteration on the old store. Tested by `ci/test-repeat-races.sh`,
+  on a stand-in cargo, in the gate and CI's ci-scripts job.
+- Gate and CI: the engine scenarios over seeds 0 to 39, not only 0 to 4. After 0747475,
+  `engine-partition` failed seeds 20, then 29, of the nightly long runs while every gate passed,
+  since the gate ran seeds 0 to 4 (73a0240 fixed the scenario). `ci/engine-seeds.sh` runs
+  `crates/engine/tests/converge.rs` with `LICKETYSYNC_ENGINE_SEEDS=40` in the test profile, debug
+  assertions on, and reports every failing scenario and seed; `gate.sh` runs it after nextest, and
+  CI's Linux test job after its nextest. On an 8-core machine it takes 140 s warm and 56 s more to
+  build cold. Under the coverage loop the same 40 seeds took 382 s instead of 76, and in release
+  112 s with debug assertions off. With 73a0240's scenario timing and its pinned seeds reverted,
+  seeds 0 to 4 pass and the script fails `engine-partition` at seeds 29 and 34 ("1 writes refused,
+  not 0"), as the nightly did. Tested by `ci/test-engine-seeds.sh`, on a stand-in cargo, which also
+  fails when `converge.rs` no longer reads the variable the script sets.
 - Daemon: on Windows, an open of the store failed with "Access is denied" when it met the store's
   log as another opener's SQLite was removing it
   (`openers_of_a_fresh_path_at_once_each_open_it_or_are_refused`, on Windows CI). Windows keeps the

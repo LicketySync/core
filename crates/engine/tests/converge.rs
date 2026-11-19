@@ -8,7 +8,8 @@
 //! (`engine-drops-stress`, whose pass rate is reported instead) runs here,
 //! one `#[test]` per scenario, over seeds 0 to 4, each with the harness's
 //! full oracle at the end and again after 60 s (`Run::check`).
-//! `LICKETYSYNC_ENGINE_SEEDS=<n>` runs seeds 0 to n - 1 instead. The seeds of
+//! `LICKETYSYNC_ENGINE_SEEDS=<n>` runs seeds 0 to n - 1 instead
+//! (`ci/engine-seeds.sh`, in the gate and CI, runs 0 to 39). The seeds of
 //! a scenario run on threads of their own, each building its own run (a run
 //! is not `Send`), at most as many at once as the machine has cores. A
 //! failure names the scenario and the seed and prints the outcome with its

@@ -135,6 +135,11 @@ jobs:
         env:
           # A namespace or mount test that cannot run fails, not skips.
           LICKETYSYNC_REQUIRE_NS: ${{ runner.os == 'Linux' && '1' || '' }}
+      # The engine scenarios over seeds 0 to 39 (ci/engine-seeds.sh says why;
+      # gate.sh runs the same), on Linux: the scenarios run alike everywhere.
+      - name: The engine scenarios over seeds 0 to 39
+        if: runner.os == 'Linux'
+        run: ci/engine-seeds.sh
       - run: cargo test --workspace --doc
       # What rustc read for every workspace crate in this system's build
       # (ci/check-dep-info.sh): a .d file reflects its build's cfg.
@@ -536,9 +541,10 @@ jobs:
   # transient failure (the gitleaks job's HTTP 504 failed run 42568260092),
   # with its tests, on a stand-in curl and on a server on 127.0.0.1, and
   # ci/check-downloads.sh, which fails a script that calls curl or wget on
-  # its own; and the tests of ci/rustc-wrapper.sh, which picks sccache for
-  # gate.sh and ci/mutants.sh when it is installed (here it is not). gate.sh
-  # runs the same.
+  # its own; the tests of ci/rustc-wrapper.sh, which picks sccache for
+  # gate.sh and ci/mutants.sh when it is installed (here it is not); and the
+  # tests of ci/engine-seeds.sh, which the Linux test job above runs, and of
+  # ci/repeat-races.sh, which gate.sh runs, on a stand-in cargo. gate.sh runs the same.
   # timeout-minutes: the steps take about 30 seconds together (measured on
   # the development machine), and ci/test-download.sh ends a hung download
   # test after 60 seconds, so 10 minutes is ample and a hung step cannot hold
@@ -562,3 +568,5 @@ jobs:
       - run: ci/check-downloads.sh
       - run: ci/test-rustc-wrapper.sh
       - run: ci/test-rerun-capacity.sh
+      - run: ci/test-engine-seeds.sh
+      - run: ci/test-repeat-races.sh

@@ -84,8 +84,12 @@ group. The groups:
    copy of a version in a workflow or in `ci/geiger-baseline.txt` (below, "Pins
    and the weekly refresh"); `ci/toolchains.sh`.
 2. **Rust**: `cargo fmt`, clippy pedantic with `-D warnings` (all targets, all
-   features), nextest on every crate but the five of group 8, doc-tests,
-   rustdoc with warnings denied.
+   features), nextest on every crate but the five of group 8, the engine
+   scenarios over seeds 0 to 39 (`ci/engine-seeds.sh`, tested first by
+   `ci/test-engine-seeds.sh`), the tests that race 50 times in a row
+   (`ci/repeat-races.sh`, tested first by `ci/test-repeat-races.sh`; the
+   gate runs it, and the Windows and macOS CI step follows after a trial run
+   there), doc-tests, rustdoc with warnings denied.
 3. **Dependencies**: `cargo deny` (and the production bans of
    `deny-production.toml`), `cargo audit` on core's lockfile and on `fuzz/`'s,
    `cargo machete`, `cargo vet --locked`.
@@ -124,7 +128,9 @@ group. The groups:
 8. **Coverage**: at least 90% of lines in each of the keys, protocol,
    index, engine and fs crates, measured per crate, after
    `cargo llvm-cov clean --workspace`. These are the gate's only runs of those
-   crates' tests; CI runs them under nextest too.
+   crates' tests, but for the engine scenarios and the tests that race (the
+   daemon store's and the fs race test) of group 2; CI runs them under nextest
+   too.
 9. **What the builds read**, last: a release `cargo check`, then every file
    rustc read for a workspace crate is one the Semgrep rules scan
    (`ci/check-dep-info.sh`). Locally a file named only by an older .d of a
