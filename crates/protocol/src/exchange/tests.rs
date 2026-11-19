@@ -236,6 +236,7 @@ fn pages_hold_the_limit_and_fit_the_frame() {
         "a 65th waits for the next page"
     );
     assert_eq!(p.len(), 64);
+    assert!(!p.is_empty());
     let page = p.page(&F, 3, true, 9, 5);
     assert_eq!(page.records.len(), 64);
     assert!(p.is_empty());

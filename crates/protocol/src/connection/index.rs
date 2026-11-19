@@ -286,8 +286,6 @@ struct Round {
     /// The cursor the round sets: the epoch and `through` of the Since
     /// reply's last page, or of the first root reply.
     cursor: Option<(u64, u64)>,
-    /// The root reply has come once in the round.
-    root_answered: bool,
 }
 
 impl Round {
@@ -304,7 +302,6 @@ impl Round {
             skipped: false,
             empty_push: false,
             cursor: None,
-            root_answered: false,
         }
     }
 }
@@ -726,13 +723,15 @@ impl Connection {
                 {
                     let next = differing(&prefix, &theirs, view);
                     // Depth first, ascending: the smallest on top. The
-                    // list cannot pass its bound (15 siblings a level);
-                    // were it to, the pass is cut rather than quiet.
+                    // list is never full here (one guarded push site, one
+                    // child at a time, 15 siblings a level); `>=` keeps a
+                    // broken invariant from growing it, and the pass is cut
+                    // rather than quiet.
                     for child in next.into_iter().rev() {
-                        if round.work.len() < MAX_WORK_LIST {
-                            round.work.push(child);
-                        } else {
+                        if round.work.len() >= MAX_WORK_LIST {
                             round.cut = true;
+                        } else {
+                            round.work.push(child);
                         }
                     }
                 }
@@ -1352,11 +1351,10 @@ impl Connection {
         };
         let mut caught_up = false;
         if let Some(round) = x.round.as_mut() {
-            if prefix.is_root() && !round.root_answered {
-                round.root_answered = true;
-                if round.cursor.is_none() {
-                    round.cursor = Some((m.epoch, m.through));
-                }
+            // The first root reply sets the cursor unless the Since reply
+            // did; once set, nothing in the round clears it.
+            if prefix.is_root() && round.cursor.is_none() {
+                round.cursor = Some((m.epoch, m.through));
             }
             match outcome {
                 ReconcileOutcome::Equal => caught_up = prefix.is_root(),
@@ -1738,8 +1736,10 @@ impl Connection {
         let Some(x) = open_mut(&mut self.folders, &folder) else {
             return;
         };
-        // Every caller has a round under way.
-        if x.round.is_some() && x.outstanding.is_none() && !x.due {
+        // Every caller has a round under way whose request was just
+        // answered: nothing is outstanding, and nothing was due since
+        // `send_request` sent it.
+        if x.round.is_some() {
             x.due = true;
             out.events.push(Event::RequestDue { folder });
         }

@@ -3005,7 +3005,8 @@ enum ChunkStatus { CHUNK_UNSPECIFIED = 0; CHUNK_OK = 1; CHUNK_NOT_FOUND = 2; CHU
   skipped a hash for another connection's request or turn (below, "Several connections"), and no
   sooner than 1 s (`CHUNK_BUSY_BACKOFF`'s minimum) after the latest `CHUNK_NOT_FOUND`; the requester
   evaluates the trigger at most once per `STATUS_INTERVAL`, and a trigger that comes inside that
-  window is deferred, by one pending bit, and evaluated when the window ends, never dropped. Per
+  window is deferred, by one pending bit, and evaluated, on the peer's latest `chunks_stored`, when
+  the window ends, never dropped. Per
   folder per connection the state is fixed, whatever the number of hashes: the pass's position and
   whether it got a `CHUNK_NOT_FOUND`, or, while it waits, when it may start once a trigger has
   fired; the peer's latest `chunks_stored`, and its value at the latest `CHUNK_NOT_FOUND`, with that

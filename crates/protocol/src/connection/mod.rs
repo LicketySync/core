@@ -714,6 +714,9 @@ pub struct Connection {
     unsent: usize,
     /// Bytes handed over minus the transport's unsent bytes, as last seen.
     delivered: i128,
+    /// When delivery last grew, or the transport last had nothing unsent:
+    /// `observe` sets it to `now` whenever `unsent` is 0, so it is
+    /// earlier than `now` only while bytes wait unsent.
     last_growth: Duration,
     now: Duration,
     last_frame: Duration,
@@ -1105,10 +1108,13 @@ impl Connection {
     }
 
     /// An unknown non-critical type, once established: `Unsupported` the
-    /// first time per type, then ignored with a log line.
+    /// first time per type, then ignored with a log line. Its critical bit
+    /// is clear, so it is below `MAX_UNSUPPORTED_TYPES`: one bit each.
     fn on_unknown(&mut self, message_type: u16, out: &mut Output) {
-        let n = usize::from(message_type & 0x7fff);
+        let n = usize::from(message_type);
         let (word, bit) = (n / 64, 1u64 << (n % 64));
+        // Unreachable (the type is below 0x8000, so the word is below 512);
+        // kept as defence.
         let Some(slot) = self.unsupported.get_mut(word) else {
             return;
         };
@@ -1157,9 +1163,9 @@ impl Connection {
             Some(Cause::HelloTimeout)
         } else if self.proof_deadline.is_some_and(|d| now >= d) {
             Some(Cause::ProofTimeout)
-        } else if now >= self.last_frame.saturating_add(t.idle)
-            || (self.unsent > 0 && now >= self.last_growth.saturating_add(t.idle))
-        {
+        } else if now >= self.last_frame.min(self.last_growth).saturating_add(t.idle) {
+            // No frame for `idle`, or, while bytes wait unsent, no delivery
+            // for it (`last_growth` is `now` when nothing is unsent).
             Some(Cause::IdleTimeout)
         } else if self.reply_deadline().is_some_and(|d| now >= d) {
             Some(Cause::ReplyPageTimeout)
@@ -1261,8 +1267,7 @@ impl Connection {
         [
             self.hello_deadline,
             self.proof_deadline,
-            Some(self.last_frame.saturating_add(t.idle)),
-            (self.unsent > 0).then(|| self.last_growth.saturating_add(t.idle)),
+            Some(self.last_frame.min(self.last_growth).saturating_add(t.idle)),
             self.reply_deadline(),
             self.exchange_wake(),
             self.chunks_wake(),

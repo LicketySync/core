@@ -39,4 +39,7 @@ exclude_re = [
   # A leading space in from_words' private buffer: bip39 splits on whitespace.
   # The line and column keep the length check at words.rs:123, which is tested, in scope.
   'crates/keys/src/words\.rs:134:18: replace > with >= in WriteKey::from_words$',
+  # Prefix::bounds fills an odd prefix's last byte with `| 0x0f`: its low nibble is 0, so `^` agrees. The
+  # `|` is kept over `+` so that a broken invariant cannot wrap the byte.
+  'crates/protocol/src/exchange\.rs:209:20: replace \| with \^ in Prefix::bounds$',
 ]

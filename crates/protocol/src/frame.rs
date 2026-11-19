@@ -187,7 +187,8 @@ pub enum FrameError {
     },
     /// The bytes end inside a frame (only reported on a stream's end).
     Truncated {
-        /// Bytes still needed to complete the frame.
+        /// At least the bytes still needed to complete the frame (inside the
+        /// length field, a lower bound).
         needed: usize,
     },
     /// The decoder refused earlier input and takes no more.
@@ -666,6 +667,64 @@ mod tests {
             assert!(d.body_capacity() <= 100, "never past the checked length");
         }
         assert_eq!(all(&mut d, &f[f.len() - 1..]).unwrap().len(), 1);
+    }
+
+    /// Byte by byte and in pieces, the body buffer holds every byte that has
+    /// arrived and, growing by doubling, less than twice that, and never more
+    /// than the checked length.
+    #[test]
+    fn the_body_buffer_holds_what_arrived_and_less_than_twice_that() {
+        let f = frame(1, &[5; 98]).encode();
+        for piece in [1, 3, 7, 20] {
+            let mut d = FrameDecoder::new(100);
+            let mut input = &f[..f.len() - 1];
+            while !input.is_empty() {
+                let (now, rest) = input.split_at(piece.min(input.len()));
+                assert_eq!(all(&mut d, now), Ok(vec![]));
+                input = rest;
+                let arrived = (f.len() - 1 - input.len()).saturating_sub(LENGTH_LEN);
+                if arrived == 0 {
+                    assert_eq!(d.body_capacity(), 0, "pieces of {piece}");
+                    continue;
+                }
+                let cap = d.body_capacity();
+                assert!(cap >= arrived, "pieces of {piece}: {cap} for {arrived}");
+                assert!(
+                    cap < 2 * arrived && cap <= 100,
+                    "pieces of {piece}: {cap} for {arrived}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn idle_only_between_frames() {
+        let f = frame(1, b"abc").encode();
+        let mut d = FrameDecoder::new(100);
+        assert!(d.is_idle());
+        assert_eq!(all(&mut d, &f[..2]), Ok(vec![]));
+        assert!(!d.is_idle(), "inside the length");
+        assert_eq!(all(&mut d, &f[2..4]), Ok(vec![]));
+        assert!(!d.is_idle(), "the length read, no body yet");
+        assert_eq!(all(&mut d, &f[4..6]), Ok(vec![]));
+        assert!(!d.is_idle(), "inside the body");
+        assert_eq!(all(&mut d, &f[6..]).unwrap().len(), 1);
+        assert!(d.is_idle());
+    }
+
+    #[test]
+    fn a_stream_ended_inside_the_length_needs_the_rest_of_it() {
+        let f = frame(1, b"abc").encode();
+        for k in 1..LENGTH_LEN {
+            let mut d = FrameDecoder::new(100);
+            assert_eq!(all(&mut d, &f[..k]), Ok(vec![]));
+            assert_eq!(
+                d.finish(),
+                Err(FrameError::Truncated {
+                    needed: LENGTH_LEN - k
+                })
+            );
+        }
     }
 
     #[test]

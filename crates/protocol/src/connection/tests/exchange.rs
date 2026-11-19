@@ -631,6 +631,85 @@ fn records_past_the_leaf_and_outside_the_prefix_are_sender_violations() {
     assert!(p.b.reported.is_empty(), "never judged");
 }
 
+#[test]
+fn a_records_reply_past_the_leaf_leaves_every_record_to_push() {
+    // 4.5, "Reconciling": the requester pushes what a RECORDS reply did not
+    // carry, or, when it carried more than RECONCILE_LEAF_MAX records (here
+    // answering a zero digest, where that is allowed), every record it holds
+    // there.
+    for n in [RECONCILE_LEAF_MAX, RECONCILE_LEAF_MAX + 1] {
+        let (mut p, f, id) = scripted(0);
+        let e = p.a.store.epoch;
+        a_sends(
+            &mut p,
+            outcome_reply(&f, id, e, ReconcileOutcome::Records, 0),
+        );
+        a_sends(&mut p, records_page(&f, id, e, &records(3, n as u64, 1)));
+        let carried = p.b.events.iter().find_map(|ev| match ev {
+            Event::PushSubtree { carried, .. } => Some(carried.as_ref().map(Vec::len)),
+            _ => None,
+        });
+        let want = (n <= RECONCILE_LEAF_MAX).then_some(n);
+        assert_eq!(carried, Some(want), "{n} records");
+    }
+}
+
+#[test]
+fn a_reply_goes_on_once_every_page_is_judged() {
+    // 4.5: a reply is complete, and the round goes on, once its last page has
+    // come and every page has been judged; the judgements here come after
+    // both pages arrived. The last page holds records, or is empty.
+    for empty_last in [false, true] {
+        let (mut p, f, id) = scripted(1);
+        p.b.auto = false;
+        let e = p.a.store.epoch;
+        a_sends(
+            &mut p,
+            outcome_reply(&f, id, e, ReconcileOutcome::Records, 0),
+        );
+        let recs = records(3, 2, 1);
+        let page_of = |records: &[SignedRecord], more: bool| {
+            Part::Page(IndexRecords {
+                folder_id: f.0.to_vec(),
+                records: records.iter().map(SignedRecord::to_bytes).collect(),
+                more,
+                request_id: id,
+                epoch: e,
+                through: 0,
+                reset: false,
+            })
+        };
+        p.b.events.clear();
+        a_sends(&mut p, page_of(&recs[..1], true));
+        let last: &[SignedRecord] = if empty_last { &[] } else { &recs[1..] };
+        a_sends(&mut p, page_of(last, false));
+        let due = |p: &Pair| p.b.saw(|ev| matches!(ev, Event::RequestDue { .. }));
+        assert!(
+            !due(&p),
+            "empty last {empty_last}: the first page is not judged"
+        );
+        let handed: Vec<(Vec<crate::record::Record>, Page)> =
+            p.b.events
+                .iter()
+                .filter_map(|ev| match ev {
+                    Event::Records { records, page, .. } => Some((records.clone(), *page)),
+                    _ => None,
+                })
+                .collect();
+        assert_eq!(handed.len(), if empty_last { 1 } else { 2 });
+        for (i, (records, page)) in handed.iter().enumerate() {
+            let results = p.b.judge(records);
+            let out = p.b.conn.judged(p.b.tick(p.now), f, *page, &results);
+            p.b.apply(p.now, out);
+            assert_eq!(
+                due(&p),
+                i + 1 == handed.len(),
+                "empty last {empty_last}: after judging page {i}"
+            );
+        }
+    }
+}
+
 /// `n` versions of one path, writer 3 at counters `1..=n`: one path tag,
 /// so all of them lie beneath one 64-nibble prefix.
 fn versions_of_one_path(n: u64) -> Vec<SignedRecord> {
@@ -1660,6 +1739,35 @@ fn owe_round_waits_for_the_round_under_way_and_the_resync_interval() {
 }
 
 #[test]
+fn owe_round_waits_for_a_round_between_its_requests() {
+    // 4.5, "Round owed": no owed round starts while a round of this side's
+    // is under way, even with none of its requests outstanding (the round on
+    // open, due and not yet sent); it is kept, and starts after that round.
+    let key = || licketysync_keys::folder::FolderKey::from(folder(0x10));
+    let mut p = Pair::new(0xa0, 0xb0, &[key()], &[key()]);
+    p.b.auto = false;
+    p.settle();
+    p.a.prove_all(p.now);
+    p.settle();
+    let f = p.b.folder_id();
+    assert!(p.b.conn.is_due(&f) && p.b.conn.round_under_way(&f));
+    let out = p.b.conn.owe_round(p.b.tick(p.now), f);
+    assert!(out.events.is_empty(), "the round on open still runs");
+    assert!(p.b.conn.round_owed(&f));
+    assert!(p.b.conn.is_due(&f) && p.b.conn.round_under_way(&f));
+    let before = rounds(&p.b).len();
+    p.b.auto = true;
+    p.b.request(p.now).unwrap();
+    p.advance(s(10));
+    assert_eq!(
+        rounds(&p.b).len(),
+        before + 2,
+        "the round on open, then the owed one"
+    );
+    assert!(!p.b.conn.round_owed(&f));
+}
+
+#[test]
 fn owe_round_leaves_a_folder_not_open_and_a_closed_connection_as_they_are() {
     let key = || licketysync_keys::folder::FolderKey::from(folder(0x10));
     let mut p = Pair::new(0xa0, 0xb0, &[key()], &[key()]);
@@ -2042,6 +2150,10 @@ fn the_reply_deadline_starts_when_unsent_falls_past_the_request() {
     p.b.unsent = 0;
     p.advance(s(1));
     let left = p.now;
+    assert!(
+        p.b.wake.is_some_and(|w| w > left + s(1)),
+        "departed: no more polling"
+    );
     p.advance_to(left + s(599));
     assert_eq!(p.b.conn.state(), State::Established);
     p.advance_to(left + s(602));
@@ -2065,14 +2177,22 @@ fn idle_and_stalled_delivery() {
     );
     let mut p = pair_with(&[], &[]);
     p.a.auto = false;
-    p.a.unsent = 1000;
+    // Off the 30 s Status grid, so only a wake at the stall's own deadline
+    // can close on time.
+    p.advance(s(7));
     let out = p.a.conn.wake(p.a.tick(p.now));
     p.a.apply(p.now, out);
     let start = p.now;
+    p.a.unsent = 1000;
+    let out = p.a.conn.wake(p.a.tick(p.now));
+    p.a.apply(p.now, out);
     for k in 1..=11u64 {
         p.advance_to(start + s(29 * k));
     }
     assert_eq!(closed(&p.a).map(|c| c.1), Some(Some(Cause::IdleTimeout)));
+    // Woken at the stall's deadline, though B's Statuses kept arriving.
+    let close_sent = p.a.sent.iter().find(|(_, f)| f[4..6] == [0x80, 0x02]);
+    assert_eq!(close_sent.map(|(at, _)| *at), Some(start + s(300)));
 }
 
 #[test]
@@ -2207,6 +2327,11 @@ fn sending_rules() {
             .err(),
         Some(SendError::PageTooLong)
     );
+    let out =
+        p.a.conn
+            .push(t, &page(vec![one.clone(); MAX_PAGE_RECORDS], false, 0))
+            .unwrap();
+    assert_eq!(out.frames.len(), 1, "MAX_PAGE_RECORDS records go");
     let store = p.a.store.clone();
     assert_eq!(
         p.a.conn.send_request(t, f, &store).err(),
@@ -2244,6 +2369,24 @@ fn sending_rules() {
     assert_eq!(
         q.a.conn.send_page(tq, &served(vec![], true)).err(),
         Some(SendError::Malformed)
+    );
+    // Only the request being served is answered.
+    let other = r.request_id.wrapping_add(1);
+    assert_eq!(
+        q.a.conn
+            .send_page(
+                tq,
+                &IndexRecords {
+                    request_id: other,
+                    ..served(vec![], false)
+                }
+            )
+            .err(),
+        Some(SendError::UnknownRequest)
+    );
+    assert_eq!(
+        q.a.conn.send_reset(tq, fq, other, e, false).err(),
+        Some(SendError::UnknownRequest)
     );
     assert_eq!(
         q.a.conn
@@ -2388,10 +2531,13 @@ fn sending_rules() {
         .unwrap()
         .wire_len();
     let out = p.a.conn.push(at(MAX_SEND_QUEUE - len), &push).unwrap();
-    assert!(
-        out.frames.iter().all(|fr| fr.len() != len),
-        "unsent + frame at MAX_SEND_QUEUE: dropped"
+    assert_eq!(out.frames.len(), 1);
+    assert_ne!(
+        out.frames[0].len(),
+        len,
+        "unsent + frame at MAX_SEND_QUEUE: dropped, the empty push owed goes"
     );
+    assert_eq!(p.a.conn.backlog(), 0);
     let mut p = pair_with(&[], &[]);
     let out = p.a.conn.push(at(MAX_SEND_QUEUE - len - 1), &push).unwrap();
     assert_eq!(out.frames.len(), 1, "a byte below: handed over");

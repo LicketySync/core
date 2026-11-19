@@ -466,6 +466,10 @@ fn proof_messages_sizes() {
     .encode_to_vec();
     bytes_field(&mut evidence, 4, &[1, 2, 3]);
     assert_eq!(ProofResult::parse(&evidence).unwrap().status, 2);
+    // Unsupported carries the full 16-bit type: 0xffff is one, 0x1_0000 is not.
+    round_trip(&Unsupported {
+        message_type: 0xffff,
+    });
     assert_eq!(
         Unsupported::parse(
             &Unsupported {

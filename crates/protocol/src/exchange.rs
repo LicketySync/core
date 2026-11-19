@@ -202,6 +202,7 @@ impl Prefix {
         for (h, l) in hi.iter_mut().zip(&lo).take(whole) {
             *h = *l;
         }
+        // An odd prefix's last byte: its nibble, then 15 in the low nibble.
         if self.depth() % 2 == 1
             && let (Some(h), Some(l)) = (hi.get_mut(whole), lo.get(whole))
         {
@@ -260,10 +261,10 @@ pub trait IndexView {
 #[must_use]
 pub fn page_limit(max_records: u32) -> usize {
     let n = usize::try_from(max_records).unwrap_or(MAX_PAGE_RECORDS);
-    if n == 0 || n > MAX_PAGE_RECORDS {
+    if n == 0 {
         MAX_PAGE_RECORDS
     } else {
-        n.max(MIN_PAGE_RECORDS)
+        n.clamp(MIN_PAGE_RECORDS, MAX_PAGE_RECORDS)
     }
 }
 

@@ -471,6 +471,38 @@ changed and why.
     at the store's path is refused as `NotAFile` before it is opened, as on Unix, rather than
     failing to open. Windows gives no device and inode here, so the check that the temporary file
     was not replaced before placement is tested on Unix only.
+- Protocol: no surviving (missed) mutant is left in the seven files of the protocol crate that had
+  them (`exchange.rs`, `frame.rs`, `parse.rs`, and `mod.rs`, `handshake.rs`, `chunks.rs` and
+  `index.rs` of `connection/`): 42 before, none after (narrow cargo-mutants runs under
+  `ci/mutants.sh`'s caps; the timed-out mutants are a later batch).
+  - New tests, as `protocol.md` states the behaviour: the frame decoder's body buffer holds every
+    byte that arrived and less than twice that, it is idle only between frames, and a stream that
+    ends inside a length needs the rest of it; `Unsupported` carries type 0xffff; an unknown
+    critical type before the DeviceProof closes with `PROTOCOL_ERROR`; each unknown non-critical
+    type is answered once, types that share a word of the table or a bit of two words included;
+    the proof this side would send in answer to the peer's is not sent past
+    `MAX_PROOFS_PER_CONNECTION`; a folder joined after the first proof is matched once
+    `refresh_folders` is called; a blob of the hash asked that is empty or past the largest stored
+    length is refused; every chunk request is answered, a second for one hash too; a Status holds
+    1 024 entries; a chunk trigger deferred to the window's end is judged on the peer's latest
+    Status; a push of `MAX_PAGE_RECORDS` records goes; a page or reset for another request than
+    the one served is refused; a push that would bring the unsent bytes to `MAX_SEND_QUEUE` is
+    dropped for the empty push; an owed round waits for a round between its requests; a `RECORDS`
+    reply of more than `RECONCILE_LEAF_MAX` records leaves every record to push; a reply goes on
+    once its last page has come and every page is judged; a request that has left the send queue
+    is no longer polled for; a stalled delivery closes at its deadline; a page's `is_empty`.
+  - Code with the same behaviour, for the mutants that could not change it: `page_limit` clamps
+    (4 096 was its own limit both ways); `Prefix::bounds` fills an odd prefix's last byte with `| 0x0f`, with which `^` agrees (skipped in `.cargo/mutants.toml`)
+    (the low nibble is 0; filling the nibbles through `Prefix::set` instead made a caught mutant
+    of `set` hang three tests); `on_unknown`
+    indexes the table by the type (its critical bit is clear, so the mask did nothing); the idle
+    deadline is the earlier of the last frame and the last delivery growth (`observe` sets the
+    latter to `now` whenever nothing is unsent, so the `unsent > 0` guards did nothing; three
+    timed-out mutants go with them); the work list is cut at `>=` its bound, so a broken invariant cannot
+    grow it (it is never full when a child is pushed); the first root reply sets
+    a round's cursor unless one is set (`root_answered` only kept later root replies from setting a
+    cursor already set); `advance` sets the next request due whenever a round is under way (every
+    caller has just had its request answered, so nothing is outstanding or due).
 - Tests: `Suite::to_wire` is now checked on suites other than 1, so a replacement that always returns 1
   no longer passes the keys crate's mutation run. Two other survivors cannot change
   behaviour (`padme` at length 2, which pads to 2 either way; the separator before the first word in

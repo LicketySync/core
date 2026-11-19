@@ -156,6 +156,20 @@ fn a_chunk_corrupt_in_storage_is_never_sent() {
         );
     }
     assert_eq!(p.a.sent.len(), before, "nothing sent");
+    // The length is checked on its own: an empty blob, or one past the
+    // largest stored length, is refused even when its hash is the one asked.
+    let f = p.a.folder_id();
+    for bad in [vec![], vec![4u8; MAX_STORED_LEN + 1]] {
+        let bh = cipher_hash(&bad);
+        p.a.receive(p.now, &frame(&request(&f, bh)));
+        assert_eq!(
+            p.a.reply_chunk(p.now, bh, ChunkAnswer::Ok(&bad)).err(),
+            Some(SendError::Corrupt),
+            "{} bytes",
+            bad.len()
+        );
+    }
+    assert_eq!(p.a.sent.len(), before, "nothing sent");
     // The request is still there to answer.
     p.a.reply_chunk(p.now, h, ChunkAnswer::Ok(&data)).unwrap();
     // A blob of exactly the largest stored length passes the length check
@@ -535,6 +549,47 @@ fn a_trigger_exactly_at_the_windows_end_is_acted_on() {
 }
 
 #[test]
+fn a_deferred_trigger_is_evaluated_on_the_latest_status_at_the_windows_end() {
+    // 4.6: a trigger inside the window is deferred and evaluated when the
+    // window ends, on the state then: the peer's latest chunks_stored. A peer
+    // whose count falls back to the baseline (a Status that breaks 4.5's
+    // "never falling"; Status is advisory) leaves the pass waiting.
+    for falls in [false, true] {
+        let mut p = Pair::open();
+        let f = p.a.folder_id();
+        p.a.auto = false;
+        p.b.auto = false;
+        let not_found = |p: &mut Pair, h: u8| {
+            p.b.request_chunk(p.now, CipherHash([h; 32])).unwrap();
+            p.b.receive(p.now, &frame(&reply(&f, CipherHash([h; 32]), 2, vec![])));
+            p.b.pass_done(p.now);
+        };
+        not_found(&mut p, 1);
+        p.now += s(1);
+        p.b.receive(p.now, &status_frame(&f, 1));
+        assert!(p.b.saw(|e| matches!(e, Event::PassAllowed { .. })));
+        let acted = p.now;
+        not_found(&mut p, 2);
+        p.b.events.clear();
+        p.now += s(2);
+        p.b.receive(p.now, &status_frame(&f, 2));
+        assert!(
+            !p.b.saw(|e| matches!(e, Event::PassAllowed { .. })),
+            "deferred"
+        );
+        if falls {
+            p.b.receive(p.now, &status_frame(&f, 1));
+        }
+        wake_b_until(&mut p, acted + s(30));
+        assert_eq!(
+            p.b.saw(|e| matches!(e, Event::PassAllowed { .. })),
+            !falls,
+            "falls {falls}"
+        );
+    }
+}
+
+#[test]
 fn a_round_completed_while_the_pass_still_asks_is_a_trigger() {
     // R2-B1 / R1-SF1, the regression: the NOT_FOUND comes during a pass, and
     // the round with the peer completes while the pass is still asking; the
@@ -846,6 +901,39 @@ fn status_carries_chunks_stored_and_the_name_once() {
             .err(),
         Some(SendError::Malformed)
     );
+    // 1 024 entries are what a Status holds.
+    assert!(
+        q.a.conn
+            .send_status(Tick::at(q.now), &vec![one(0); 1024])
+            .is_ok()
+    );
+}
+
+#[test]
+fn every_request_is_answered_two_for_one_hash_included() {
+    // 4.6: requests are bounded only by the in-flight limit, so each one the
+    // holder dispatched is answered, a second for a hash already asked too.
+    let mut p = Pair::open();
+    p.a.auto = false;
+    let f = p.a.folder_id();
+    let (data, h) = blob(1);
+    p.a.receive(p.now, &frame(&request(&f, h)));
+    p.a.receive(p.now, &frame(&request(&f, h)));
+    let asked =
+        p.a.events
+            .iter()
+            .filter(|e| matches!(e, Event::ChunkRequested { cipher_hash, .. } if *cipher_hash == h))
+            .count();
+    assert_eq!(asked, 2);
+    p.a.reply_chunk(p.now, h, ChunkAnswer::Ok(&data)).unwrap();
+    p.a.reply_chunk(p.now, h, ChunkAnswer::NotFound).unwrap();
+    assert_eq!(
+        p.a.reply_chunk(p.now, h, ChunkAnswer::Ok(&data)).err(),
+        Some(SendError::Unrequested),
+        "both answered"
+    );
+    let statuses: Vec<u32> = replies(&p.a).iter().map(|r| r.status).collect();
+    assert_eq!(statuses, [1, 2]);
 }
 
 #[test]

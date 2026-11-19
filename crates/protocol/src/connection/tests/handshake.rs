@@ -170,6 +170,9 @@ fn the_first_frame_must_be_hello_or_close() {
         })),
         raw(0x0003, b""),
         raw(0x800c, b""),
+        // An unknown critical type: PROTOCOL_ERROR too, not
+        // UNSUPPORTED_CRITICAL_TYPE (3.2 takes precedence).
+        raw(0x8006, b""),
         frame(&Message::Status(Status::default())),
     ] {
         let mut p = Pair::new(0xa0, 0xb0, &[write()], &[write()]);
@@ -193,13 +196,17 @@ fn the_first_frame_must_be_hello_or_close() {
 
 #[test]
 fn before_the_device_proof_only_it_or_close_is_accepted() {
-    // An unknown non-critical type: PROTOCOL_ERROR, not Unsupported (3.2).
-    let mut p = half_open();
-    p.a.receive(p.now, &raw(0x0003, b""));
-    assert_eq!(
-        closed(&p.a),
-        Some((CloseReason::ProtocolError, Some(Cause::Malformed)))
-    );
+    // An unknown non-critical type: PROTOCOL_ERROR, not Unsupported (3.2);
+    // an unknown critical one: PROTOCOL_ERROR, not UNSUPPORTED_CRITICAL_TYPE.
+    for t in [0x0003, 0x8006] {
+        let mut p = half_open();
+        p.a.receive(p.now, &raw(t, b""));
+        assert_eq!(
+            closed(&p.a),
+            Some((CloseReason::ProtocolError, Some(Cause::Malformed))),
+            "{t:#06x}"
+        );
+    }
     // A second Hello.
     let mut p = half_open();
     let hello = frame(&Message::Hello(Box::new(p.a.conn.local_hello().clone())));
@@ -727,6 +734,21 @@ fn unknown_types_once_established() {
     // 0x0000 is never used, so unknown: answered too.
     p.a.receive(p.now, &raw(0x0000, b""));
     assert_eq!(p.a.conn.state(), State::Established);
+    // Each of the 32 768 non-critical types is answered once on its own:
+    // types that share a 64-bit word of the table, the same bit of two
+    // words, and the last type.
+    for t in [0x0003, 0x0004, 0x0043, 0x0100, 0x7fff] {
+        p.a.receive(p.now, &raw(t, b""));
+        p.a.receive(p.now, &raw(t, b""));
+    }
+    let answered: Vec<u32> =
+        p.a.sent
+            .iter()
+            .filter(|(_, f)| f[4..6] == [0x00, 0x02])
+            .map(|(_, f)| Unsupported::parse(&f[6..]).unwrap().message_type)
+            .collect();
+    assert_eq!(answered, [7, 0, 0x0003, 0x0004, 0x0043, 0x0100, 0x7fff]);
+    assert_eq!(p.a.conn.state(), State::Established);
     // 0x8006, the drafts' key records, is an unknown critical type.
     p.a.receive(p.now, &raw(0x8006, b""));
     assert_eq!(
@@ -866,24 +888,33 @@ fn configuration_errors_and_proving_errors() {
     }
 }
 
+/// The write key of folder number `i`, one of many distinct folders.
+fn numbered(i: usize) -> FolderKey {
+    let mut ws = [0u8; 32];
+    ws[..8].copy_from_slice(&(i as u64).to_be_bytes());
+    ws[31] = 0x5a;
+    FolderKey::from(
+        licketysync_keys::WriteKey::from_secret(
+            licketysync_keys::Suite::ONE,
+            licketysync_keys::secret::WriteSecret::from_bytes(ws),
+        )
+        .unwrap(),
+    )
+}
+
+/// The FolderProofs `side` handed to its transport.
+fn proofs_sent(side: &crate::testkit::Side) -> usize {
+    side.sent
+        .iter()
+        .filter(|(_, f)| f[4..6] == [0x80, 0x04])
+        .count()
+}
+
 #[test]
 fn this_sides_own_proofs_are_bounded() {
     // R2-SF4: at most MAX_PROOFS_PER_CONNECTION proofs sent or waiting, both
     // before the handshake ends (kept) and after (sent).
-    let keys: Vec<FolderKey> = (0..=MAX_PROOFS_PER_CONNECTION)
-        .map(|i| {
-            let mut ws = [0u8; 32];
-            ws[..8].copy_from_slice(&(i as u64).to_be_bytes());
-            ws[31] = 0x5a;
-            FolderKey::from(
-                licketysync_keys::WriteKey::from_secret(
-                    licketysync_keys::Suite::ONE,
-                    licketysync_keys::secret::WriteSecret::from_bytes(ws),
-                )
-                .unwrap(),
-            )
-        })
-        .collect();
+    let keys: Vec<FolderKey> = (0..=MAX_PROOFS_PER_CONNECTION).map(numbered).collect();
     for established in [false, true] {
         let mut p = Pair::new(0xa0, 0xb0, &keys, &[write()]);
         if established {
@@ -917,13 +948,75 @@ fn this_sides_own_proofs_are_bounded() {
             }
         }
         if established {
-            let proofs =
-                p.a.sent
-                    .iter()
-                    .filter(|(_, f)| f[4..6] == [0x80, 0x04])
-                    .count();
-            assert_eq!(proofs, MAX_PROOFS_PER_CONNECTION);
+            assert_eq!(proofs_sent(&p.a), MAX_PROOFS_PER_CONNECTION);
         }
+    }
+}
+
+#[test]
+fn no_proof_past_the_bound_answers_the_peers() {
+    // R2-SF4 (3.5 step 6): the proof this side sends in answer to an
+    // accepted one counts toward MAX_PROOFS_PER_CONNECTION too. A has sent
+    // 256; B proves a 257th folder they share: accepted, and no proof back.
+    let keys: Vec<FolderKey> = (0..=MAX_PROOFS_PER_CONNECTION).map(numbered).collect();
+    let mut p = Pair::new(0xa0, 0xb0, &keys, &[numbered(MAX_PROOFS_PER_CONNECTION)]);
+    p.b.auto = false;
+    p.settle();
+    assert_eq!(p.a.conn.state(), State::Established);
+    let ids: Vec<_> =
+        p.a.credentials
+            .iter()
+            .map(FolderCredential::folder_id)
+            .collect();
+    let mut rng = Rng(9);
+    for id in &ids[..MAX_PROOFS_PER_CONNECTION] {
+        let k = Keys {
+            device: &p.a.key,
+            folders: &p.a.credentials,
+        };
+        let out =
+            p.a.conn
+                .prove(&k, &mut |b| rng.fill(b), Tick::at(p.now), *id)
+                .unwrap();
+        p.a.apply(p.now, out);
+    }
+    p.settle();
+    assert_eq!(proofs_sent(&p.a), MAX_PROOFS_PER_CONNECTION);
+    p.b.prove_all(p.now);
+    p.settle();
+    assert_eq!(results(&p.a).last().unwrap().status, 1, "accepted");
+    assert_eq!(proofs_sent(&p.a), MAX_PROOFS_PER_CONNECTION, "none back");
+    assert_eq!(p.a.conn.state(), State::Established);
+}
+
+#[test]
+fn a_folder_joined_after_the_first_proof_matches_once_refreshed() {
+    // The hint table is built once, at the first FolderProof; a folder this
+    // device joins later is matched after refresh_folders, and not before.
+    for refreshed in [false, true] {
+        let mut p = established();
+        let role_b = p.b.conn.role().unwrap();
+        let th = *p.a.conn.transcript_hash().unwrap();
+        p.a.receive(
+            p.now,
+            &frame(&Message::FolderProof(proof_from_b(&p, role_b))),
+        );
+        let joined = FolderKey::from(folder(0x20));
+        p.a.credentials.push(FolderCredential::new(&joined));
+        if refreshed {
+            p.a.conn.refresh_folders();
+        }
+        let mut rng = Rng(6);
+        let proof = FolderCredential::new(&joined)
+            .prove(&th, role_b, &mut |b| rng.fill(b))
+            .unwrap();
+        p.a.receive(p.now, &frame(&Message::FolderProof(proof)));
+        let statuses: Vec<u32> = results(&p.a).iter().map(|r| r.status).collect();
+        assert_eq!(
+            statuses,
+            [1, if refreshed { 1 } else { 2 }],
+            "refreshed {refreshed}"
+        );
     }
 }
 
