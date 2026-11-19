@@ -250,6 +250,17 @@ pub(super) fn sync_parent(path: &Path) -> Result<(), OpenError> {
 /// anything but a regular file is refused by a look first, which a race can
 /// pass. A file removed between the look and the open, as another opener's
 /// SQLite removes the store's log when it closes the store, is not there.
+///
+/// On Windows a file being removed keeps its name until its last handle
+/// closes, and until then every open of it is refused as access denied
+/// (`STATUS_DELETE_PENDING`): while `DeleteFileW`, which SQLite calls to
+/// remove the log of a store it closes, holds its own handle, and, where
+/// removal is not POSIX-style (FAT and exFAT; NTFS on older Windows), for as
+/// long as any other handle stays open. So a look or open refused so is tried
+/// again after a wait, 1 ms doubling, at most `DENIED_WAITS` times (about a
+/// second; SQLite waits up to 1.4 s on the same refusal): a name gone by then
+/// is not there, and a refusal that outlasts the waits, as a real permission
+/// error does, fails the open.
 #[cfg(unix)]
 fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
     use rustix::fs::{Mode, OFlags};
@@ -296,20 +307,64 @@ fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
 
 #[cfg(not(unix))]
 fn open_nofollow(path: &Path) -> Result<Option<File>, OpenError> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => return Err(OpenError::Symlink),
-        // Windows opens no directory as a file: refused as what it is.
-        Ok(meta) if !meta.is_file() => return Err(OpenError::NotAFile),
-        Ok(_) => {}
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
+    let mut waits = 0;
+    loop {
+        // The look's own error, or the open's.
+        let e = match fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(OpenError::Symlink),
+            // Windows opens no directory as a file: refused as what it is.
+            Ok(meta) if !meta.is_file() => return Err(OpenError::NotAFile),
+            Ok(_) => {
+                between_look_and_open(path);
+                match File::open(path) {
+                    Ok(file) => return Ok(Some(file)),
+                    Err(e) => e,
+                }
+            }
+            Err(e) => e,
+        };
+        if e.kind() == io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        if e.raw_os_error() != Some(ERROR_ACCESS_DENIED) || waits == DENIED_WAITS {
+            return Err(e.into());
+        }
+        wait_after_denied(waits);
+        waits += 1;
     }
-    between_look_and_open(path);
-    match File::open(path) {
-        Ok(file) => Ok(Some(file)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+}
+
+/// Windows's `ERROR_ACCESS_DENIED`, which `CreateFileW` answers for a file
+/// whose removal is pending, as for one the user may not open.
+#[cfg(not(unix))]
+const ERROR_ACCESS_DENIED: i32 = 5;
+
+/// How many times [`open_nofollow`] waits on Windows for a refusal as access
+/// denied to end: 1 ms the first time, twice as long each time after, 1023 ms
+/// in all.
+#[cfg(not(unix))]
+pub(super) const DENIED_WAITS: u32 = 10;
+
+/// The wait before [`open_nofollow`] looks again at a name refused as access
+/// denied, after `waits` waits: 2^`waits` ms. In tests a hook, when set, acts
+/// instead.
+#[cfg(not(unix))]
+fn wait_after_denied(waits: u32) {
+    #[cfg(test)]
+    if let Some(act) = DENIED.with(std::cell::Cell::get) {
+        act();
+        return;
     }
+    std::thread::sleep(std::time::Duration::from_millis(1 << waits));
+}
+
+#[cfg(all(test, not(unix)))]
+thread_local! {
+    /// In tests, what happens in place of [`open_nofollow`]'s wait on a name
+    /// Windows refused as access denied, as a removal pending meanwhile might
+    /// end.
+    pub(super) static DENIED: std::cell::Cell<Option<fn()>> =
+        const { std::cell::Cell::new(None) };
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "android", not(unix))))]

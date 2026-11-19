@@ -815,6 +815,93 @@ fn a_log_removed_between_its_look_and_its_open_does_not_fail_the_open() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(windows)]
+thread_local! {
+    /// The last handle to a log whose removal is pending.
+    static HELD: std::cell::RefCell<Option<fs::File>> = const { std::cell::RefCell::new(None) };
+    /// The waits an open spent on a name refused as access denied.
+    static WAITED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A store with one record, closed, and beside it a log, empty, whose removal
+/// is pending: a handle opened with `FILE_FLAG_DELETE_ON_CLOSE` and closed
+/// while another, kept in `HELD`, is open leaves the file, its name kept,
+/// until that last handle closes, and Windows refuses every open of it as
+/// access denied meanwhile, as when another opener's SQLite removes the log
+/// of a store it closes.
+#[cfg(windows)]
+fn store_with_a_log_pending_removal(name: &str) -> (PathBuf, PathBuf) {
+    use std::os::windows::fs::OpenOptionsExt;
+    const DELETE: u32 = 0x0001_0000;
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+    let dir = scratch(name);
+    let path = dir.join("store");
+    let mut store = SqliteStorage::open(&path).unwrap();
+    store.put(b"k", b"v").unwrap();
+    store.commit().unwrap();
+    drop(store);
+    let wal = beside(&path, "-wal");
+    fs::write(&wal, b"").unwrap();
+    let held = fs::File::open(&wal).unwrap();
+    let remover = fs::OpenOptions::new()
+        .access_mode(DELETE)
+        .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+        .open(&wal)
+        .unwrap();
+    drop(remover);
+    HELD.with(|h| *h.borrow_mut() = Some(held));
+    assert_eq!(
+        fs::File::open(&wal).map(drop).map_err(|e| e.raw_os_error()),
+        Err(Some(5)),
+        "the log's removal is pending"
+    );
+    (dir, path)
+}
+
+/// Regression: on Windows, an opener opened the store's log while the opener
+/// before it, closing the store, had SQLite remove it, and the open failed:
+/// "Access is denied" (`openers_of_a_fresh_path_at_once_each_open_it_or_are_refused`).
+/// Windows refuses every open of a file whose removal is pending; the opener
+/// now looks again after a wait, and a log gone by then is not there.
+#[cfg(windows)]
+#[test]
+fn a_log_whose_removal_is_pending_as_it_is_opened_does_not_fail_the_open() {
+    let (dir, path) = store_with_a_log_pending_removal("removal-pending");
+    // The removal ends during the first wait, as when the remover's handle
+    // closes.
+    let end_removal: fn() = || HELD.with(|h| drop(h.take()));
+    files::DENIED.with(|denied| denied.set(Some(end_removal)));
+    let opened = SqliteStorage::open(&path);
+    files::DENIED.with(|denied| denied.set(None));
+    let store = opened.unwrap();
+    assert_eq!(store.get(b"k"), Ok(Some(b"v".to_vec())));
+    drop(store);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// On Windows, a store's file refused as access denied past every wait, as
+/// one the user may not open is, fails the open: after exactly
+/// `DENIED_WAITS` waits.
+#[cfg(windows)]
+#[test]
+fn a_log_refused_as_access_denied_past_every_wait_fails_the_open() {
+    let (dir, path) = store_with_a_log_pending_removal("denied-past-waits");
+    WAITED.with(|w| w.set(0));
+    let count: fn() = || WAITED.with(|w| w.set(w.get() + 1));
+    files::DENIED.with(|denied| denied.set(Some(count)));
+    let opened = SqliteStorage::open(&path);
+    files::DENIED.with(|denied| denied.set(None));
+    let denied = std::io::Error::from_raw_os_error(5).to_string();
+    assert_eq!(opened.err(), Some(OpenError::Io(denied)));
+    assert_eq!(WAITED.with(std::cell::Cell::get), files::DENIED_WAITS);
+    // Its removal ended, the log is gone and the store opens.
+    HELD.with(|h| drop(h.take()));
+    let store = SqliteStorage::open(&path).unwrap();
+    assert_eq!(store.get(b"k"), Ok(Some(b"v".to_vec())));
+    drop(store);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// Regression: on Windows, which gives no file ID here, any file at a
 /// store's temporary name counted as a second name of the store and was
 /// removed, another program's included. Only a second name is.

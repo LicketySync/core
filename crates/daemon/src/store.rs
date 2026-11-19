@@ -80,9 +80,13 @@
 //! with no other name; their group and other bits are taken away (mode
 //! 0600), and their owner bits left. A log or journal that has no name left
 //! once opened is absent: another process's SQLite removes them as it opens
-//! and closes the store. On Windows, SQLite follows links and the store
-//! checks no owner, sets no access list and compares no device and inode,
-//! which stable std does not give there (Windows comes with phase 3).
+//! and closes the store. On Windows a file being removed keeps its name, and
+//! refuses every open as access denied, until its last handle closes: a name
+//! refused so is looked at again for about a second, and is absent if gone
+//! by then; still refused, it fails the open. On Windows, SQLite follows
+//! links and the store checks no owner, sets no access list and compares no
+//! device and inode, which stable std does not give there (Windows comes
+//! with phase 3).
 //!
 //! The SQLite linked must be the bundled one, built to sync: a different
 //! runtime version, or a `NO_SYNC` or `DISABLE_DIRSYNC` build, fails the

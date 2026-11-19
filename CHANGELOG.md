@@ -5,6 +5,23 @@ changed and why.
 
 ## Unreleased
 
+- Daemon: on Windows, an open of the store failed with "Access is denied" when it met the store's
+  log as another opener's SQLite was removing it
+  (`openers_of_a_fresh_path_at_once_each_open_it_or_are_refused`, on Windows CI). Windows keeps the
+  name of a file being removed, and refuses every open of it as access denied
+  (`STATUS_DELETE_PENDING`), until its last handle closes. An opener looks at the `-wal` soon after
+  it takes the open lock, just as the opener before it, having let the lock go, closes its store,
+  and SQLite removes the `-wal` with `DeleteFileW`; a store whose log is empty closes in
+  microseconds, so the two often meet. A look or open of one of the store's files refused as access
+  denied is now tried again after a wait, 1 ms doubling, at most 10 times (1023 ms; SQLite's Windows
+  code waits up to 1.4 s on the same refusal): a name gone by then is not there, as one removed is,
+  and a refusal that outlasts the waits, as a real permission error does, fails the open as before.
+  The same covers a removal that stays pending while another program holds the file open, where
+  Windows removes a file only when its last handle closes (FAT and exFAT, for one). Regression
+  tests, Windows only: `a_log_whose_removal_is_pending_as_it_is_opened_does_not_fail_the_open` and
+  `a_log_refused_as_access_denied_past_every_wait_fails_the_open`. Each puts the log in that state
+  for real (a handle opened with `FILE_FLAG_DELETE_ON_CLOSE` and closed while another stays open)
+  and acts in place of the waits through a hook only tests have.
 - Net: tighter transport limits, the first step on TM-22's residuals (b), (c), (h) and the new (i).
   A connection takes at most 4 streams at once (was 16) and 4 in negotiation (was 8), on QUIC and on
   TCP's yamux; a stream's negotiation ends after 5 s (was `libp2p-swarm`'s 10 s default, now
