@@ -5,6 +5,7 @@ changed and why.
 
 ## Unreleased
 
+- Dependencies: cargo-vet's exemption for `form_urlencoded` 1.2.3 is replaced by a recorded delta audit from 1.2.2, `safe-to-deploy`, in both stores: the only code change makes `Serializer::for_suffix` clamp an out-of-range start position to the target's length instead of panicking.
 - Dependencies: the nightly audit failed on RUSTSEC-2026-0592 (`url` 2.5.8 and earlier: stack overflow in `Url::origin()` on nested `blob:` URLs; fixed in 2.5.9). `url` is beneath `multiaddr`, beneath `libp2p-core`, and so beneath every libp2p crate in `licketysync-net`. No built code calls `Url::origin` or `url::quirks::origin`, and the daemon does not parse `blob:` URLs, so the flaw was not reachable; updated to `url` 2.5.9 (with `form_urlencoded` 1.2.3, which it requires) all the same, so that the audit is clean. cargo-vet: the `url` exemption moves to 2.5.9 (in `browser-tests/webtransport` too, whose lockfile is audited separately) and `form_urlencoded` 1.2.3, which the imported audits do not yet cover, gets one.
 - Protocol: a chunk could wait about 30 s while a connected peer that held it sat idle. A hash a
   refusal frees is kept for the next connection in line whose pass waits (`protocol.md` §4.6,

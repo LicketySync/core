@@ -1,4 +1,8 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.form_urlencoded]]
+who = "LicketySync maintainers"
+criteria = "safe-to-deploy"
+delta = "1.2.2 -> 1.2.3"
+notes = "Serializer::for_suffix clamps start_position to the target's length with .min(len) instead of panicking; the percent-encoding requirement rises from 2.3.0 to 2.3.2. No new unsafe code, I/O, build script or new dependency."
