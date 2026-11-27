@@ -14,7 +14,7 @@ licketysync-engine = { path = "../engine" }
 # The store's disk format: SQLite, as the plan names it, compiled from the copy
 # libsqlite3-sys bundles, so every platform runs the one version the lockfile
 # pins rather than whatever the system has. The statement cache, nothing else.
-rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "cache"] }
+rusqlite = { version = "0.42.0", default-features = false, features = ["bundled", "cache"] }
 
 [target.'cfg(unix)'.dependencies]
 # The store's files opened without following a link or blocking on a FIFO
@@ -26,7 +26,7 @@ rustix = { version = "1.1.6", default-features = false, features = ["std", "fs",
 # The storage conformance suite (runtime::conformance).
 licketysync-engine = { path = "../engine", features = ["testkit"] }
 # commit_hook, to make a commit fail in tests as a full disk does.
-rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "cache", "hooks"] }
+rusqlite = { version = "0.42.0", default-features = false, features = ["bundled", "cache", "hooks"] }
 # The model test of the store (plan: Tests).
 proptest = { version = "1", default-features = false, features = ["std"] }
 
