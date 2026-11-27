@@ -232,6 +232,11 @@ version = "0.1.15"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath cc; the version core's store exempts too. Not covered by the imported audits at this version."
 
+[[exemptions.form_urlencoded]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+notes = "URL-encoded form parsing beneath url 2.5.9 (a small change from 1.2.2, which the imported audits cover); rust-url, servo. Not covered by the imported audits at this version."
+
 [[exemptions.futures]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
@@ -628,7 +633,7 @@ criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath libp2p-core, multiaddr, multihash, multistream-select; the version core's store exempts too. Not covered by the imported audits at this version."
 
 [[exemptions.url]]
-version = "2.5.8"
+version = "2.5.9"
 criteria = "safe-to-deploy"
 notes = "Phase 0 exemption (browser-tests/webtransport, spike B; for review): in the browser test crate's graph beneath multiaddr; the version core's store exempts too. Not covered by the imported audits at this version."
 
